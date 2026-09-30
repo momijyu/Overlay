@@ -2,6 +2,7 @@
 
 import { useRef, useState, type PointerEvent } from "react";
 
+import { PEN_COLOR, PEN_WIDTH } from "../penStyle";
 import type { PenPoint, PenStroke } from "../types";
 
 type PenLayerProps = {
@@ -96,8 +97,8 @@ export function PenLayer({ strokes, onStrokeComplete }: PenLayerProps) {
           key={index}
           d={strokePath(stroke)}
           fill="none"
-          stroke="#111827"
-          strokeWidth="2.5"
+          stroke={PEN_COLOR}
+          strokeWidth={PEN_WIDTH}
           strokeLinecap="round"
           strokeLinejoin="round"
           vectorEffect="non-scaling-stroke"

@@ -3,6 +3,7 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
+import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import type { PenStroke } from "../types";
 import { PdfPage } from "./PdfPage";
 
@@ -14,6 +15,7 @@ export function PdfWorkspace() {
     {},
   );
   const [isLoading, setIsLoading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -78,6 +80,32 @@ export function PdfWorkspace() {
     setFile(selectedFile);
   }
 
+  async function handleDownload() {
+    if (!file || !document || isExporting) return;
+
+    setIsExporting(true);
+    setError(null);
+
+    try {
+      const pdfBytes = await exportAnnotatedPdf(file, document, strokesByPage);
+      const blob = new Blob([new Uint8Array(pdfBytes)], {
+        type: "application/pdf",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = url;
+      link.download = `${file.name.replace(/\.pdf$/i, "")}-overlay.pdf`;
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      setError("PDFを書き出せませんでした。別のPDFでお試しください。");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   return (
     <section className="card border border-base-300 bg-base-100 shadow-sm">
       <div className="card-body gap-5">
@@ -90,6 +118,7 @@ export function PdfWorkspace() {
             className="file-input w-full max-w-md"
             type="file"
             accept="application/pdf,.pdf"
+            disabled={isExporting}
             onChange={handleFileChange}
           />
         </div>
@@ -101,13 +130,24 @@ export function PdfWorkspace() {
         )}
 
         {isLoading && <p role="status">PDFを読み込んでいます…</p>}
+        {isExporting && <p role="status">PDFを書き出しています…</p>}
 
         {document && file && (
           <>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="min-w-0 truncate" title={file.name}>
-                {file.name}
-              </p>
+              <div className="flex min-w-0 flex-wrap items-center gap-3">
+                <p className="min-w-0 truncate" title={file.name}>
+                  {file.name}
+                </p>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  disabled={isExporting}
+                  onClick={() => void handleDownload()}
+                >
+                  PDFをダウンロード
+                </button>
+              </div>
               <div className="join" aria-label="ページ切り替え">
                 <button
                   className="btn join-item"
