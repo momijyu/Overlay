@@ -3,12 +3,16 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
+import type { PenStroke } from "../types";
 import { PdfPage } from "./PdfPage";
 
 export function PdfWorkspace() {
   const [file, setFile] = useState<File | null>(null);
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
+  const [strokesByPage, setStrokesByPage] = useState<Record<number, PenStroke[]>>(
+    {},
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,6 +62,7 @@ export function PdfWorkspace() {
     setFile(null);
     setDocument(null);
     setPageNumber(1);
+    setStrokesByPage({});
     setError(null);
 
     if (
@@ -125,7 +130,18 @@ export function PdfWorkspace() {
                 </button>
               </div>
             </div>
-            <PdfPage document={document} pageNumber={pageNumber} />
+            <PdfPage
+              key={pageNumber}
+              document={document}
+              pageNumber={pageNumber}
+              strokes={strokesByPage[pageNumber] ?? []}
+              onStrokeComplete={(stroke) => {
+                setStrokesByPage((current) => ({
+                  ...current,
+                  [pageNumber]: [...(current[pageNumber] ?? []), stroke],
+                }));
+              }}
+            />
           </>
         )}
       </div>

@@ -3,15 +3,26 @@
 import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
+import type { PenStroke } from "../types";
+import { PenLayer } from "./PenLayer";
+
 type PdfPageProps = {
   document: PDFDocumentProxy;
   pageNumber: number;
+  strokes: PenStroke[];
+  onStrokeComplete: (stroke: PenStroke) => void;
 };
 
-export function PdfPage({ document, pageNumber }: PdfPageProps) {
+export function PdfPage({
+  document,
+  pageNumber,
+  strokes,
+  onStrokeComplete,
+}: PdfPageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
+  const [renderedWidth, setRenderedWidth] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -61,7 +72,10 @@ export function PdfPage({ document, pageNumber }: PdfPageProps) {
           transform: [pixelRatio, 0, 0, pixelRatio, 0, 0],
         });
         await renderTask.promise;
-        if (active) setError(null);
+        if (active) {
+          setError(null);
+          setRenderedWidth(availableWidth);
+        }
       } catch {
         if (active) setError("このページを表示できませんでした。");
       }
@@ -82,13 +96,18 @@ export function PdfPage({ document, pageNumber }: PdfPageProps) {
           {error}
         </div>
       )}
-      <canvas
-        key={`${pageNumber}-${availableWidth}`}
-        ref={canvasRef}
-        className="mx-auto block bg-white shadow-sm"
-        aria-label={`PDFの${pageNumber}ページ目`}
-        role="img"
-      />
+      <div className="relative mx-auto w-fit">
+        <canvas
+          key={`${pageNumber}-${availableWidth}`}
+          ref={canvasRef}
+          className="block bg-white shadow-sm"
+          aria-label={`PDFの${pageNumber}ページ目`}
+          role="img"
+        />
+        {renderedWidth === availableWidth && !error && (
+          <PenLayer strokes={strokes} onStrokeComplete={onStrokeComplete} />
+        )}
+      </div>
     </div>
   );
 }
