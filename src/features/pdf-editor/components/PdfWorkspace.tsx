@@ -4,6 +4,7 @@ import { useEffect, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
+import { DEFAULT_PEN_WIDTH } from "../penStyle";
 import type { PenStroke } from "../types";
 import { PdfPage } from "./PdfPage";
 
@@ -14,6 +15,7 @@ export function PdfWorkspace() {
   const [strokesByPage, setStrokesByPage] = useState<Record<number, PenStroke[]>>(
     {},
   );
+  const [penWidth, setPenWidth] = useState(DEFAULT_PEN_WIDTH);
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +141,21 @@ export function PdfWorkspace() {
                 <p className="min-w-0 truncate" title={file.name}>
                   {file.name}
                 </p>
+                <div className="flex items-center gap-2">
+                  <label className="label" htmlFor="pen-width">
+                    ペンの太さ
+                  </label>
+                  <select
+                    id="pen-width"
+                    className="select select-sm w-auto"
+                    value={penWidth}
+                    onChange={(event) => setPenWidth(Number(event.target.value))}
+                  >
+                    <option value="1.5">細</option>
+                    <option value="2.5">標準</option>
+                    <option value="5">太</option>
+                  </select>
+                </div>
                 <button
                   className="btn btn-primary"
                   type="button"
@@ -175,6 +192,7 @@ export function PdfWorkspace() {
               document={document}
               pageNumber={pageNumber}
               strokes={strokesByPage[pageNumber] ?? []}
+              penWidth={penWidth}
               onStrokeComplete={(stroke) => {
                 setStrokesByPage((current) => ({
                   ...current,

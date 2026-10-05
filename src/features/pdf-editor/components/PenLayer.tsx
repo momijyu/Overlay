@@ -2,11 +2,12 @@
 
 import { useRef, useState, type PointerEvent } from "react";
 
-import { PEN_COLOR, PEN_WIDTH } from "../penStyle";
+import { PEN_COLOR } from "../penStyle";
 import type { PenPoint, PenStroke } from "../types";
 
 type PenLayerProps = {
   strokes: PenStroke[];
+  penWidth: number;
   onStrokeComplete: (stroke: PenStroke) => void;
 };
 
@@ -31,7 +32,7 @@ function strokePath(stroke: PenStroke): string {
     .join(" ")}`;
 }
 
-export function PenLayer({ strokes, onStrokeComplete }: PenLayerProps) {
+export function PenLayer({ strokes, penWidth, onStrokeComplete }: PenLayerProps) {
   const activePointerId = useRef<number | null>(null);
   const currentStroke = useRef<PenStroke | null>(null);
   const [draft, setDraft] = useState<PenStroke | null>(null);
@@ -42,7 +43,7 @@ export function PenLayer({ strokes, onStrokeComplete }: PenLayerProps) {
 
     event.currentTarget.setPointerCapture(event.pointerId);
     activePointerId.current = event.pointerId;
-    currentStroke.current = { points: [pointFromEvent(event)] };
+    currentStroke.current = { points: [pointFromEvent(event)], width: penWidth };
     setDraft(currentStroke.current);
   }
 
@@ -53,6 +54,7 @@ export function PenLayer({ strokes, onStrokeComplete }: PenLayerProps) {
 
     currentStroke.current = {
       points: [...currentStroke.current.points, pointFromEvent(event)],
+      width: currentStroke.current.width,
     };
     setDraft(currentStroke.current);
   }
@@ -64,6 +66,7 @@ export function PenLayer({ strokes, onStrokeComplete }: PenLayerProps) {
 
     const completedStroke = {
       points: [...currentStroke.current.points, pointFromEvent(event)],
+      width: currentStroke.current.width,
     };
     activePointerId.current = null;
     currentStroke.current = null;
@@ -98,7 +101,7 @@ export function PenLayer({ strokes, onStrokeComplete }: PenLayerProps) {
           d={strokePath(stroke)}
           fill="none"
           stroke={PEN_COLOR}
-          strokeWidth={PEN_WIDTH}
+          strokeWidth={stroke.width}
           strokeLinecap="round"
           strokeLinejoin="round"
           vectorEffect="non-scaling-stroke"

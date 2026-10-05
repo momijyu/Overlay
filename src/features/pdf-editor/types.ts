@@ -5,4 +5,5 @@ export type PenPoint = {
 
 export type PenStroke = {
   points: PenPoint[];
+  width: number;
 };

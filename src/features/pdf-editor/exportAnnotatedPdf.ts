@@ -1,6 +1,6 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
-import { PEN_COLOR, PEN_WIDTH } from "./penStyle";
+import { PEN_COLOR } from "./penStyle";
 import type { PenPoint, PenStroke } from "./types";
 
 export async function exportAnnotatedPdf(
@@ -39,7 +39,7 @@ export async function exportAnnotatedPdf(
 
       if (rest.every((point) => point.x === first.x && point.y === first.y)) {
         const { x, y } = toPdfPoint(first);
-        outputPage.drawCircle({ x, y, size: PEN_WIDTH / 2, color: penColor });
+        outputPage.drawCircle({ x, y, size: stroke.width / 2, color: penColor });
         continue;
       }
 
@@ -48,7 +48,7 @@ export async function exportAnnotatedPdf(
         outputPage.drawLine({
           start: toPdfPoint(previous),
           end: toPdfPoint(point),
-          thickness: PEN_WIDTH,
+          thickness: stroke.width,
           color: penColor,
           lineCap: LineCapStyle.Round,
         });

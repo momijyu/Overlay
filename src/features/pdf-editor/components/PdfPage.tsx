@@ -10,6 +10,7 @@ type PdfPageProps = {
   document: PDFDocumentProxy;
   pageNumber: number;
   strokes: PenStroke[];
+  penWidth: number;
   onStrokeComplete: (stroke: PenStroke) => void;
 };
 
@@ -17,6 +18,7 @@ export function PdfPage({
   document,
   pageNumber,
   strokes,
+  penWidth,
   onStrokeComplete,
 }: PdfPageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -105,7 +107,11 @@ export function PdfPage({
           role="img"
         />
         {renderedWidth === availableWidth && !error && (
-          <PenLayer strokes={strokes} onStrokeComplete={onStrokeComplete} />
+          <PenLayer
+            strokes={strokes}
+            penWidth={penWidth}
+            onStrokeComplete={onStrokeComplete}
+          />
         )}
       </div>
     </div>
