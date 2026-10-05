@@ -11,6 +11,7 @@ type PdfPageProps = {
   pageNumber: number;
   strokes: PenStroke[];
   penWidth: number;
+  zoom: number;
   onStrokeComplete: (stroke: PenStroke) => void;
 };
 
@@ -19,12 +20,17 @@ export function PdfPage({
   pageNumber,
   strokes,
   penWidth,
+  zoom,
   onStrokeComplete,
 }: PdfPageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
-  const [renderedWidth, setRenderedWidth] = useState<number | null>(null);
+  const [renderedPage, setRenderedPage] = useState<{
+    availableWidth: number;
+    zoom: number;
+    scale: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -59,7 +65,8 @@ export function PdfPage({
         if (!canvas) return;
 
         const original = page.getViewport({ scale: 1 });
-        const scale = Math.min(1, availableWidth / original.width);
+        // 最初に収まる大きさを100%として、その大きさに表示倍率を掛ける。
+        const scale = Math.min(1, availableWidth / original.width) * zoom;
         const viewport = page.getViewport({ scale });
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
 
@@ -76,7 +83,7 @@ export function PdfPage({
         await renderTask.promise;
         if (active) {
           setError(null);
-          setRenderedWidth(availableWidth);
+          setRenderedPage({ availableWidth, zoom, scale });
         }
       } catch {
         if (active) setError("このページを表示できませんでした。");
@@ -89,10 +96,13 @@ export function PdfPage({
       active = false;
       renderTask?.cancel();
     };
-  }, [document, pageNumber, availableWidth]);
+  }, [document, pageNumber, availableWidth, zoom]);
 
   return (
-    <div ref={containerRef} className="overflow-auto bg-base-200 p-2 sm:p-4">
+    <div
+      ref={containerRef}
+      className="min-w-0 w-full overflow-auto bg-base-200 p-2 sm:p-4"
+    >
       {error && (
         <div className="alert alert-error" role="alert">
           {error}
@@ -100,19 +110,22 @@ export function PdfPage({
       )}
       <div className="relative mx-auto w-fit">
         <canvas
-          key={`${pageNumber}-${availableWidth}`}
+          key={`${pageNumber}-${availableWidth}-${zoom}`}
           ref={canvasRef}
           className="block bg-white shadow-sm"
           aria-label={`PDFの${pageNumber}ページ目`}
           role="img"
         />
-        {renderedWidth === availableWidth && !error && (
-          <PenLayer
-            strokes={strokes}
-            penWidth={penWidth}
-            onStrokeComplete={onStrokeComplete}
-          />
-        )}
+        {renderedPage?.availableWidth === availableWidth &&
+          renderedPage.zoom === zoom &&
+          !error && (
+            <PenLayer
+              strokes={strokes}
+              penWidth={penWidth}
+              pageScale={renderedPage.scale}
+              onStrokeComplete={onStrokeComplete}
+            />
+          )}
       </div>
     </div>
   );

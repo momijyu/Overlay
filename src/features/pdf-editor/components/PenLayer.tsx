@@ -8,6 +8,7 @@ import type { PenPoint, PenStroke } from "../types";
 type PenLayerProps = {
   strokes: PenStroke[];
   penWidth: number;
+  pageScale: number;
   onStrokeComplete: (stroke: PenStroke) => void;
 };
 
@@ -32,7 +33,12 @@ function strokePath(stroke: PenStroke): string {
     .join(" ")}`;
 }
 
-export function PenLayer({ strokes, penWidth, onStrokeComplete }: PenLayerProps) {
+export function PenLayer({
+  strokes,
+  penWidth,
+  pageScale,
+  onStrokeComplete,
+}: PenLayerProps) {
   const activePointerId = useRef<number | null>(null);
   const currentStroke = useRef<PenStroke | null>(null);
   const [draft, setDraft] = useState<PenStroke | null>(null);
@@ -101,7 +107,7 @@ export function PenLayer({ strokes, penWidth, onStrokeComplete }: PenLayerProps)
           d={strokePath(stroke)}
           fill="none"
           stroke={PEN_COLOR}
-          strokeWidth={stroke.width}
+          strokeWidth={stroke.width * pageScale}
           strokeLinecap="round"
           strokeLinejoin="round"
           vectorEffect="non-scaling-stroke"

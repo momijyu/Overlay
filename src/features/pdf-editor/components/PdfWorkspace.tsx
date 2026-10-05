@@ -5,6 +5,7 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { DEFAULT_PEN_WIDTH } from "../penStyle";
+import { saveNote } from "../saveNote";
 import type { PenStroke } from "../types";
 import { PdfPage } from "./PdfPage";
 
@@ -16,8 +17,14 @@ export function PdfWorkspace() {
     {},
   );
   const [penWidth, setPenWidth] = useState(DEFAULT_PEN_WIDTH);
+  const [zoom, setZoom] = useState(1);
+  const [noteId, setNoteId] = useState<string | null>(null);
+  const [savedStrokes, setSavedStrokes] = useState<Record<number, PenStroke[]> | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -67,6 +74,9 @@ export function PdfWorkspace() {
     setDocument(null);
     setPageNumber(1);
     setStrokesByPage({});
+    setZoom(1);
+    setNoteId(null);
+    setSavedStrokes(null);
     setError(null);
 
     if (
@@ -80,6 +90,30 @@ export function PdfWorkspace() {
 
     setIsLoading(true);
     setFile(selectedFile);
+  }
+
+  async function handleSave() {
+    if (!file || !document || isSaving) return;
+
+    setIsSaving(true);
+    setError(null);
+    const snapshot = strokesByPage;
+
+    try {
+      const savedNoteId = await saveNote({ file, strokesByPage: snapshot, noteId });
+      setNoteId(savedNoteId);
+      // 保存中に線が追加されても、その新しい線まで保存済みと表示しない。
+      setSavedStrokes(snapshot);
+    } catch (saveError) {
+      console.error("ノートの保存に失敗しました。", saveError);
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "ノートを保存できませんでした。",
+      );
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function handleDownload() {
@@ -120,7 +154,7 @@ export function PdfWorkspace() {
             className="file-input w-full max-w-md"
             type="file"
             accept="application/pdf,.pdf"
-            disabled={isExporting}
+            disabled={isExporting || isSaving}
             onChange={handleFileChange}
           />
         </div>
@@ -133,6 +167,7 @@ export function PdfWorkspace() {
 
         {isLoading && <p role="status">PDFを読み込んでいます…</p>}
         {isExporting && <p role="status">PDFを書き出しています…</p>}
+        {isSaving && <p role="status">ノートを保存しています…</p>}
 
         {document && file && (
           <>
@@ -156,6 +191,32 @@ export function PdfWorkspace() {
                     <option value="5">太</option>
                   </select>
                 </div>
+                <div className="flex items-center gap-2">
+                  <label className="label" htmlFor="pdf-zoom">
+                    表示倍率
+                  </label>
+                  <select
+                    id="pdf-zoom"
+                    className="select select-sm w-auto"
+                    value={zoom}
+                    onChange={(event) => setZoom(Number(event.target.value))}
+                  >
+                    <option value="0.5">50%</option>
+                    <option value="0.75">75%</option>
+                    <option value="1">100%</option>
+                    <option value="1.25">125%</option>
+                    <option value="1.5">150%</option>
+                    <option value="2">200%</option>
+                  </select>
+                </div>
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={isSaving || savedStrokes === strokesByPage}
+                  onClick={() => void handleSave()}
+                >
+                  ノートを保存
+                </button>
                 <button
                   className="btn btn-primary"
                   type="button"
@@ -187,12 +248,22 @@ export function PdfWorkspace() {
                 </button>
               </div>
             </div>
+            {!isSaving && (
+              <p className="text-sm" role="status">
+                {noteId
+                  ? savedStrokes === strokesByPage
+                    ? "保存済み"
+                    : "未保存の変更があります"
+                  : "未保存"}
+              </p>
+            )}
             <PdfPage
               key={pageNumber}
               document={document}
               pageNumber={pageNumber}
               strokes={strokesByPage[pageNumber] ?? []}
               penWidth={penWidth}
+              zoom={zoom}
               onStrokeComplete={(stroke) => {
                 setStrokesByPage((current) => ({
                   ...current,
