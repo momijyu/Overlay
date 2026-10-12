@@ -12,6 +12,7 @@ type PdfPageProps = {
   strokes: PenStroke[];
   penWidth: number;
   zoom: number;
+  disabled: boolean;
   onStrokeComplete: (stroke: PenStroke) => void;
 };
 
@@ -21,6 +22,7 @@ export function PdfPage({
   strokes,
   penWidth,
   zoom,
+  disabled,
   onStrokeComplete,
 }: PdfPageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -118,6 +120,7 @@ export function PdfPage({
         />
         {renderedPage?.availableWidth === availableWidth &&
           renderedPage.zoom === zoom &&
+          !disabled &&
           !error && (
             <PenLayer
               strokes={strokes}

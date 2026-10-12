@@ -1,13 +1,21 @@
 "use client";
 
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { DEFAULT_PEN_WIDTH } from "../penStyle";
+import { loadSavedNote } from "../loadNotes";
 import { saveNote } from "../saveNote";
 import type { PenStroke } from "../types";
 import { PdfPage } from "./PdfPage";
+import { SavedNotes } from "./SavedNotes";
+
+type PdfInput = {
+  file: File;
+  id: string | null;
+  strokesByPage: Record<number, PenStroke[]>;
+};
 
 export function PdfWorkspace() {
   const [file, setFile] = useState<File | null>(null);
@@ -26,104 +34,157 @@ export function PdfWorkspace() {
   const [isExporting, setIsExporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [documentVersion, setDocumentVersion] = useState(0);
+  const mountedRef = useRef(false);
+  const operationRef = useRef(false);
+  const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
+  const isBusy = isLoading || isExporting || isSaving;
+  const hasUnsavedChanges = file !== null && savedStrokes !== strokesByPage;
 
   useEffect(() => {
-    const selectedFile = file;
-    if (!selectedFile) return;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      void loadingTaskRef.current?.destroy();
+    };
+  }, []);
 
-    let active = true;
-    let loadingTask: PDFDocumentLoadingTask | undefined;
+  useEffect(() => {
+    // 切り替えた後、前のPDFのワーカーとメモリを解放する。
+    return () => {
+      void document?.loadingTask.destroy();
+    };
+  }, [document]);
 
-    async function loadPdf(selectedFile: File) {
-      try {
-        const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-        pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-          "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
-          import.meta.url,
-        ).toString();
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    function warnBeforeLeaving(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [hasUnsavedChanges]);
 
-        const data = await selectedFile.arrayBuffer();
-        if (!active) return;
-
-        loadingTask = pdfjs.getDocument({ data: new Uint8Array(data) });
-        const loadedDocument = await loadingTask.promise;
-        if (!active) return;
-
-        setDocument(loadedDocument);
-      } catch {
-        if (active) setError("PDFを開けませんでした。別のPDFを選択してください。");
-      } finally {
-        if (active) setIsLoading(false);
-      }
+  async function openPdf(getInput: () => Promise<PdfInput>) {
+    if (operationRef.current) return;
+    if (
+      hasUnsavedChanges &&
+      !window.confirm("未保存の内容があります。保存せずに別のノートを開きますか？")
+    ) {
+      return;
     }
 
-    void loadPdf(selectedFile);
+    operationRef.current = true;
+    setIsLoading(true);
+    setError(null);
+    let loadingTask: PDFDocumentLoadingTask | undefined;
+    let isReadingPdf = false;
+    try {
+      const input = await getInput();
+      isReadingPdf = true;
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+        "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+        import.meta.url,
+      ).toString();
+      const data = await input.file.arrayBuffer();
+      if (!mountedRef.current) return;
 
-    return () => {
-      active = false;
+      loadingTask = pdfjs.getDocument({ data: new Uint8Array(data) });
+      loadingTaskRef.current = loadingTask;
+      const loadedDocument = await loadingTask.promise;
+      if (!mountedRef.current) return;
+      if (
+        Object.keys(input.strokesByPage).some(
+          (page) => Number(page) > loadedDocument.numPages,
+        )
+      ) {
+        throw new Error("書き込み情報のページ数がPDFと一致しません。");
+      }
+
+      // PDFと線を両方読み込めてから切り替え、失敗時は編集中の内容を残す。
+      setFile(input.file);
+      setDocument(loadedDocument);
+      setStrokesByPage(input.strokesByPage);
+      setSavedStrokes(input.id ? input.strokesByPage : null);
+      setNoteId(input.id);
+      setPageNumber(1);
+      setZoom(1);
+      setDocumentVersion((value) => value + 1);
+    } catch (openError) {
       void loadingTask?.destroy();
-    };
-  }, [file]);
+      if (mountedRef.current) {
+        setError(
+          openError instanceof Error && !isReadingPdf
+            ? openError.message
+            : "PDFを開けませんでした。元の内容は変更していません。",
+        );
+      }
+    } finally {
+      loadingTaskRef.current = null;
+      operationRef.current = false;
+      if (mountedRef.current) setIsLoading(false);
+    }
+  }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const selectedFile = event.target.files?.[0];
     event.target.value = "";
     if (!selectedFile) return;
 
-    setFile(null);
-    setDocument(null);
-    setPageNumber(1);
-    setStrokesByPage({});
-    setZoom(1);
-    setNoteId(null);
-    setSavedStrokes(null);
-    setError(null);
-
     if (
       selectedFile.type !== "application/pdf" &&
       !selectedFile.name.toLowerCase().endsWith(".pdf")
     ) {
-      setIsLoading(false);
       setError("PDFファイルを選択してください。");
       return;
     }
 
-    setIsLoading(true);
-    setFile(selectedFile);
+    void openPdf(async () => ({ file: selectedFile, id: null, strokesByPage: {} }));
   }
 
   async function handleSave() {
-    if (!file || !document || isSaving) return;
+    if (!file || !document || operationRef.current) return;
 
+    operationRef.current = true;
     setIsSaving(true);
     setError(null);
     const snapshot = strokesByPage;
 
     try {
       const savedNoteId = await saveNote({ file, strokesByPage: snapshot, noteId });
+      if (!mountedRef.current) return;
       setNoteId(savedNoteId);
       // 保存中に線が追加されても、その新しい線まで保存済みと表示しない。
       setSavedStrokes(snapshot);
+      setRefreshVersion((value) => value + 1);
     } catch (saveError) {
       console.error("ノートの保存に失敗しました。", saveError);
-      setError(
-        saveError instanceof Error
-          ? saveError.message
-          : "ノートを保存できませんでした。",
-      );
+      if (mountedRef.current) {
+        setError(
+          saveError instanceof Error
+            ? saveError.message
+            : "ノートを保存できませんでした。",
+        );
+      }
     } finally {
-      setIsSaving(false);
+      operationRef.current = false;
+      if (mountedRef.current) setIsSaving(false);
     }
   }
 
   async function handleDownload() {
-    if (!file || !document || isExporting) return;
+    if (!file || !document || operationRef.current) return;
 
+    operationRef.current = true;
     setIsExporting(true);
     setError(null);
 
     try {
       const pdfBytes = await exportAnnotatedPdf(file, document, strokesByPage);
+      if (!mountedRef.current) return;
       const blob = new Blob([new Uint8Array(pdfBytes)], {
         type: "application/pdf",
       });
@@ -136,15 +197,26 @@ export function PdfWorkspace() {
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
-      setError("PDFを書き出せませんでした。別のPDFでお試しください。");
+      if (mountedRef.current) {
+        setError("PDFを書き出せませんでした。別のPDFでお試しください。");
+      }
     } finally {
-      setIsExporting(false);
+      operationRef.current = false;
+      if (mountedRef.current) setIsExporting(false);
     }
   }
 
   return (
     <section className="card border border-base-300 bg-base-100 shadow-sm">
       <div className="card-body gap-5">
+        <SavedNotes
+          refreshVersion={refreshVersion}
+          currentNoteId={noteId}
+          disabled={isBusy}
+          onOpen={(id) => {
+            void openPdf(() => loadSavedNote(id));
+          }}
+        />
         <div>
           <label className="label" htmlFor="pdf-upload">
             PDFファイル
@@ -154,7 +226,7 @@ export function PdfWorkspace() {
             className="file-input w-full max-w-md"
             type="file"
             accept="application/pdf,.pdf"
-            disabled={isExporting || isSaving}
+            disabled={isBusy}
             onChange={handleFileChange}
           />
         </div>
@@ -184,6 +256,7 @@ export function PdfWorkspace() {
                     id="pen-width"
                     className="select select-sm w-auto"
                     value={penWidth}
+                    disabled={isLoading}
                     onChange={(event) => setPenWidth(Number(event.target.value))}
                   >
                     <option value="1.5">細</option>
@@ -199,6 +272,7 @@ export function PdfWorkspace() {
                     id="pdf-zoom"
                     className="select select-sm w-auto"
                     value={zoom}
+                    disabled={isLoading}
                     onChange={(event) => setZoom(Number(event.target.value))}
                   >
                     <option value="0.5">50%</option>
@@ -212,7 +286,7 @@ export function PdfWorkspace() {
                 <button
                   className="btn"
                   type="button"
-                  disabled={isSaving || savedStrokes === strokesByPage}
+                  disabled={isBusy || savedStrokes === strokesByPage}
                   onClick={() => void handleSave()}
                 >
                   ノートを保存
@@ -220,7 +294,7 @@ export function PdfWorkspace() {
                 <button
                   className="btn btn-primary"
                   type="button"
-                  disabled={isExporting}
+                  disabled={isBusy}
                   onClick={() => void handleDownload()}
                 >
                   PDFをダウンロード
@@ -230,7 +304,7 @@ export function PdfWorkspace() {
                 <button
                   className="btn join-item"
                   type="button"
-                  disabled={pageNumber === 1}
+                  disabled={isLoading || pageNumber === 1}
                   onClick={() => setPageNumber((page) => page - 1)}
                 >
                   前へ
@@ -241,7 +315,7 @@ export function PdfWorkspace() {
                 <button
                   className="btn join-item"
                   type="button"
-                  disabled={pageNumber === document.numPages}
+                  disabled={isLoading || pageNumber === document.numPages}
                   onClick={() => setPageNumber((page) => page + 1)}
                 >
                   次へ
@@ -258,12 +332,13 @@ export function PdfWorkspace() {
               </p>
             )}
             <PdfPage
-              key={pageNumber}
+              key={`${documentVersion}-${pageNumber}`}
               document={document}
               pageNumber={pageNumber}
               strokes={strokesByPage[pageNumber] ?? []}
               penWidth={penWidth}
               zoom={zoom}
+              disabled={isLoading}
               onStrokeComplete={(stroke) => {
                 setStrokesByPage((current) => ({
                   ...current,
