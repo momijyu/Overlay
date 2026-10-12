@@ -27,6 +27,14 @@ export async function saveNote({
 
   let user = sessionData.session?.user;
 
+  // 開いているノートを、別の匿名ユーザーとして更新しようとしない。
+  // PDFの書き出しには識別情報が不要なので、未保存の内容を手元に残せる。
+  if (!user && noteId) {
+    throw new Error(
+      "保存したノートの識別情報が見つかりません。未保存の内容はPDFをダウンロードして残してください。",
+    );
+  }
+
   // ログイン操作を要求せず、保存したブラウザのデータだけを扱うための識別情報を作る。
   if (!user) {
     const { data, error } = await supabase.auth.signInAnonymously();

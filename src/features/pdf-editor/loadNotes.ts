@@ -57,7 +57,7 @@ function readStrokes(value: unknown): Record<number, PenStroke[]> {
   return result;
 }
 
-async function getOwnerId(): Promise<string | null> {
+export async function getNoteOwnerId(): Promise<string | null> {
   const { data, error } = await getSupabaseClient().auth.getSession();
   if (error) {
     throw new Error("保存用の接続を確認できませんでした。", { cause: error });
@@ -66,15 +66,24 @@ async function getOwnerId(): Promise<string | null> {
   return data.session?.user.id ?? null;
 }
 
-export async function listSavedNotes(): Promise<SavedNoteSummary[]> {
-  const ownerId = await getOwnerId();
+export async function listSavedNotes(includeFolders = false): Promise<SavedNoteSummary[]> {
+  const ownerId = await getNoteOwnerId();
   if (!ownerId) return [];
 
   const { data, error } = await getSupabaseClient()
     .from("notes")
-    .select("id, file_name, updated_at")
+    .select(includeFolders
+      ? "id, file_name, updated_at, title, folder_id"
+      : "id, file_name, updated_at")
     .eq("owner_id", ownerId)
-    .order("updated_at", { ascending: false });
+    .order("updated_at", { ascending: false })
+    .overrideTypes<{
+      id: string;
+      file_name: string;
+      updated_at: string;
+      title?: string | null;
+      folder_id?: string | null;
+    }[], { merge: false }>();
 
   if (error) {
     throw new Error("ノート一覧を読み込めませんでした。更新して再試行してください。", { cause: error });
@@ -84,11 +93,13 @@ export async function listSavedNotes(): Promise<SavedNoteSummary[]> {
     id: note.id,
     fileName: note.file_name,
     updatedAt: note.updated_at,
+    title: note.title ?? (note.file_name.replace(/\.pdf$/i, "") || note.file_name),
+    folderId: note.folder_id ?? null,
   }));
 }
 
 export async function loadSavedNote(noteId: string): Promise<LoadedNote> {
-  const ownerId = await getOwnerId();
+  const ownerId = await getNoteOwnerId();
   if (!ownerId) {
     throw new Error("このブラウザには保存したノートの識別情報がありません。");
   }

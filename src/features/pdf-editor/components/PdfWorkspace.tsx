@@ -9,11 +9,12 @@ import { loadSavedNote } from "../loadNotes";
 import { saveNote } from "../saveNote";
 import type { PenStroke } from "../types";
 import { PdfPage } from "./PdfPage";
-import { SavedNotes } from "./SavedNotes";
+import { NotebookSidebar } from "./NotebookSidebar";
 
 type PdfInput = {
   file: File;
   id: string | null;
+  name?: string;
   strokesByPage: Record<number, PenStroke[]>;
 };
 
@@ -27,6 +28,9 @@ export function PdfWorkspace() {
   const [penWidth, setPenWidth] = useState(DEFAULT_PEN_WIDTH);
   const [zoom, setZoom] = useState(1);
   const [noteId, setNoteId] = useState<string | null>(null);
+  const [noteName, setNoteName] = useState("");
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [isOrganizing, setIsOrganizing] = useState(false);
   const [savedStrokes, setSavedStrokes] = useState<Record<number, PenStroke[]> | null>(
     null,
   );
@@ -39,7 +43,7 @@ export function PdfWorkspace() {
   const mountedRef = useRef(false);
   const operationRef = useRef(false);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
-  const isBusy = isLoading || isExporting || isSaving;
+  const isBusy = isLoading || isExporting || isSaving || isOrganizing;
   const hasUnsavedChanges = file !== null && savedStrokes !== strokesByPage;
 
   useEffect(() => {
@@ -110,6 +114,7 @@ export function PdfWorkspace() {
       setStrokesByPage(input.strokesByPage);
       setSavedStrokes(input.id ? input.strokesByPage : null);
       setNoteId(input.id);
+      setNoteName(input.name ?? (input.file.name.replace(/\.pdf$/i, "") || input.file.name));
       setPageNumber(1);
       setZoom(1);
       setDocumentVersion((value) => value + 1);
@@ -207,148 +212,167 @@ export function PdfWorkspace() {
   }
 
   return (
-    <section className="card border border-base-300 bg-base-100 shadow-sm">
-      <div className="card-body gap-5">
-        <SavedNotes
-          refreshVersion={refreshVersion}
-          currentNoteId={noteId}
-          disabled={isBusy}
-          onOpen={(id) => {
-            void openPdf(() => loadSavedNote(id));
-          }}
-        />
-        <div>
-          <label className="label" htmlFor="pdf-upload">
-            PDFファイル
-          </label>
-          <input
-            id="pdf-upload"
-            className="file-input w-full max-w-md"
-            type="file"
-            accept="application/pdf,.pdf"
-            disabled={isBusy}
-            onChange={handleFileChange}
-          />
-        </div>
-
-        {error && (
-          <div className="alert alert-error" role="alert">
-            {error}
-          </div>
-        )}
-
-        {isLoading && <p role="status">PDFを読み込んでいます…</p>}
-        {isExporting && <p role="status">PDFを書き出しています…</p>}
-        {isSaving && <p role="status">ノートを保存しています…</p>}
-
-        {document && file && (
-          <>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex min-w-0 flex-wrap items-center gap-3">
-                <p className="min-w-0 truncate" title={file.name}>
-                  {file.name}
-                </p>
-                <div className="flex items-center gap-2">
-                  <label className="label" htmlFor="pen-width">
-                    ペンの太さ
-                  </label>
-                  <select
-                    id="pen-width"
-                    className="select select-sm w-auto"
-                    value={penWidth}
-                    disabled={isLoading}
-                    onChange={(event) => setPenWidth(Number(event.target.value))}
-                  >
-                    <option value="1.5">細</option>
-                    <option value="2.5">標準</option>
-                    <option value="5">太</option>
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <label className="label" htmlFor="pdf-zoom">
-                    表示倍率
-                  </label>
-                  <select
-                    id="pdf-zoom"
-                    className="select select-sm w-auto"
-                    value={zoom}
-                    disabled={isLoading}
-                    onChange={(event) => setZoom(Number(event.target.value))}
-                  >
-                    <option value="0.5">50%</option>
-                    <option value="0.75">75%</option>
-                    <option value="1">100%</option>
-                    <option value="1.25">125%</option>
-                    <option value="1.5">150%</option>
-                    <option value="2">200%</option>
-                  </select>
-                </div>
-                <button
-                  className="btn"
-                  type="button"
-                  disabled={isBusy || savedStrokes === strokesByPage}
-                  onClick={() => void handleSave()}
-                >
-                  ノートを保存
-                </button>
-                <button
-                  className="btn btn-primary"
-                  type="button"
-                  disabled={isBusy}
-                  onClick={() => void handleDownload()}
-                >
-                  PDFをダウンロード
-                </button>
-              </div>
-              <div className="join" aria-label="ページ切り替え">
-                <button
-                  className="btn join-item"
-                  type="button"
-                  disabled={isLoading || pageNumber === 1}
-                  onClick={() => setPageNumber((page) => page - 1)}
-                >
-                  前へ
-                </button>
-                <span className="btn join-item pointer-events-none" aria-live="polite">
-                  {pageNumber} / {document.numPages}
-                </span>
-                <button
-                  className="btn join-item"
-                  type="button"
-                  disabled={isLoading || pageNumber === document.numPages}
-                  onClick={() => setPageNumber((page) => page + 1)}
-                >
-                  次へ
-                </button>
-              </div>
-            </div>
-            {!isSaving && (
-              <p className="text-sm" role="status">
-                {noteId
-                  ? savedStrokes === strokesByPage
-                    ? "保存済み"
-                    : "未保存の変更があります"
-                  : "未保存"}
-              </p>
-            )}
-            <PdfPage
-              key={`${documentVersion}-${pageNumber}`}
-              document={document}
-              pageNumber={pageNumber}
-              strokes={strokesByPage[pageNumber] ?? []}
-              penWidth={penWidth}
-              zoom={zoom}
-              disabled={isLoading}
-              onStrokeComplete={(stroke) => {
-                setStrokesByPage((current) => ({
-                  ...current,
-                  [pageNumber]: [...(current[pageNumber] ?? []), stroke],
-                }));
-              }}
-            />
-          </>
-        )}
+    <div className="flex flex-col gap-3">
+      <div>
+        <button type="button" className="btn btn-sm" aria-controls="notebook-sidebar"
+          aria-expanded={sidebarVisible} onClick={() => setSidebarVisible((value) => !value)}>
+          ノート
+        </button>
       </div>
-    </section>
+      <div className="flex items-start gap-4">
+        <aside id="notebook-sidebar" hidden={!sidebarVisible} className="w-64 shrink-0">
+          <NotebookSidebar
+            refreshVersion={refreshVersion}
+            currentNoteId={noteId}
+            disabled={isBusy}
+            onOpen={(note) => {
+              void openPdf(async () => ({ ...await loadSavedNote(note.id), name: note.title }));
+            }}
+            onRenamed={(id, title) => {
+              if (id === noteId) setNoteName(title);
+            }}
+            onMutationChange={(busy) => {
+              operationRef.current = busy;
+              setIsOrganizing(busy);
+            }}
+          />
+        </aside>
+        <section className="card min-w-0 flex-1 border border-base-300 bg-base-100 shadow-sm">
+          <div className="card-body gap-5">
+            <div>
+              <label className="label" htmlFor="pdf-upload">
+                PDFファイル
+              </label>
+              <input
+                id="pdf-upload"
+                className="file-input w-full max-w-md"
+                type="file"
+                accept="application/pdf,.pdf"
+                disabled={isBusy}
+                onChange={handleFileChange}
+              />
+            </div>
+
+            {error && (
+              <div className="alert alert-error" role="alert">
+                {error}
+              </div>
+            )}
+
+            {isLoading && <p role="status">PDFを読み込んでいます…</p>}
+            {isExporting && <p role="status">PDFを書き出しています…</p>}
+            {isSaving && <p role="status">ノートを保存しています…</p>}
+
+            {document && file && (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-3">
+                    <p className="min-w-0 truncate" title={file.name}>
+                      {noteName}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <label className="label" htmlFor="pen-width">
+                        ペンの太さ
+                      </label>
+                      <select
+                        id="pen-width"
+                        className="select select-sm w-auto"
+                        value={penWidth}
+                        disabled={isLoading}
+                        onChange={(event) => setPenWidth(Number(event.target.value))}
+                      >
+                        <option value="1.5">細</option>
+                        <option value="2.5">標準</option>
+                        <option value="5">太</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="label" htmlFor="pdf-zoom">
+                        表示倍率
+                      </label>
+                      <select
+                        id="pdf-zoom"
+                        className="select select-sm w-auto"
+                        value={zoom}
+                        disabled={isLoading}
+                        onChange={(event) => setZoom(Number(event.target.value))}
+                      >
+                        <option value="0.5">50%</option>
+                        <option value="0.75">75%</option>
+                        <option value="1">100%</option>
+                        <option value="1.25">125%</option>
+                        <option value="1.5">150%</option>
+                        <option value="2">200%</option>
+                      </select>
+                    </div>
+                    <button
+                      className="btn"
+                      type="button"
+                      disabled={isBusy || savedStrokes === strokesByPage}
+                      onClick={() => void handleSave()}
+                    >
+                      ノートを保存
+                    </button>
+                    <button
+                      className="btn btn-primary"
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => void handleDownload()}
+                    >
+                      PDFをダウンロード
+                    </button>
+                  </div>
+                  <div className="join" aria-label="ページ切り替え">
+                    <button
+                      className="btn join-item"
+                      type="button"
+                      disabled={isLoading || pageNumber === 1}
+                      onClick={() => setPageNumber((page) => page - 1)}
+                    >
+                      前へ
+                    </button>
+                    <span className="btn join-item pointer-events-none" aria-live="polite">
+                      {pageNumber} / {document.numPages}
+                    </span>
+                    <button
+                      className="btn join-item"
+                      type="button"
+                      disabled={isLoading || pageNumber === document.numPages}
+                      onClick={() => setPageNumber((page) => page + 1)}
+                    >
+                      次へ
+                    </button>
+                  </div>
+                </div>
+                {!isSaving && (
+                  <p className="text-sm" role="status">
+                    {noteId
+                      ? savedStrokes === strokesByPage
+                        ? "保存済み"
+                        : "未保存の変更があります"
+                      : "未保存"}
+                  </p>
+                )}
+                <PdfPage
+                  key={`${documentVersion}-${pageNumber}`}
+                  document={document}
+                  pageNumber={pageNumber}
+                  strokes={strokesByPage[pageNumber] ?? []}
+                  penWidth={penWidth}
+                  zoom={zoom}
+                  disabled={isLoading}
+                  onStrokeComplete={(stroke) => {
+                    setStrokesByPage((current) => ({
+                      ...current,
+                      [pageNumber]: [...(current[pageNumber] ?? []), stroke],
+                    }));
+                  }}
+                />
+              </>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
   );
 }
