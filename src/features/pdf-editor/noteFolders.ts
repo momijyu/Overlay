@@ -108,3 +108,28 @@ export async function moveNoteFolder(folderId: string, parentId: string | null):
   if (error?.code === "23505") throw new Error("移動先に同じ名前のフォルダがあります。");
   if (error || data !== folderId) throw new Error("フォルダを移動できませんでした。", { cause: error });
 }
+
+export async function renameNoteFolder(folderId: string, name: string): Promise<void> {
+  const trimmedName = checkedName(name, 100);
+  if (!await getNoteOwnerId()) throw new Error("このブラウザには保存したフォルダの識別情報がありません。");
+  const { data, error } = await getSupabaseClient().rpc("rename_note_folder", {
+    target_folder_id: folderId, new_name: trimmedName,
+  });
+  if (error?.code === "PGRST202" || error?.code === "42883") {
+    throw new Error("フォルダ管理用のSQLをSupabaseで実行してください。", { cause: error });
+  }
+  if (error?.code === "23505") throw new Error("同じ場所に同じ名前のフォルダがあります。");
+  if (error || data !== folderId) throw new Error("フォルダ名を変更できませんでした。", { cause: error });
+}
+
+export async function deleteEmptyNoteFolder(folderId: string): Promise<void> {
+  if (!await getNoteOwnerId()) throw new Error("このブラウザには保存したフォルダの識別情報がありません。");
+  const { data, error } = await getSupabaseClient().rpc("delete_empty_note_folder", {
+    target_folder_id: folderId,
+  });
+  if (error?.code === "PGRST202" || error?.code === "42883") {
+    throw new Error("フォルダ管理用のSQLをSupabaseで実行してください。", { cause: error });
+  }
+  if (error?.code === "23503") throw new Error("空のフォルダだけ削除できます。中のノートやフォルダを先に移動してください。");
+  if (error || data !== folderId) throw new Error("フォルダを削除できませんでした。", { cause: error });
+}

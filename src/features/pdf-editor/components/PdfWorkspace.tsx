@@ -220,7 +220,7 @@ export function PdfWorkspace() {
         </button>
       </div>
       <div className="flex items-start gap-4">
-        <aside id="notebook-sidebar" hidden={!sidebarVisible} className="w-64 shrink-0">
+        <aside id="notebook-sidebar" hidden={!sidebarVisible} className="w-80 shrink-0">
           <NotebookSidebar
             refreshVersion={refreshVersion}
             currentNoteId={noteId}

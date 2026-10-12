@@ -1,4 +1,17 @@
-import type { NoteFolder, SavedNoteSummary } from "./types";
+import type { NoteFolder, NoteLibrary, SavedNoteSummary } from "./types";
+
+// DBのlower(name)制約に合わせた事前確認。別タブの変更はDBでも検証する。
+export function hasFolderNameConflict(name: string, parentId: string | null, library: NoteLibrary, exceptId?: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return library.folders.some((folder) => folder.id !== exceptId && folder.parentId === parentId
+    && folder.name.toLowerCase() === normalized);
+}
+
+export function canDeleteEmptyFolder(folderId: string, library: NoteLibrary): boolean {
+  return library.foldersEnabled && library.folders.some((folder) => folder.id === folderId)
+    && !library.folders.some((folder) => folder.parentId === folderId)
+    && !library.notes.some((note) => note.folderId === folderId);
+}
 
 export type NoteTreeFolder = NoteFolder & {
   folders: NoteTreeFolder[];

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, mock, test } from "node:test";
 
-import { buildNoteTree, folderChoices } from "@/features/pdf-editor/noteTree";
+import { buildNoteTree, canDeleteEmptyFolder, folderChoices, hasFolderNameConflict } from "@/features/pdf-editor/noteTree";
 import { canMoveItem, readNoteDrag } from "@/features/pdf-editor/noteDrag";
 import type { NoteFolder, SavedNoteSummary } from "@/features/pdf-editor/types";
 
@@ -23,6 +23,8 @@ function freshStore() {
     tables: { notes: [] as Row[], note_folders: [] as Row[] },
     schemaReady: true,
     movesReady: true,
+    managementReady: true,
+    managementCalls: [] as { name: string; folderId: string; newName?: string }[],
     failure: false,
     signIns: 0,
     columns: [] as string[],
@@ -90,9 +92,27 @@ mock.module("@/lib/supabase/client", {
         },
       },
       from(table: keyof typeof store.tables) { return new Query(table); },
-      async rpc(name: string, args: { moving_folder_id: string; destination_parent_id: string | null }) {
+      async rpc(name: string, args: { moving_folder_id?: string; destination_parent_id?: string | null; target_folder_id?: string; new_name?: string }) {
+        if (name === "rename_note_folder" || name === "delete_empty_note_folder") {
+          store.managementCalls.push({ name, folderId: args.target_folder_id!, newName: args.new_name });
+          const fail = (code: string) => ({ data: null, error: { code } });
+          if (!store.managementReady) return fail("PGRST202");
+          if (store.failure) return fail("NETWORK");
+          const folder = store.tables.note_folders.find((row) => row.id === args.target_folder_id && row.owner_id === store.ownerId);
+          if (!folder) return fail("42501");
+          if (name === "rename_note_folder") {
+            if (store.tables.note_folders.some((row) => row.id !== folder.id && row.owner_id === store.ownerId
+              && row.parent_id === folder.parent_id && row.name?.toLowerCase() === args.new_name?.toLowerCase())) return fail("23505");
+            folder.name = args.new_name;
+          } else {
+            if (store.tables.note_folders.some((row) => row.parent_id === folder.id)
+              || store.tables.notes.some((row) => row.folder_id === folder.id)) return fail("23503");
+            store.tables.note_folders = store.tables.note_folders.filter((row) => row.id !== folder.id);
+          }
+          return { data: folder.id, error: null };
+        }
         assert.equal(name, "move_note_folder");
-        store.moves.push({ folderId: args.moving_folder_id, parentId: args.destination_parent_id });
+        store.moves.push({ folderId: args.moving_folder_id!, parentId: args.destination_parent_id! });
         const fail = (code: string) => ({ data: null, error: { code } });
         if (!store.movesReady) return fail("PGRST202");
         if (store.failure) return fail("NETWORK");
@@ -100,7 +120,7 @@ mock.module("@/lib/supabase/client", {
           row.id === args.moving_folder_id && row.owner_id === store.ownerId);
         if (!folder) return fail("42501");
         const ownFolders = store.tables.note_folders.filter((row) => row.owner_id === store.ownerId);
-        let parentId = args.destination_parent_id;
+        let parentId = args.destination_parent_id ?? null;
         const visited = new Set<string>();
         while (parentId !== null) {
           if (parentId === folder.id || visited.has(parentId)) return fail("23514");
@@ -117,9 +137,110 @@ mock.module("@/lib/supabase/client", {
     }),
   },
 });
-const { createNoteFolder, loadNoteLibrary, organizeNote, moveNoteFolder, moveSavedNote } = await import("@/features/pdf-editor/noteFolders");
+const { createNoteFolder, loadNoteLibrary, organizeNote, moveNoteFolder, moveSavedNote, renameNoteFolder, deleteEmptyNoteFolder } = await import("@/features/pdf-editor/noteFolders");
 
 beforeEach(() => { store = freshStore(); });
+
+test("同名フォルダへのドラッグは最上位・子階層とも大文字小文字を区別せず無効", () => {
+  const library = { foldersEnabled: true, notes: [summary("note", "parent", "Docs")], folders: [
+    { id: "parent", name: "2026", parentId: null },
+    { id: "destination", name: "2027", parentId: null },
+    { id: "moving", name: "Docs", parentId: "parent" },
+    { id: "root-copy", name: "docs", parentId: null },
+    { id: "child-copy", name: "DOCS", parentId: "destination" },
+  ] };
+  const item = { kind: "folder" as const, id: "moving" };
+  assert.equal(canMoveItem(item, null, library), false);
+  assert.equal(canMoveItem(item, "destination", library), false);
+  assert.equal(canMoveItem(item, "root-copy", library), true, "別階層の同名は許可");
+  assert.equal(canMoveItem({ kind: "note", id: "note" }, "destination", library), true, "ノート名は制限しない");
+  assert.equal(hasFolderNameConflict(" Docs ", "parent", library, "moving"), false, "自身を重複としない");
+});
+
+test("フォルダの名前だけを変更し、子・ノート・PDF・線を維持する", async () => {
+  const parent = await createNoteFolder("情報", null);
+  const child = await createNoteFolder("演習", parent);
+  const note = addNote();
+  await organizeNote(note.id, "ノート1", child);
+  const snapshot = structuredClone(store.tables);
+  await renameNoteFolder(parent, " 画像処理 ");
+  assert.deepEqual(store.managementCalls, [{ name: "rename_note_folder", folderId: parent, newName: "画像処理" }]);
+  snapshot.note_folders.find((row) => row.id === parent)!.name = "画像処理";
+  assert.deepEqual(store.tables, snapshot);
+  assert.equal(folderChoices(buildNoteTree((await loadNoteLibrary()).folders, (await loadNoteLibrary()).notes))[1].path, "画像処理 / 演習");
+  await renameNoteFolder(parent, "画像処理");
+});
+
+test("名前変更の空白・長さ・同名衝突は拒否し、別階層の同名を許可", async () => {
+  const parent = await createNoteFolder("2026", null);
+  const folder = await createNoteFolder("Docs", null);
+  const other = await createNoteFolder("Other", null);
+  const child = await createNoteFolder("Other", parent);
+  await assert.rejects(() => renameNoteFolder(folder, "   "), /名前/);
+  await assert.rejects(() => renameNoteFolder(folder, "a".repeat(101)), /名前/);
+  await assert.rejects(() => renameNoteFolder(folder, "other"), /同じ名前/);
+  await renameNoteFolder(child, "docs");
+  assert.equal(store.tables.note_folders.find((row) => row.id === folder)?.name, "Docs");
+  assert.equal(store.tables.note_folders.find((row) => row.id === other)?.name, "Other");
+});
+
+test("空フォルダだけ削除し、親・他のノートを残す", async () => {
+  const parent = await createNoteFolder("2026", null);
+  const child = await createNoteFolder("空", parent);
+  const note = addNote();
+  const snapshot = structuredClone(note);
+  const library = await loadNoteLibrary();
+  assert.equal(canDeleteEmptyFolder(parent, library), false);
+  assert.equal(canDeleteEmptyFolder(child, library), true);
+  assert.equal(canDeleteEmptyFolder("missing", library), false);
+  assert.equal(canDeleteEmptyFolder(child, { ...library, foldersEnabled: false }), false);
+  await deleteEmptyNoteFolder(child);
+  assert.equal(store.tables.note_folders.length, 1);
+  assert.deepEqual(note, snapshot);
+  await deleteEmptyNoteFolder(parent);
+  assert.equal(store.tables.note_folders.length, 0);
+});
+
+test("子フォルダ・ノートがある場合はAPI側でも削除を拒否する", async () => {
+  const parent = await createNoteFolder("2026", null);
+  const child = await createNoteFolder("情報", parent);
+  const note = addNote();
+  await organizeNote(note.id, "ノート1", child);
+  const snapshot = structuredClone(store.tables);
+  const library = await loadNoteLibrary();
+  assert.equal(canDeleteEmptyFolder(child, library), false);
+  await assert.rejects(() => deleteEmptyNoteFolder(parent), /空のフォルダ/);
+  await assert.rejects(() => deleteEmptyNoteFolder(child), /空のフォルダ/);
+  assert.deepEqual(store.tables, snapshot);
+});
+
+test("他人・不明なフォルダの管理は拒否する", async () => {
+  store.tables.note_folders.push({ id: "other", name: "秘密", parent_id: null, owner_id: "owner-b" });
+  const snapshot = structuredClone(store.tables);
+  for (const id of ["other", "missing"]) {
+    await assert.rejects(() => renameNoteFolder(id, "変更"), /変更できません/);
+    await assert.rejects(() => deleteEmptyNoteFolder(id), /削除できません/);
+  }
+  assert.deepEqual(store.tables, snapshot);
+});
+
+test("管理SQL未設定・接続失敗・識別情報消失で変更せず、新規ユーザーも作らない", async () => {
+  const id = await createNoteFolder("情報", null);
+  const snapshot = structuredClone(store.tables);
+  store.managementReady = false;
+  await assert.rejects(() => renameNoteFolder(id, "変更"), /管理用のSQL/);
+  await assert.rejects(() => deleteEmptyNoteFolder(id), /管理用のSQL/);
+  store.managementReady = true;
+  store.failure = true;
+  await assert.rejects(() => renameNoteFolder(id, "変更"), /変更できません/);
+  await assert.rejects(() => deleteEmptyNoteFolder(id), /削除できません/);
+  store.failure = false;
+  store.ownerId = null;
+  await assert.rejects(() => renameNoteFolder(id, "変更"), /識別情報/);
+  await assert.rejects(() => deleteEmptyNoteFolder(id), /識別情報/);
+  assert.equal(store.signIns, 0);
+  assert.deepEqual(store.tables, snapshot);
+});
 
 function addNote(ownerId = "owner-a"): Row {
   const row = {

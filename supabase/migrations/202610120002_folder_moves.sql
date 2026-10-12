@@ -2,7 +2,7 @@ begin;
 
 -- 元PDF・線・ノートの所属先は変更せず、フォルダの親だけを変更する窓口。
 -- テーブルの直接UPDATE権限は増やさず、所有者と階層を確認してから更新する。
-create function public.move_note_folder(moving_folder_id uuid, destination_parent_id uuid)
+create or replace function public.move_note_folder(moving_folder_id uuid, destination_parent_id uuid)
 returns uuid
 language plpgsql
 security definer

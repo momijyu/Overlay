@@ -1,4 +1,5 @@
 import type { NoteLibrary } from "./types";
+import { hasFolderNameConflict } from "./noteTree";
 
 export const NOTE_DRAG_TYPE = "application/x-overlay-item";
 export type NoteDragItem = { kind: "note" | "folder"; id: string };
@@ -25,6 +26,7 @@ export function canMoveItem(item: NoteDragItem, parentId: string | null, library
   }
   const folder = folders.get(item.id);
   if (!folder || folder.parentId === parentId) return false;
+  if (hasFolderNameConflict(folder.name, parentId, library, folder.id)) return false;
   const visited = new Set<string>();
   let ancestorId = parentId;
   while (ancestorId !== null) {

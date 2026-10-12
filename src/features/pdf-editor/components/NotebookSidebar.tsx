@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
 
-import { createNoteFolder, FOLDER_SETUP_MESSAGE, loadNoteLibrary, moveNoteFolder, moveSavedNote, organizeNote } from "../noteFolders";
+import { createNoteFolder, deleteEmptyNoteFolder, FOLDER_SETUP_MESSAGE, loadNoteLibrary, moveNoteFolder, moveSavedNote, organizeNote, renameNoteFolder } from "../noteFolders";
 import { canMoveItem, NOTE_DRAG_TYPE, readNoteDrag, type NoteDragItem } from "../noteDrag";
-import { buildNoteTree, type NoteTree } from "../noteTree";
+import { buildNoteTree, canDeleteEmptyFolder, folderChoices, hasFolderNameConflict, type NoteTree } from "../noteTree";
 import type { NoteLibrary, SavedNoteSummary } from "../types";
 import { NotebookActionDialog, type NotebookAction } from "./NotebookActionDialog";
 import { NotebookTree } from "./NotebookTree";
@@ -49,6 +49,11 @@ export function NotebookSidebar(props: SidebarProps) {
   );
   const selectedNote = selected?.kind === "note" ? result.library.notes.find((note) => note.id === selected.id) : undefined;
   const selectedFolder = selected?.kind === "folder" ? result.library.folders.find((folder) => folder.id === selected.id) : undefined;
+  const currentNote = result.library.notes.find((note) => note.id === props.currentNoteId);
+  // 選択中のフォルダではなく、実際に開いているノートの所属先を示す。
+  const currentNotePath = currentNote
+    ? folderChoices(result.tree).find((folder) => folder.id === currentNote.folderId)?.path ?? "最上位"
+    : null;
   const unavailable = props.disabled || isMutating || isLoading || result.error !== null;
   const canOrganize = !unavailable && result.library.foldersEnabled;
 
@@ -80,6 +85,12 @@ export function NotebookSidebar(props: SidebarProps) {
     return () => { active = false; };
   }, [requestKey]);
 
+  useEffect(() => {
+    if (moveMessage !== "移動しました。") return;
+    const timer = setTimeout(() => setMoveMessage(null), 3000);
+    return () => clearTimeout(timer);
+  }, [moveMessage]);
+
   function expandParents(folderId: string | null, newFolderId?: string) {
     setExpanded((previous) => {
       const next = new Set(previous);
@@ -109,6 +120,17 @@ export function NotebookSidebar(props: SidebarProps) {
       if (await handleMove({ kind: "folder", id: action.folder.id }, folderId)) setAction(null);
       return;
     }
+    // 確認画面の表示後も、APIを呼ぶ直前に表示中の一覧で検証する。
+    if (action.kind === "delete-folder" && !canDeleteEmptyFolder(action.folder.id, result.library)) {
+      setMoveError("空のフォルダだけ削除できます。");
+      return;
+    }
+    if ((action.kind === "create-folder" || action.kind === "rename-folder")
+      && hasFolderNameConflict(name, action.kind === "rename-folder" ? action.folder.parentId : folderId,
+        result.library, action.kind === "rename-folder" ? action.folder.id : undefined)) {
+      setMoveError("同じ場所に同じ名前のフォルダがあります。");
+      return;
+    }
     mutationRef.current = true;
     setIsMutating(true);
     props.onMutationChange(true);
@@ -119,6 +141,19 @@ export function NotebookSidebar(props: SidebarProps) {
         if (!mountedRef.current) return;
         expandParents(folderId, id);
         setSelection({ kind: "folder", id });
+      } else if (action.kind === "rename-folder") {
+        await renameNoteFolder(action.folder.id, name);
+        if (!mountedRef.current) return;
+      } else if (action.kind === "delete-folder") {
+        await deleteEmptyNoteFolder(action.folder.id);
+        if (!mountedRef.current) return;
+        setSelection(action.folder.parentId ? { kind: "folder", id: action.folder.parentId } : "root");
+        setExpanded((previous) => {
+          const next = new Set(previous);
+          next.delete(action.folder.id);
+          return next;
+        });
+        setMoveMessage("空フォルダを削除しました。この操作は元に戻せません。");
       } else {
         await organizeNote(action.note.id, name, folderId);
         if (!mountedRef.current) return;
@@ -221,7 +256,10 @@ export function NotebookSidebar(props: SidebarProps) {
   async function handleMove(item: NoteDragItem, folderId: string | null): Promise<boolean> {
     if (unavailable || mutationRef.current) return false;
     if (!canMoveItem(item, folderId, result.library)) {
-      setMoveError("移動先を変更してください。自分自身や子フォルダの中へは移動できません。");
+      const folder = item.kind === "folder" ? result.library.folders.find((folder) => folder.id === item.id) : undefined;
+      setMoveError(folder && hasFolderNameConflict(folder.name, folderId, result.library, folder.id)
+        ? "移動先に同じ名前のフォルダがあります。"
+        : "移動先を変更してください。自分自身や子フォルダの中へは移動できません。");
       return false;
     }
     mutationRef.current = true;
@@ -269,7 +307,8 @@ export function NotebookSidebar(props: SidebarProps) {
           <details ref={menuRef} className="dropdown">
             <summary className={`btn btn-sm ${!canOrganize || (!selectedNote && !selectedFolder) ? "btn-disabled" : ""}`}
               aria-disabled={!canOrganize || (!selectedNote && !selectedFolder)}
-              tabIndex={!canOrganize || (!selectedNote && !selectedFolder) ? -1 : 0}
+              // 有効時はsummary本来のフォーカスを使う。tabindexを付けるとdaisyUIがフォーカス中のクリックを無効化する。
+              tabIndex={!canOrganize || (!selectedNote && !selectedFolder) ? -1 : undefined}
               onClick={(event) => {
                 if (!canOrganize || (!selectedNote && !selectedFolder)) event.preventDefault();
               }}>操作</summary>
@@ -278,6 +317,12 @@ export function NotebookSidebar(props: SidebarProps) {
                 onClick={() => beginAction({ kind: "edit-note", note: selectedNote })}>名前・保存先</button></li>}
               {selectedFolder && <li><button type="button" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "move-folder", folder: selectedFolder })}>移動</button></li>}
+              {selectedFolder && <li><button type="button" disabled={!canOrganize}
+                onClick={() => beginAction({ kind: "rename-folder", folder: selectedFolder })}>名前変更</button></li>}
+              {selectedFolder && <li><button type="button"
+                disabled={!canOrganize || !canDeleteEmptyFolder(selectedFolder.id, result.library)}
+                title={canDeleteEmptyFolder(selectedFolder.id, result.library) ? undefined : "空のフォルダだけ削除できます。"}
+                onClick={() => beginAction({ kind: "delete-folder", folder: selectedFolder })}>空フォルダ削除</button></li>}
             </ul>
           </details>
         </div>
@@ -300,7 +345,9 @@ export function NotebookSidebar(props: SidebarProps) {
               )}
               {result.library.notes.length === 0 && result.library.folders.length === 0
                 ? <p>ノートはありません。</p>
-                : <ul className="menu menu-sm w-full max-h-[70vh] flex-nowrap overflow-auto p-0">
+                : <ul className="menu menu-sm notebook-tree w-full max-h-[70vh] flex-nowrap overflow-auto p-0"
+                  onDragOver={(event) => dragOver(event, null)} onDragLeave={dragLeave}
+                  onDrop={(event) => drop(event, null)}>
                   <NotebookTree tree={result.tree} expanded={expanded} currentNoteId={props.currentNoteId}
                     selected={selected} onSelect={(item) => {
                       // ノートを開く操作は実際の表示中IDに追従する。切り替えをキャンセルしても対象がずれない。
@@ -318,6 +365,12 @@ export function NotebookSidebar(props: SidebarProps) {
                       return next;
                     })} />
                 </ul>}
+              {currentNotePath && (
+                <dl className="border-t border-base-300 pt-3 text-sm">
+                  <dt className="mb-1 text-xs text-base-content/60">開いているノートの保存先</dt>
+                  <dd className="break-words">{currentNotePath}</dd>
+                </dl>
+              )}
             </>
           )}
       </div>
