@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { beforeEach, mock, test } from "node:test";
 
 import { buildNoteTree, folderChoices } from "@/features/pdf-editor/noteTree";
+import { canMoveItem, readNoteDrag } from "@/features/pdf-editor/noteDrag";
 import type { NoteFolder, SavedNoteSummary } from "@/features/pdf-editor/types";
 
 type Row = {
@@ -21,9 +22,11 @@ function freshStore() {
     ownerId: "owner-a" as string | null,
     tables: { notes: [] as Row[], note_folders: [] as Row[] },
     schemaReady: true,
+    movesReady: true,
     failure: false,
     signIns: 0,
     columns: [] as string[],
+    moves: [] as { folderId: string; parentId: string | null }[],
   };
 }
 let store = freshStore();
@@ -87,10 +90,34 @@ mock.module("@/lib/supabase/client", {
         },
       },
       from(table: keyof typeof store.tables) { return new Query(table); },
+      async rpc(name: string, args: { moving_folder_id: string; destination_parent_id: string | null }) {
+        assert.equal(name, "move_note_folder");
+        store.moves.push({ folderId: args.moving_folder_id, parentId: args.destination_parent_id });
+        const fail = (code: string) => ({ data: null, error: { code } });
+        if (!store.movesReady) return fail("PGRST202");
+        if (store.failure) return fail("NETWORK");
+        const folder = store.tables.note_folders.find((row) =>
+          row.id === args.moving_folder_id && row.owner_id === store.ownerId);
+        if (!folder) return fail("42501");
+        const ownFolders = store.tables.note_folders.filter((row) => row.owner_id === store.ownerId);
+        let parentId = args.destination_parent_id;
+        const visited = new Set<string>();
+        while (parentId !== null) {
+          if (parentId === folder.id || visited.has(parentId)) return fail("23514");
+          visited.add(parentId);
+          const parent = ownFolders.find((row) => row.id === parentId);
+          if (!parent) return fail("23503");
+          parentId = parent.parent_id ?? null;
+        }
+        if (ownFolders.some((row) => row.id !== folder.id && row.parent_id === args.destination_parent_id &&
+          row.name?.toLowerCase() === folder.name?.toLowerCase())) return fail("23505");
+        folder.parent_id = args.destination_parent_id;
+        return { data: folder.id, error: null };
+      },
     }),
   },
 });
-const { createNoteFolder, loadNoteLibrary, organizeNote } = await import("@/features/pdf-editor/noteFolders");
+const { createNoteFolder, loadNoteLibrary, organizeNote, moveNoteFolder, moveSavedNote } = await import("@/features/pdf-editor/noteFolders");
 
 beforeEach(() => { store = freshStore(); });
 
@@ -206,4 +233,114 @@ test("識別情報を失った場合はノート名変更を止め、新しい�
   store.ownerId = null;
   await assert.rejects(() => organizeNote("note-owner-a", "ノート1", null), /識別情報/);
   assert.equal(store.signIns, 0);
+});
+
+test("ドラッグデータはノート・フォルダのIDだけ受け入れ、不正な文字列を断る", () => {
+  assert.deepEqual(readNoteDrag('{"kind":"note","id":"a"}'), { kind: "note", id: "a" });
+  assert.deepEqual(readNoteDrag('{"kind":"folder","id":"a"}'), { kind: "folder", id: "a" });
+  for (const value of ["", "授業.pdf", "null", "[]", "{}", '{"kind":"file","id":"a"}', '{"kind":"note","id":1}', '{"kind":"note","id":""}']) {
+    assert.equal(readNoteDrag(value), null);
+  }
+});
+
+test("移動先候補は自己・子孫・現在の場所・不明な項目を除き、最上位への移動を許す", () => {
+  const library = {
+    foldersEnabled: true,
+    folders: [
+      { id: "year", name: "2026", parentId: null },
+      { id: "info", name: "情報", parentId: "year" },
+      { id: "sub", name: "演習", parentId: "info" },
+      { id: "other", name: "2027", parentId: null },
+    ],
+    notes: [summary("a", null), summary("b", "info")],
+  };
+  assert(canMoveItem({ kind: "note", id: "a" }, "info", library));
+  assert(!canMoveItem({ kind: "note", id: "a" }, null, library));
+  assert(!canMoveItem({ kind: "note", id: "b" }, "info", library));
+  assert(canMoveItem({ kind: "note", id: "b" }, null, library));
+  assert(!canMoveItem({ kind: "folder", id: "year" }, "year", library));
+  assert(!canMoveItem({ kind: "folder", id: "year" }, "sub", library));
+  assert(!canMoveItem({ kind: "folder", id: "info" }, "year", library));
+  assert(canMoveItem({ kind: "folder", id: "info" }, null, library));
+  assert(canMoveItem({ kind: "folder", id: "info" }, "other", library));
+  assert(!canMoveItem({ kind: "note", id: "missing" }, "info", library));
+  assert(!canMoveItem({ kind: "note", id: "a" }, "missing", library));
+  assert(!canMoveItem({ kind: "folder", id: "missing" }, null, library));
+  assert(!canMoveItem({ kind: "note", id: "a" }, "info", { ...library, foldersEnabled: false }));
+  const cyclic = { ...library, folders: [{ id: "a", name: "a", parentId: "b" }, { id: "b", name: "b", parentId: "a" }, library.folders[1]] };
+  assert(!canMoveItem({ kind: "folder", id: "info" }, "a", cyclic));
+});
+
+test("ノート移動は名前・線・元PDFを変更せず、最上位にも戻せる", async () => {
+  const note = addNote();
+  note.title = "ノート1";
+  const original = structuredClone(note);
+  const folderId = await createNoteFolder("情報", null);
+  await moveSavedNote(note.id, folderId);
+  assert.equal((await loadNoteLibrary()).notes[0].folderId, folderId);
+  assert.equal(note.title, original.title);
+  assert.deepEqual(note.strokes_by_page, original.strokes_by_page);
+  assert.equal(note.pdf_path, original.pdf_path);
+  await moveSavedNote(note.id, null);
+  assert.equal(note.folder_id, null);
+});
+
+test("フォルダ移動では子フォルダとノートをそのまま保持し、再取得で新しい階層になる", async () => {
+  const year = await createNoteFolder("2026", null);
+  const nextYear = await createNoteFolder("2027", null);
+  const info = await createNoteFolder("情報", year);
+  const child = await createNoteFolder("演習", info);
+  const note = addNote();
+  await organizeNote(note.id, "ノート1", child);
+  const original = structuredClone(note);
+  await moveNoteFolder(info, nextYear);
+  assert.deepEqual(store.moves, [{ folderId: info, parentId: nextYear }]);
+  const tree = buildNoteTree((await loadNoteLibrary()).folders, (await loadNoteLibrary()).notes);
+  assert.equal(tree.folders[1].folders[0].folders[0].notes[0].id, note.id);
+  assert.deepEqual(note, original);
+  assert.equal(store.tables.note_folders.find((row) => row.id === child)?.parent_id, info);
+  await moveNoteFolder(info, null);
+  assert.equal(store.tables.note_folders.find((row) => row.id === info)?.parent_id, null);
+});
+
+test("フォルダ移動の自己・子孫・同名衝突はエラーにして階層を変えない", async () => {
+  const year = await createNoteFolder("2026", null);
+  const info = await createNoteFolder("情報", year);
+  const other = await createNoteFolder("情報", null);
+  const snapshot = structuredClone(store.tables.note_folders);
+  await assert.rejects(() => moveNoteFolder(year, year), /自分自身/);
+  await assert.rejects(() => moveNoteFolder(year, info), /子フォルダ/);
+  await assert.rejects(() => moveNoteFolder(other, year), /同じ名前/);
+  assert.deepEqual(store.tables.note_folders, snapshot);
+});
+
+test("他人のノート・フォルダや不明な移動先を断る", async () => {
+  const note = addNote();
+  const otherNote = addNote("owner-b");
+  const ownFolder = await createNoteFolder("情報", null);
+  store.tables.note_folders.push({ id: "other", name: "情報", parent_id: null, owner_id: "owner-b" });
+  const snapshot = structuredClone(store.tables);
+  await assert.rejects(() => moveSavedNote(otherNote.id, ownFolder), /移動できません/);
+  await assert.rejects(() => moveSavedNote(note.id, "other"), /移動できません/);
+  await assert.rejects(() => moveNoteFolder("other", ownFolder), /移動できません/);
+  await assert.rejects(() => moveNoteFolder(ownFolder, "other"), /移動できません/);
+  await assert.rejects(() => moveNoteFolder(ownFolder, "missing"), /移動できません/);
+  assert.deepEqual(store.tables, snapshot);
+});
+
+test("未設定の移動用SQL・接続失敗・識別情報の消失では更新せず案内する", async () => {
+  const folderId = await createNoteFolder("情報", null);
+  const note = addNote();
+  store.movesReady = false;
+  await assert.rejects(() => moveNoteFolder(folderId, null), /移動用のSQL/);
+  store.movesReady = true;
+  store.failure = true;
+  await assert.rejects(() => moveNoteFolder(folderId, null), /移動できません/);
+  await assert.rejects(() => moveSavedNote(note.id, folderId), /移動できません/);
+  store.failure = false;
+  store.ownerId = null;
+  await assert.rejects(() => moveNoteFolder(folderId, null), /識別情報/);
+  await assert.rejects(() => moveSavedNote(note.id, folderId), /識別情報/);
+  assert.equal(store.signIns, 0);
+  assert.equal(note.folder_id, null);
 });

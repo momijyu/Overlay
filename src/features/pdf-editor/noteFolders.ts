@@ -79,3 +79,32 @@ export async function organizeNote(noteId: string, title: string, folderId: stri
 
   if (error) throw new Error("ノートの名前・保存先を変更できませんでした。", { cause: error });
 }
+
+export async function moveSavedNote(noteId: string, folderId: string | null): Promise<void> {
+  const ownerId = await getNoteOwnerId();
+  if (!ownerId) throw new Error("このブラウザには保存したノートの識別情報がありません。");
+  const { error } = await getSupabaseClient()
+    .from("notes")
+    // 移動では名前や線を送らず、未保存の書き込みもそのまま残す。
+    .update({ folder_id: folderId, updated_at: new Date().toISOString() })
+    .eq("id", noteId)
+    .eq("owner_id", ownerId)
+    .select("id")
+    .single();
+  if (error) throw new Error("ノートを移動できませんでした。", { cause: error });
+}
+
+export async function moveNoteFolder(folderId: string, parentId: string | null): Promise<void> {
+  const ownerId = await getNoteOwnerId();
+  if (!ownerId) throw new Error("このブラウザには保存したフォルダの識別情報がありません。");
+  const { data, error } = await getSupabaseClient().rpc("move_note_folder", {
+    moving_folder_id: folderId,
+    destination_parent_id: parentId,
+  });
+  if (error?.code === "PGRST202" || error?.code === "42883") {
+    throw new Error("フォルダ移動用のSQLをSupabaseで実行してください。", { cause: error });
+  }
+  if (error?.code === "23514") throw new Error("自分自身や子フォルダの中へは移動できません。");
+  if (error?.code === "23505") throw new Error("移動先に同じ名前のフォルダがあります。");
+  if (error || data !== folderId) throw new Error("フォルダを移動できませんでした。", { cause: error });
+}
