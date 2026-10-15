@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { NotebookActionDialog, type NotebookAction } from "@/features/pdf-editor/components/NotebookActionDialog";
 import { NotebookTree, type NotebookTreeProps } from "@/features/pdf-editor/components/NotebookTree";
+import { PdfWorkspace } from "@/features/pdf-editor/components/PdfWorkspace";
+import { NotebookSidebar } from "@/features/pdf-editor/components/NotebookSidebar";
 import { buildNoteTree, folderChoices } from "@/features/pdf-editor/noteTree";
 import type { NoteLibrary } from "@/features/pdf-editor/types";
 import { canMoveItem } from "@/features/pdf-editor/noteDrag";
@@ -19,11 +21,62 @@ const library: NoteLibrary = {
   notes: [{ id: "note", title: "ノート1", fileName: "sample.pdf", updatedAt: "2026-10-12", folderId: "subject" }],
 };
 
+test("編集画面はサーバー描画でIndexedDBを開かず、保存先と移行の制約を案内する", () => {
+  const html = renderToStaticMarkup(createElement(PdfWorkspace));
+  assert.match(html, /保存先はこのブラウザです/);
+  assert.match(html, /最初の線を描き終えた時から自動保存します/);
+  assert.match(html, /PDFを開いただけでは保存しません/);
+  assert.match(html, /一定期間アクセスがないとブラウザの仕様によりデータが消去される場合があります/);
+  assert.match(html, /重要なノートは定期的に『PDFをダウンロード』して保管してください/);
+  assert.match(html, /サイトデータを削除するとノートも失われます/);
+  assert.match(html, /以前のSupabaseノートについて/);
+  assert.match(html, /以前のノートは削除していません/);
+  assert.match(html, /移行と再編集用バックアップは未対応/);
+  assert.match(html, /id="pdf-upload"/);
+});
+
+test("未選択・読み込み中・他操作中も操作メニュー自体は有効で、未選択の案内を出す", () => {
+  for (const disabled of [false, true]) {
+    const html = renderToStaticMarkup(createElement(NotebookSidebar, {
+      refreshVersion: 0, currentNoteId: null, disabled,
+      onOpen: () => {}, onRenamed: () => {}, onDelete: async () => {}, onMutationChange: () => {},
+    }));
+    const summary = html.match(/<summary[^>]*>操作<\/summary>/)?.[0];
+    assert.ok(summary);
+    assert.doesNotMatch(summary, /disabled|tabindex/i);
+    assert.match(html, /<button[^>]*disabled="">ノートまたはフォルダを選択してください<\/button>/);
+  }
+});
+
 function dialog(action: NotebookAction, busy = false, error: string | null = null, dialogLibrary = library) {
   return renderToStaticMarkup(createElement(NotebookActionDialog, {
     action, library: dialogLibrary, busy, error, onClose: () => {}, onSubmit: async () => {},
   }));
 }
+
+test("ノート削除は対象名と取り消せない確認を表示し、名前・移動先入力を出さない", () => {
+  const action: NotebookAction = { kind: "delete-note", note: library.notes[0] };
+  const html = dialog(action);
+  assert.match(html, /ノート削除/);
+  assert.match(html, /ノート1/);
+  assert.match(html, /元PDFと書き込みをブラウザ内から削除します。元に戻せません/);
+  assert.match(html, /未保存の変更も失われます/);
+  assert.match(html, /btn-error/);
+  assert.doesNotMatch(html, /<input|<select|type="submit"[^>]*disabled=""/);
+  const busy = dialog(action, true);
+  assert.match(busy, /削除中…/);
+  assert.match(busy, /type="button"[^>]*disabled=""/);
+  assert.match(busy, /type="submit" disabled=""/);
+  const failed = dialog(action, false, "削除に失敗しました。");
+  assert.match(failed, /role="alert">削除に失敗しました。/);
+  assert.match(failed, /ノート1/);
+});
+
+test("確認中に一覧から消えたノートの削除は送信できない", () => {
+  const html = dialog({ kind: "delete-note", note: library.notes[0] }, false, null, { ...library, notes: [] });
+  assert.match(html, /削除するノートが見つかりません/);
+  assert.match(html, /type="submit"[^>]*disabled=""/);
+});
 
 test("フォルダ作成のダイアログは選んだ親を初期選択する", () => {
   const html = dialog({ kind: "create-folder", parentId: "subject" });

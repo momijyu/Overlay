@@ -32,4 +32,6 @@ export type LoadedNote = {
   id: string;
   file: File;
   strokesByPage: Record<number, PenStroke[]>;
+  // ローカル保存の更新番号。番号のない旧データは0として読み込む。
+  revision?: number;
 };

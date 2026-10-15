@@ -15,7 +15,7 @@ export function readNoteDrag(value: string): NoteDragItem | null {
   }
 }
 
-// 表示中の一覧から移動先を確認する。保存先のSQLでも改めて検証する。
+// 表示中の一覧から移動先を確認する。保存処理でも改めて検証する。
 export function canMoveItem(item: NoteDragItem, parentId: string | null, library: NoteLibrary): boolean {
   if (!library.foldersEnabled) return false;
   const folders = new Map(library.folders.map((folder) => [folder.id, folder]));

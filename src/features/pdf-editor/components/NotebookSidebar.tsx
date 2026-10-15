@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
 
-import { createNoteFolder, deleteEmptyNoteFolder, FOLDER_SETUP_MESSAGE, loadNoteLibrary, moveNoteFolder, moveSavedNote, organizeNote, renameNoteFolder } from "../noteFolders";
+import { createNoteFolder, deleteEmptyNoteFolder, loadNoteLibrary, moveNoteFolder, moveSavedNote, organizeNote, renameNoteFolder } from "../localNotes";
 import { canMoveItem, NOTE_DRAG_TYPE, readNoteDrag, type NoteDragItem } from "../noteDrag";
 import { buildNoteTree, canDeleteEmptyFolder, folderChoices, hasFolderNameConflict, type NoteTree } from "../noteTree";
 import type { NoteLibrary, SavedNoteSummary } from "../types";
@@ -15,6 +15,7 @@ type SidebarProps = {
   disabled: boolean;
   onOpen: (note: SavedNoteSummary) => void;
   onRenamed: (id: string, title: string) => void;
+  onDelete: (id: string) => Promise<void>;
   onMutationChange: (busy: boolean) => void;
 };
 
@@ -154,6 +155,11 @@ export function NotebookSidebar(props: SidebarProps) {
           return next;
         });
         setMoveMessage("空フォルダを削除しました。この操作は元に戻せません。");
+      } else if (action.kind === "delete-note") {
+        await props.onDelete(action.note.id);
+        if (!mountedRef.current) return;
+        setSelection(action.note.folderId ? { kind: "folder", id: action.note.folderId } : "root");
+        setMoveMessage("ノートを削除しました。この操作は元に戻せません。");
       } else {
         await organizeNote(action.note.id, name, folderId);
         if (!mountedRef.current) return;
@@ -305,16 +311,16 @@ export function NotebookSidebar(props: SidebarProps) {
               kind: "create-folder", parentId: selectedFolder?.id ?? selectedNote?.folderId ?? null,
             })}>フォルダ作成</button>
           <details ref={menuRef} className="dropdown">
-            <summary className={`btn btn-sm ${!canOrganize || (!selectedNote && !selectedFolder) ? "btn-disabled" : ""}`}
-              aria-disabled={!canOrganize || (!selectedNote && !selectedFolder)}
-              // 有効時はsummary本来のフォーカスを使う。tabindexを付けるとdaisyUIがフォーカス中のクリックを無効化する。
-              tabIndex={!canOrganize || (!selectedNote && !selectedFolder) ? -1 : undefined}
-              onClick={(event) => {
-                if (!canOrganize || (!selectedNote && !selectedFolder)) event.preventDefault();
-              }}>操作</summary>
-            <ul className="menu dropdown-content z-10 mt-2 w-44 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm">
+            {/* summaryは常に開閉可能。処理中の制限は各メニュー項目で行う。 */}
+            <summary className="btn btn-sm">操作</summary>
+            <ul className="menu dropdown-content z-10 mt-2 w-64 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm">
+              {!selectedNote && !selectedFolder && <li><button type="button" disabled>
+                ノートまたはフォルダを選択してください
+              </button></li>}
               {selectedNote && <li><button type="button" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "edit-note", note: selectedNote })}>名前・保存先</button></li>}
+              {selectedNote && <li><button type="button" className="text-error" disabled={!canOrganize}
+                onClick={() => beginAction({ kind: "delete-note", note: selectedNote })}>ノート削除</button></li>}
               {selectedFolder && <li><button type="button" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "move-folder", folder: selectedFolder })}>移動</button></li>}
               {selectedFolder && <li><button type="button" disabled={!canOrganize}
@@ -332,7 +338,6 @@ export function NotebookSidebar(props: SidebarProps) {
           : result.error ? <p role="alert" className="text-error">{result.error}</p>
           : (
             <>
-              {!result.library.foldersEnabled && <p role="status">{FOLDER_SETUP_MESSAGE}</p>}
               {result.library.foldersEnabled && (
                 <button type="button" disabled={unavailable}
                   className={`btn btn-sm btn-ghost w-full justify-start ${selection === "root" ? "bg-base-200" : ""} ${dropTarget === "root" ? "outline-2 outline-primary bg-base-200" : ""}`}

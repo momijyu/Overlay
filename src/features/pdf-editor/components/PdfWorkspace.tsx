@@ -5,8 +5,8 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { DEFAULT_PEN_WIDTH } from "../penStyle";
-import { loadSavedNote } from "../loadNotes";
-import { saveNote } from "../saveNote";
+import { deleteSavedNote, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
+import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
 import type { PenStroke } from "../types";
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
@@ -16,6 +16,7 @@ type PdfInput = {
   id: string | null;
   name?: string;
   strokesByPage: Record<number, PenStroke[]>;
+  revision?: number;
 };
 
 export function PdfWorkspace() {
@@ -37,19 +38,25 @@ export function PdfWorkspace() {
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [documentVersion, setDocumentVersion] = useState(0);
   const mountedRef = useRef(false);
   const operationRef = useRef(false);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
-  const isBusy = isLoading || isExporting || isSaving || isOrganizing;
+  const autosaveRef = useRef<LocalAutosave | null>(null);
+  const strokesRef = useRef(strokesByPage);
+  // 自動保存中も描画・ページ切り替え・PDF出力を止めない。
+  // ノートを開き直すときだけ、openPdfで保存完了を待つ。
+  const isBusy = isLoading || isExporting || isOrganizing;
   const hasUnsavedChanges = file !== null && savedStrokes !== strokesByPage;
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      autosaveRef.current?.dispose();
       void loadingTaskRef.current?.destroy();
     };
   }, []);
@@ -61,31 +68,21 @@ export function PdfWorkspace() {
     };
   }, [document]);
 
-  useEffect(() => {
-    if (!hasUnsavedChanges) return;
-    function warnBeforeLeaving(event: BeforeUnloadEvent) {
-      event.preventDefault();
-      event.returnValue = "";
-    }
-    window.addEventListener("beforeunload", warnBeforeLeaving);
-    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
-  }, [hasUnsavedChanges]);
+  useEffect(() => attachLocalAutosaveLifecycle(window, window.document, () => autosaveRef.current), []);
 
   async function openPdf(getInput: () => Promise<PdfInput>) {
     if (operationRef.current) return;
-    if (
-      hasUnsavedChanges &&
-      !window.confirm("未保存の内容があります。保存せずに別のノートを開きますか？")
-    ) {
-      return;
-    }
-
     operationRef.current = true;
     setIsLoading(true);
     setError(null);
     let loadingTask: PDFDocumentLoadingTask | undefined;
     let isReadingPdf = false;
     try {
+      // 通常は保存完了を待ってから切り替える。失敗時だけ破棄の確認をする。
+      const previousAutosave = autosaveRef.current;
+      if (previousAutosave && !await previousAutosave.flush()
+        && !window.confirm("保存できていない変更があります。変更を破棄して別のノートを開きますか？")) return;
+      if (!mountedRef.current) return;
       const input = await getInput();
       isReadingPdf = true;
       const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -109,15 +106,34 @@ export function PdfWorkspace() {
       }
 
       // PDFと線を両方読み込めてから切り替え、失敗時は編集中の内容を残す。
+      previousAutosave?.dispose();
+      strokesRef.current = input.strokesByPage;
       setFile(input.file);
       setDocument(loadedDocument);
       setStrokesByPage(input.strokesByPage);
-      setSavedStrokes(input.id ? input.strokesByPage : null);
+      setSavedStrokes(input.strokesByPage);
       setNoteId(input.id);
       setNoteName(input.name ?? (input.file.name.replace(/\.pdf$/i, "") || input.file.name));
       setPageNumber(1);
       setZoom(1);
+      setSaveError(null);
+      setIsSaving(false);
       setDocumentVersion((value) => value + 1);
+      const autosave = createLocalAutosave({
+        file: input.file, noteId: input.id, strokesByPage: input.strokesByPage,
+        revision: input.revision, persist: saveNote,
+        onChange: (state) => {
+          // 古いノートの保存結果が、新しく開いた画面に混ざらないようにする。
+          if (!mountedRef.current || autosaveRef.current !== autosave) return;
+          setNoteId(state.noteId);
+          setSavedStrokes(state.savedStrokes);
+          setIsSaving(state.status === "saving");
+          setSaveError(state.error);
+          if (state.status === "saved") setRefreshVersion((value) => value + 1);
+        },
+      });
+      autosaveRef.current = autosave;
+      // 開いただけのPDFは未変更。最初の描画完了でupdateから保存を開始する。
     } catch (openError) {
       void loadingTask?.destroy();
       if (mountedRef.current) {
@@ -151,33 +167,34 @@ export function PdfWorkspace() {
   }
 
   async function handleSave() {
-    if (!file || !document || operationRef.current) return;
+    if (!autosaveRef.current || operationRef.current) return;
+    await autosaveRef.current.flush(true);
+  }
 
-    operationRef.current = true;
-    setIsSaving(true);
+  async function handleDelete(noteToDelete: string) {
+    const autosave = autosaveRef.current;
+    const deletingCurrent = autosave?.getState().noteId === noteToDelete;
+    // サイドバーが編集をロックしている間に、開始済みの保存を完了させる。
+    // 保存失敗時も削除は可能だが、削除自体の失敗時は画面と保存係を残す。
+    if (deletingCurrent) await autosave.flush();
+    await deleteSavedNote(noteToDelete);
+    if (!deletingCurrent) return;
+    autosave.dispose();
+    autosaveRef.current = null;
+    if (!mountedRef.current) return;
+    const empty = {};
+    strokesRef.current = empty;
+    setFile(null);
+    setDocument(null);
+    setStrokesByPage(empty);
+    setSavedStrokes(null);
+    setNoteId(null);
+    setNoteName("");
+    setPageNumber(1);
+    setZoom(1);
+    setIsSaving(false);
+    setSaveError(null);
     setError(null);
-    const snapshot = strokesByPage;
-
-    try {
-      const savedNoteId = await saveNote({ file, strokesByPage: snapshot, noteId });
-      if (!mountedRef.current) return;
-      setNoteId(savedNoteId);
-      // 保存中に線が追加されても、その新しい線まで保存済みと表示しない。
-      setSavedStrokes(snapshot);
-      setRefreshVersion((value) => value + 1);
-    } catch (saveError) {
-      console.error("ノートの保存に失敗しました。", saveError);
-      if (mountedRef.current) {
-        setError(
-          saveError instanceof Error
-            ? saveError.message
-            : "ノートを保存できませんでした。",
-        );
-      }
-    } finally {
-      operationRef.current = false;
-      if (mountedRef.current) setIsSaving(false);
-    }
   }
 
   async function handleDownload() {
@@ -231,6 +248,7 @@ export function PdfWorkspace() {
             onRenamed={(id, title) => {
               if (id === noteId) setNoteName(title);
             }}
+            onDelete={handleDelete}
             onMutationChange={(busy) => {
               operationRef.current = busy;
               setIsOrganizing(busy);
@@ -253,11 +271,23 @@ export function PdfWorkspace() {
               />
             </div>
 
+            <p className="text-sm text-base-content/70">
+              保存先はこのブラウザです。最初の線を描き終えた時から自動保存します。PDFを開いただけでは保存しません。別の端末・ブラウザ・URLとは共有されません。サイトデータを削除するとノートも失われます。
+              iOS Safariなどでは、一定期間アクセスがないとブラウザの仕様によりデータが消去される場合があります。重要なノートは定期的に『PDFをダウンロード』して保管してください。
+            </p>
+            <details className="text-sm text-base-content/70">
+              <summary className="cursor-pointer">以前のSupabaseノートについて</summary>
+              <p className="mt-2">以前のノートは削除していません。この一覧にはローカル保存したノートだけを表示します。Supabaseからの移行と再編集用バックアップは未対応です。必要な内容はPDFのダウンロードでも保管してください。</p>
+            </details>
+
             {error && (
               <div className="alert alert-error" role="alert">
                 {error}
               </div>
             )}
+            {saveError && <div className="alert alert-error" role="alert">
+              <span>自動保存に失敗しました。{saveError}</span>
+            </div>}
 
             {isLoading && <p role="status">PDFを読み込んでいます…</p>}
             {isExporting && <p role="status">PDFを書き出しています…</p>}
@@ -308,10 +338,10 @@ export function PdfWorkspace() {
                     <button
                       className="btn"
                       type="button"
-                      disabled={isBusy || savedStrokes === strokesByPage}
+                      disabled={isBusy || isSaving || !hasUnsavedChanges}
                       onClick={() => void handleSave()}
                     >
-                      ノートを保存
+                      {saveError ? "保存を再試行" : "今すぐ保存"}
                     </button>
                     <button
                       className="btn btn-primary"
@@ -346,11 +376,11 @@ export function PdfWorkspace() {
                 </div>
                 {!isSaving && (
                   <p className="text-sm" role="status">
-                    {noteId
+                    {saveError ? "未保存の変更があります" : noteId
                       ? savedStrokes === strokesByPage
-                        ? "保存済み"
+                        ? "このブラウザに保存済み"
                         : "未保存の変更があります"
-                      : "未保存"}
+                      : hasUnsavedChanges ? "未保存の変更があります" : "未編集（書き込みを始めると自動保存）"}
                   </p>
                 )}
                 <PdfPage
@@ -360,12 +390,16 @@ export function PdfWorkspace() {
                   strokes={strokesByPage[pageNumber] ?? []}
                   penWidth={penWidth}
                   zoom={zoom}
-                  disabled={isLoading}
+                  disabled={isBusy}
                   onStrokeComplete={(stroke) => {
-                    setStrokesByPage((current) => ({
-                      ...current,
-                      [pageNumber]: [...(current[pageNumber] ?? []), stroke],
-                    }));
+                    if (operationRef.current) return;
+                    const next = {
+                      ...strokesRef.current,
+                      [pageNumber]: [...(strokesRef.current[pageNumber] ?? []), stroke],
+                    };
+                    strokesRef.current = next;
+                    setStrokesByPage(next);
+                    autosaveRef.current?.update(next);
                   }}
                 />
               </>

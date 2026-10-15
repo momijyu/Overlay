@@ -1,6 +1,6 @@
 import type { NoteFolder, NoteLibrary, SavedNoteSummary } from "./types";
 
-// DBのlower(name)制約に合わせた事前確認。別タブの変更はDBでも検証する。
+// 同じ親の同名フォルダを事前確認する。保存処理でも最新の階層で再検証する。
 export function hasFolderNameConflict(name: string, parentId: string | null, library: NoteLibrary, exceptId?: string): boolean {
   const normalized = name.trim().toLowerCase();
   return library.folders.some((folder) => folder.id !== exceptId && folder.parentId === parentId
