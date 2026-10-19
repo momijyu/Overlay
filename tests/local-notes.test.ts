@@ -10,6 +10,7 @@ import { readRequest, withLocalTransaction } from "@/features/pdf-editor/localDa
 import type { PenStroke } from "@/features/pdf-editor/types";
 import { createLocalAutosave } from "@/features/pdf-editor/localAutosave";
 import { eraseStrokes } from "@/features/pdf-editor/eraseStrokes";
+import { createStrokeHistory, recordStrokeEdit, undoStrokeEdit, redoStrokeEdit } from "@/features/pdf-editor/strokeHistory";
 
 const file = new File(["%PDF-1.7\nlocal-test"], "授業.pdf", { type: "application/pdf" });
 const strokes: Record<number, PenStroke[]> = {
@@ -32,6 +33,35 @@ async function counts() {
 
 test("接続情報・認証・通信なしで空の一覧を開ける", async () => {
   assert.deepEqual(await loadNoteLibrary(), { notes: [], folders: [], foldersEnabled: true });
+});
+
+test("消去のUndo・Redo結果を自動保存して再読込し、元PDF・他ページ・整理情報を維持する", async () => {
+  const id = await saveLocalNote({ file, strokesByPage: strokes, noteId: null });
+  const folderId = await createNoteFolder("授業", null);
+  await organizeNote(id, "復習", folderId);
+  const loaded = await loadLocalNote(id);
+  const autosave = createLocalAutosave({
+    file: loaded.file, noteId: id, strokesByPage: loaded.strokesByPage, revision: loaded.revision,
+    persist: saveLocalNote, onChange: () => {},
+  });
+  let history = recordStrokeEdit(createStrokeHistory(loaded.strokesByPage), 1, []);
+  autosave.update(history.strokesByPage);
+  await autosave.flush();
+  history = undoStrokeEdit(history);
+  autosave.update(history.strokesByPage);
+  await autosave.flush();
+  assert.deepEqual((await loadLocalNote(id)).strokesByPage, strokes);
+  history = redoStrokeEdit(history);
+  autosave.update(history.strokesByPage);
+  await autosave.flush();
+  const reopened = await loadLocalNote(id);
+  assert.deepEqual(reopened.strokesByPage, { ...strokes, 1: [] });
+  assert.equal(await reopened.file.text(), await file.text());
+  const library = await loadNoteLibrary();
+  assert.equal(library.notes[0].title, "復習");
+  assert.equal(library.notes[0].folderId, folderId);
+  assert.deepEqual(await counts(), [1, 1, 1]);
+  assert.equal(createStrokeHistory(reopened.strokesByPage).past.length, 0);
 });
 
 test("色付き線の部分消去・全消去を自動保存し、開き直しても切れ目と他ページを維持する", async () => {

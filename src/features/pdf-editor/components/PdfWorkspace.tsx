@@ -12,6 +12,8 @@ import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { EraserSizeControl } from "./EraserSizeControl";
 import { PenWidthControl } from "./PenWidthControl";
+import { HistoryControls } from "./HistoryControls";
+import { createStrokeHistory, recordStrokeEdit, undoStrokeEdit, redoStrokeEdit, STROKE_HISTORY_LIMIT, type StrokeHistory } from "../strokeHistory";
 
 type PdfInput = {
   file: File;
@@ -25,9 +27,8 @@ export function PdfWorkspace() {
   const [file, setFile] = useState<File | null>(null);
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
-  const [strokesByPage, setStrokesByPage] = useState<Record<number, PenStroke[]>>(
-    {},
-  );
+  const [history, setHistory] = useState(() => createStrokeHistory({}));
+  const strokesByPage = history.strokesByPage;
   const [penWidth, setPenWidth] = useState(DEFAULT_PEN_WIDTH);
   const [penColor, setPenColor] = useState(PEN_COLOR);
   const [penTool, setPenTool] = useState<PenTool>("pen");
@@ -51,7 +52,7 @@ export function PdfWorkspace() {
   const operationRef = useRef(false);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
   const autosaveRef = useRef<LocalAutosave | null>(null);
-  const strokesRef = useRef(strokesByPage);
+  const historyRef = useRef(history);
   // 自動保存中も描画・ページ切り替え・PDF出力を止めない。
   // ノートを開き直すときだけ、openPdfで保存完了を待つ。
   const isBusy = isLoading || isExporting || isOrganizing;
@@ -112,10 +113,11 @@ export function PdfWorkspace() {
 
       // PDFと線を両方読み込めてから切り替え、失敗時は編集中の内容を残す。
       previousAutosave?.dispose();
-      strokesRef.current = input.strokesByPage;
+      const nextHistory = createStrokeHistory(input.strokesByPage);
+      historyRef.current = nextHistory;
       setFile(input.file);
       setDocument(loadedDocument);
-      setStrokesByPage(input.strokesByPage);
+      setHistory(nextHistory);
       setSavedStrokes(input.strokesByPage);
       setNoteId(input.id);
       setNoteName(input.name ?? (input.file.name.replace(/\.pdf$/i, "") || input.file.name));
@@ -179,10 +181,26 @@ export function PdfWorkspace() {
 
   function updatePageStrokes(strokes: PenStroke[]) {
     if (operationRef.current) return;
-    const next = { ...strokesRef.current, [pageNumber]: strokes };
-    strokesRef.current = next;
-    setStrokesByPage(next);
-    autosaveRef.current?.update(next);
+    applyHistory(recordStrokeEdit(historyRef.current, pageNumber, strokes));
+  }
+
+  function applyHistory(next: StrokeHistory, revealPage = false) {
+    if (next === historyRef.current) return;
+    historyRef.current = next;
+    setHistory(next);
+    if (revealPage && next.changedPage !== null) setPageNumber(next.changedPage);
+    // Undo / Redoも通常の編集として保存係へ渡し、保存中の古い結果で上書きしない。
+    autosaveRef.current?.update(next.strokesByPage);
+  }
+
+  function handleUndo() {
+    if (operationRef.current || !autosaveRef.current) return;
+    applyHistory(undoStrokeEdit(historyRef.current), true);
+  }
+
+  function handleRedo() {
+    if (operationRef.current || !autosaveRef.current) return;
+    applyHistory(redoStrokeEdit(historyRef.current), true);
   }
 
   async function handleDelete(noteToDelete: string) {
@@ -196,11 +214,11 @@ export function PdfWorkspace() {
     autosave.dispose();
     autosaveRef.current = null;
     if (!mountedRef.current) return;
-    const empty = {};
-    strokesRef.current = empty;
+    const nextHistory = createStrokeHistory({});
+    historyRef.current = nextHistory;
     setFile(null);
     setDocument(null);
-    setStrokesByPage(empty);
+    setHistory(nextHistory);
     setSavedStrokes(null);
     setNoteId(null);
     setNoteName("");
@@ -331,6 +349,8 @@ export function PdfWorkspace() {
                       disabled={isBusy} onChange={setPenWidth} /> : <EraserSizeControl
                       value={eraserWidth} disabled={isBusy} onChange={setEraserWidth}
                     />}
+                    <HistoryControls canUndo={history.past.length > 0} canRedo={history.future.length > 0}
+                      disabled={isBusy} onUndo={handleUndo} onRedo={handleRedo} />
                     <div className="flex items-center gap-2">
                       <label className="label" htmlFor="pdf-zoom">
                         表示倍率
@@ -398,14 +418,18 @@ export function PdfWorkspace() {
                       : hasUnsavedChanges ? "未保存の変更があります" : "未編集（書き込みを始めると自動保存）"}
                   </p>
                 )}
+                <p className="text-sm text-base-content/70">
+                  編集履歴は直近{STROKE_HISTORY_LIMIT}操作まで。ノートの切り替え・再読み込みでリセットされます。
+                </p>
                 {penTool === "eraser" && <p className="text-sm" role="status">
-                  書き込みの触れた部分を消します。元PDFは消えません。指やペンを離すと自動保存します。元に戻す機能はまだ未対応です。
+                  書き込みの触れた部分を消します。元PDFは消えません。指やペンを離すと自動保存します。
                 </p>}
                 <PdfPage
                   key={`${documentVersion}-${pageNumber}`}
                   document={document}
                   pageNumber={pageNumber}
                   strokes={strokesByPage[pageNumber] ?? []}
+                  editVersion={history.version}
                   penWidth={penWidth}
                   penColor={penColor}
                   tool={penTool}
@@ -413,7 +437,7 @@ export function PdfWorkspace() {
                   zoom={zoom}
                   disabled={isBusy}
                   onStrokeComplete={(stroke) => {
-                    updatePageStrokes([...(strokesRef.current[pageNumber] ?? []), stroke]);
+                    updatePageStrokes([...(historyRef.current.strokesByPage[pageNumber] ?? []), stroke]);
                   }}
                   onStrokesChange={updatePageStrokes}
                 />

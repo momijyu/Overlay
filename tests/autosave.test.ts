@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalSaveInput, type LocalSaveState } from "@/features/pdf-editor/localAutosave";
 import type { PenStroke } from "@/features/pdf-editor/types";
+import { createStrokeHistory, recordStrokeEdit, undoStrokeEdit, redoStrokeEdit } from "@/features/pdf-editor/strokeHistory";
 
 const file = new File(["test pdf"], "sample.pdf");
 const empty: Record<number, PenStroke[]> = {};
@@ -15,6 +16,56 @@ function deferred<T>() {
   const promise = new Promise<T>((ok, fail) => { resolve = ok; reject = fail; });
   return { promise, resolve, reject };
 }
+
+test("初回の保存中にUndoしても、同じノートへ取り消し後の空状態を順番に保存する", async () => {
+  const write = deferred<string>();
+  const calls: LocalSaveInput[] = [];
+  const autosave = createLocalAutosave({
+    file, noteId: null, strokesByPage: empty,
+    persist: async (input) => { calls.push(input); return calls.length === 1 ? write.promise : "created"; },
+    onChange: () => {},
+  });
+  const drawn = recordStrokeEdit(createStrokeHistory(empty), 1, first[1]);
+  autosave.update(drawn.strokesByPage);
+  const saving = autosave.flush();
+  await Promise.resolve();
+  const undone = undoStrokeEdit(drawn);
+  autosave.update(undone.strokesByPage);
+  write.resolve("created");
+  assert.equal(await saving, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].noteId, null);
+  assert.equal(calls[1].noteId, "created");
+  assert.equal(calls[1].strokesByPage, empty);
+  assert.equal(calls[1].expectedRevision, 1);
+  const redone = redoStrokeEdit(undone);
+  autosave.update(redone.strokesByPage);
+  await autosave.flush();
+  assert.equal(calls[2].noteId, "created");
+  assert.equal(calls[2].strokesByPage, drawn.strokesByPage);
+});
+
+test("保存失敗後のUndo・Redoを画面側で保持し、再試行では現在の状態を保存する", async () => {
+  let fails = true;
+  const calls: LocalSaveInput[] = [];
+  const autosave = createLocalAutosave({
+    file, noteId: "existing", strokesByPage: empty, revision: 3,
+    persist: async (input) => { calls.push(input); if (fails) throw new Error("保存失敗"); return "existing"; },
+    onChange: () => {},
+  });
+  let history = recordStrokeEdit(createStrokeHistory(empty), 1, first[1]);
+  autosave.update(history.strokesByPage);
+  assert.equal(await autosave.flush(), false);
+  history = undoStrokeEdit(history);
+  autosave.update(history.strokesByPage);
+  history = redoStrokeEdit(history);
+  autosave.update(history.strokesByPage);
+  assert.equal(calls.length, 1);
+  fails = false;
+  assert.equal(await autosave.flush(true), true);
+  assert.equal(calls[1].strokesByPage, history.strokesByPage);
+  assert.equal(calls[1].expectedRevision, 3);
+});
 
 test("新規PDFを開いただけではDirtyにも保存済みにもせず、flushしても保存しない", async () => {
   let writes = 0;

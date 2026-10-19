@@ -10,6 +10,7 @@ type PdfPageProps = {
   document: PDFDocumentProxy;
   pageNumber: number;
   strokes: PenStroke[];
+  editVersion: number;
   penWidth: number;
   penColor: string;
   tool: PenTool;
@@ -24,6 +25,7 @@ export function PdfPage({
   document,
   pageNumber,
   strokes,
+  editVersion,
   penWidth,
   penColor,
   tool,
@@ -131,7 +133,7 @@ export function PdfPage({
           !disabled &&
           !error && (
             <PenLayer
-              key={`${tool}-${penWidth}-${penColor}-${eraserWidth}-${renderedPage.scale}`}
+              key={`${editVersion}-${tool}-${penWidth}-${penColor}-${eraserWidth}-${renderedPage.scale}`}
               strokes={strokes}
               penWidth={penWidth}
               penColor={penColor}
