@@ -1,0 +1,136 @@
+import assert from "node:assert/strict";
+import test, { beforeEach, mock } from "node:test";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { PEN_COLOR, PEN_WIDTH_OPTIONS } from "@/features/pdf-editor/penStyle";
+import type { PenStroke, PenTool } from "@/features/pdf-editor/types";
+
+// 状態の保持だけを置き換えてポインターハンドラーを検証する。
+// DOMのレイアウト・実機のPointer Capture・Reactの再描画を再現するテストではない。
+let states: { value: unknown }[] = [];
+mock.module("react", { exports: {
+  ...React,
+  useRef: (value: unknown) => ({ current: value }),
+  useState: <T,>(initial: T | (() => T)) => {
+    const slot = { value: typeof initial === "function" ? (initial as () => T)() : initial };
+    states.push(slot);
+    return [slot.value, (next: T | ((previous: T) => T)) => {
+      slot.value = typeof next === "function" ? (next as (previous: T) => T)(slot.value) : next;
+    }];
+  },
+} });
+const { PenLayer } = await import("@/features/pdf-editor/components/PenLayer");
+beforeEach(() => { states = []; });
+
+const line: PenStroke = { width: 2, color: "#ff0000", points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
+
+function layer(tool: PenTool, strokes: PenStroke[] = [line], eraserWidth = 16, penWidth = 5) {
+  const completed: PenStroke[] = [];
+  const changes: PenStroke[][] = [];
+  const captures: number[] = [];
+  const element = PenLayer({
+    tool, strokes, penWidth, penColor: "#1234ab", eraserWidth, pageScale: 1,
+    onStrokeComplete: (stroke) => completed.push(stroke), onStrokesChange: (next) => changes.push(next),
+  });
+  const handlers = element.props as Record<"onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel" | "onLostPointerCapture", (event: unknown) => void>;
+  function event(x: number, y: number, pointerId = 1, button = 0) {
+    return { clientX: x, clientY: y, pointerId, button, pointerType: "mouse", currentTarget: {
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
+      setPointerCapture: (id: number) => captures.push(id),
+    } };
+  }
+  return { handlers, event, completed, changes, captures, element };
+}
+
+test("描画時の色と太さを線へ記録し、移動中には保存せず離した時だけ通知する", () => {
+  const { handlers, event, completed, captures } = layer("pen");
+  handlers.onPointerDown(event(10, 20));
+  handlers.onPointerMove(event(50, 60));
+  assert.equal(completed.length, 0);
+  handlers.onPointerUp(event(90, 80));
+  assert.deepEqual(captures, [1]);
+  assert.deepEqual(completed, [{ width: 5, color: "#1234ab", points: [
+    { x: 0.1, y: 0.2 }, { x: 0.5, y: 0.6 }, { x: 0.9, y: 0.8 },
+  ] }]);
+});
+
+test("消しゴムは途中の表示だけ変更し、離した時に分割結果を一度だけ通知する", () => {
+  const { handlers, event, completed, changes } = layer("eraser");
+  handlers.onPointerDown(event(50, 0));
+  handlers.onPointerMove(event(50, 100));
+  assert.equal(changes.length, 0);
+  assert.equal((states[1].value as PenStroke[]).length, 2);
+  handlers.onPointerUp(event(50, 100));
+  handlers.onLostPointerCapture(event(50, 100));
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].length, 2);
+  assert.ok(changes[0].every((stroke) => stroke.color === "#ff0000"));
+  assert.equal(completed.length, 0);
+  assert.equal(states[1].value, null);
+});
+
+test("ペンスライダーの5段階の太さを新しい線に記録する", () => {
+  for (const { width } of PEN_WIDTH_OPTIONS) {
+    const { handlers, event, completed } = layer("pen", [], 16, width);
+    handlers.onPointerDown(event(10, 10));
+    handlers.onPointerUp(event(80, 80));
+    assert.equal(completed.length, 1);
+    assert.equal(completed[0].width, width);
+  }
+});
+
+test("選択した消しゴムサイズに応じて実際に消える範囲が変わる", () => {
+  const remainingLengths = [4, 17, 64].map((width) => {
+    const { handlers, event, changes } = layer("eraser", [line], width);
+    handlers.onPointerDown(event(50, 50));
+    handlers.onPointerUp(event(50, 50));
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].length, 2);
+    return changes[0].reduce((sum, stroke) => sum + stroke.points.at(-1)!.x - stroke.points[0].x, 0);
+  });
+  assert.ok(remainingLengths[0] > remainingLengths[1]);
+  assert.ok(remainingLengths[1] > remainingLengths[2]);
+});
+
+test("pointercancel・予期しないキャプチャ解除では描画も消去も確定しない", () => {
+  for (const tool of ["pen", "eraser"] as const) {
+    for (const cancel of ["onPointerCancel", "onLostPointerCapture"] as const) {
+      states = [];
+      const { handlers, event, completed, changes } = layer(tool);
+      handlers.onPointerDown(event(50, 0));
+      handlers.onPointerMove(event(50, 100));
+      handlers[cancel](event(50, 100));
+      handlers.onPointerUp(event(50, 100));
+      assert.equal(completed.length, 0);
+      assert.equal(changes.length, 0);
+      assert.equal(states[0].value, null);
+      assert.equal(states[1].value, null);
+    }
+  }
+});
+
+test("右クリックと別ポインターを無視し、開始したポインターだけで編集する", () => {
+  const { handlers, event, completed, captures } = layer("pen");
+  handlers.onPointerDown(event(10, 10, 1, 2));
+  assert.equal(captures.length, 0);
+  handlers.onPointerDown(event(10, 10));
+  handlers.onPointerDown(event(20, 20, 2));
+  handlers.onPointerUp(event(20, 20, 2));
+  assert.equal(completed.length, 0);
+  handlers.onPointerUp(event(30, 30));
+  assert.equal(completed.length, 1);
+  assert.deepEqual(captures, [1]);
+});
+
+test("何も触れない消しゴム操作は通知しない", () => {
+  const { handlers, event, changes } = layer("eraser");
+  handlers.onPointerDown(event(0, 0));
+  handlers.onPointerUp(event(100, 0));
+  assert.equal(changes.length, 0);
+});
+
+test("色なしの旧線は従来の黒、色付き線は記録した色で描画する", () => {
+  const html = renderToStaticMarkup(layer("pen", [{ width: 2, points: line.points }, line]).element);
+  assert.match(html, new RegExp(`stroke="${PEN_COLOR}"`));
+  assert.match(html, /stroke="#ff0000"/);
+});

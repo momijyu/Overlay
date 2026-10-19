@@ -6,7 +6,11 @@ export type PenPoint = {
 export type PenStroke = {
   points: PenPoint[];
   width: number;
+  // 色がない旧ノートは従来の黒として表示する。
+  color?: string;
 };
+
+export type PenTool = "pen" | "eraser";
 
 export type SavedNoteSummary = {
   id: string;

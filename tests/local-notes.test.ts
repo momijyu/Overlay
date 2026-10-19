@@ -9,6 +9,7 @@ import {
 import { readRequest, withLocalTransaction } from "@/features/pdf-editor/localDatabase";
 import type { PenStroke } from "@/features/pdf-editor/types";
 import { createLocalAutosave } from "@/features/pdf-editor/localAutosave";
+import { eraseStrokes } from "@/features/pdf-editor/eraseStrokes";
 
 const file = new File(["%PDF-1.7\nlocal-test"], "授業.pdf", { type: "application/pdf" });
 const strokes: Record<number, PenStroke[]> = {
@@ -31,6 +32,36 @@ async function counts() {
 
 test("接続情報・認証・通信なしで空の一覧を開ける", async () => {
   assert.deepEqual(await loadNoteLibrary(), { notes: [], folders: [], foldersEnabled: true });
+});
+
+test("色付き線の部分消去・全消去を自動保存し、開き直しても切れ目と他ページを維持する", async () => {
+  const red = { width: 2, color: "#ff0000", points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
+  const blue = { ...red, color: "#0000ff" };
+  const autosave = createLocalAutosave({ file, noteId: null, strokesByPage: {}, persist: saveLocalNote, onChange: () => {} });
+  autosave.update({ 1: [red], 2: [blue] });
+  await autosave.flush();
+  const id = autosave.getState().noteId!;
+  const loaded = await loadLocalNote(id);
+  const center = { x: 0.5, y: 0.5 };
+  const fragments = eraseStrokes(loaded.strokesByPage[1], center, center, 100, 100, 10, 1);
+  autosave.update({ ...loaded.strokesByPage, 1: fragments });
+  await autosave.flush();
+  const restored = await loadLocalNote(id);
+  assert.equal(restored.strokesByPage[1].length, 2);
+  assert.ok(restored.strokesByPage[1].every((stroke) => stroke.color === "#ff0000" && stroke.width === 2));
+  assert.deepEqual(restored.strokesByPage[2], [blue]);
+  autosave.update({ ...restored.strokesByPage, 1: [] });
+  await autosave.flush();
+  assert.deepEqual((await loadLocalNote(id)).strokesByPage, { 1: [], 2: [blue] });
+  assert.equal(await (await loadLocalNote(id)).file.text(), await file.text());
+  assert.deepEqual(await counts(), [1, 1, 0]);
+});
+
+test("不正な色の保存を拒否し、前回の色・線を維持する", async () => {
+  const red = { ...strokes[1][0], color: "#ff0000" };
+  const id = await saveLocalNote({ file, strokesByPage: { 1: [red] }, noteId: null });
+  await assert.rejects(saveLocalNote({ file, strokesByPage: { 1: [{ ...red, color: "#invalid" }] }, noteId: id }), /書き込み情報/);
+  assert.deepEqual((await loadLocalNote(id)).strokesByPage, { 1: [red] });
 });
 
 test("保存後にDB接続を開き直しても、元PDFと複数ページの線が残る", async () => {

@@ -4,12 +4,14 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
-import { DEFAULT_PEN_WIDTH } from "../penStyle";
+import { DEFAULT_ERASER_WIDTH, DEFAULT_PEN_WIDTH, isPenColor, PEN_COLOR } from "../penStyle";
 import { deleteSavedNote, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
-import type { PenStroke } from "../types";
+import type { PenStroke, PenTool } from "../types";
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
+import { EraserSizeControl } from "./EraserSizeControl";
+import { PenWidthControl } from "./PenWidthControl";
 
 type PdfInput = {
   file: File;
@@ -27,6 +29,9 @@ export function PdfWorkspace() {
     {},
   );
   const [penWidth, setPenWidth] = useState(DEFAULT_PEN_WIDTH);
+  const [penColor, setPenColor] = useState(PEN_COLOR);
+  const [penTool, setPenTool] = useState<PenTool>("pen");
+  const [eraserWidth, setEraserWidth] = useState(DEFAULT_ERASER_WIDTH);
   const [zoom, setZoom] = useState(1);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [noteName, setNoteName] = useState("");
@@ -116,6 +121,7 @@ export function PdfWorkspace() {
       setNoteName(input.name ?? (input.file.name.replace(/\.pdf$/i, "") || input.file.name));
       setPageNumber(1);
       setZoom(1);
+      setPenTool("pen");
       setSaveError(null);
       setIsSaving(false);
       setDocumentVersion((value) => value + 1);
@@ -169,6 +175,14 @@ export function PdfWorkspace() {
   async function handleSave() {
     if (!autosaveRef.current || operationRef.current) return;
     await autosaveRef.current.flush(true);
+  }
+
+  function updatePageStrokes(strokes: PenStroke[]) {
+    if (operationRef.current) return;
+    const next = { ...strokesRef.current, [pageNumber]: strokes };
+    strokesRef.current = next;
+    setStrokesByPage(next);
+    autosaveRef.current?.update(next);
   }
 
   async function handleDelete(noteToDelete: string) {
@@ -300,22 +314,23 @@ export function PdfWorkspace() {
                     <p className="min-w-0 truncate" title={file.name}>
                       {noteName}
                     </p>
-                    <div className="flex items-center gap-2">
-                      <label className="label" htmlFor="pen-width">
-                        ペンの太さ
-                      </label>
-                      <select
-                        id="pen-width"
-                        className="select select-sm w-auto"
-                        value={penWidth}
-                        disabled={isLoading}
-                        onChange={(event) => setPenWidth(Number(event.target.value))}
-                      >
-                        <option value="1.5">細</option>
-                        <option value="2.5">標準</option>
-                        <option value="5">太</option>
-                      </select>
+                    <div className="join" role="group" aria-label="編集ツール">
+                      <button type="button" className={`btn btn-sm join-item ${penTool === "pen" ? "btn-active" : ""}`}
+                        aria-pressed={penTool === "pen"} disabled={isBusy} onClick={() => setPenTool("pen")}>ペン</button>
+                      <button type="button" className={`btn btn-sm join-item ${penTool === "eraser" ? "btn-active" : ""}`}
+                        aria-pressed={penTool === "eraser"} disabled={isBusy} onClick={() => setPenTool("eraser")}>消しゴム</button>
                     </div>
+                    <div className="flex items-center gap-2">
+                      <label className="label" htmlFor="pen-color">ペンの色</label>
+                      <input id="pen-color" type="color" className="input input-sm w-14 p-1" value={penColor}
+                        disabled={isBusy || penTool !== "pen"} onChange={(event) => {
+                          if (isPenColor(event.target.value)) setPenColor(event.target.value);
+                        }} />
+                    </div>
+                    {penTool === "pen" ? <PenWidthControl value={penWidth}
+                      disabled={isBusy} onChange={setPenWidth} /> : <EraserSizeControl
+                      value={eraserWidth} disabled={isBusy} onChange={setEraserWidth}
+                    />}
                     <div className="flex items-center gap-2">
                       <label className="label" htmlFor="pdf-zoom">
                         表示倍率
@@ -383,24 +398,24 @@ export function PdfWorkspace() {
                       : hasUnsavedChanges ? "未保存の変更があります" : "未編集（書き込みを始めると自動保存）"}
                   </p>
                 )}
+                {penTool === "eraser" && <p className="text-sm" role="status">
+                  書き込みの触れた部分を消します。元PDFは消えません。指やペンを離すと自動保存します。元に戻す機能はまだ未対応です。
+                </p>}
                 <PdfPage
                   key={`${documentVersion}-${pageNumber}`}
                   document={document}
                   pageNumber={pageNumber}
                   strokes={strokesByPage[pageNumber] ?? []}
                   penWidth={penWidth}
+                  penColor={penColor}
+                  tool={penTool}
+                  eraserWidth={eraserWidth}
                   zoom={zoom}
                   disabled={isBusy}
                   onStrokeComplete={(stroke) => {
-                    if (operationRef.current) return;
-                    const next = {
-                      ...strokesRef.current,
-                      [pageNumber]: [...(strokesRef.current[pageNumber] ?? []), stroke],
-                    };
-                    strokesRef.current = next;
-                    setStrokesByPage(next);
-                    autosaveRef.current?.update(next);
+                    updatePageStrokes([...(strokesRef.current[pageNumber] ?? []), stroke]);
                   }}
+                  onStrokesChange={updatePageStrokes}
                 />
               </>
             )}

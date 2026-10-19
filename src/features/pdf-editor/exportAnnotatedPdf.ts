@@ -1,6 +1,7 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import { PEN_COLOR } from "./penStyle";
+import { readStrokes } from "./strokeData";
 import type { PenPoint, PenStroke } from "./types";
 
 export async function exportAnnotatedPdf(
@@ -9,15 +10,11 @@ export async function exportAnnotatedPdf(
   strokesByPage: Record<number, PenStroke[]>,
 ): Promise<Uint8Array> {
   const { PDFDocument, LineCapStyle, rgb } = await import("pdf-lib");
+  const checkedStrokes = readStrokes(strokesByPage);
   const pdf = await PDFDocument.load(await file.arrayBuffer());
-  const penColor = rgb(
-    parseInt(PEN_COLOR.slice(1, 3), 16) / 255,
-    parseInt(PEN_COLOR.slice(3, 5), 16) / 255,
-    parseInt(PEN_COLOR.slice(5, 7), 16) / 255,
-  );
 
   for (let pageNumber = 1; pageNumber <= displayedDocument.numPages; pageNumber++) {
-    const strokes = strokesByPage[pageNumber] ?? [];
+    const strokes = checkedStrokes[pageNumber] ?? [];
     if (strokes.length === 0) continue;
 
     const displayedPage = await displayedDocument.getPage(pageNumber);
@@ -34,6 +31,12 @@ export async function exportAnnotatedPdf(
     }
 
     for (const stroke of strokes) {
+      const color = stroke.color ?? PEN_COLOR;
+      const penColor = rgb(
+        parseInt(color.slice(1, 3), 16) / 255,
+        parseInt(color.slice(3, 5), 16) / 255,
+        parseInt(color.slice(5, 7), 16) / 255,
+      );
       const [first, ...rest] = stroke.points;
       if (!first) continue;
 

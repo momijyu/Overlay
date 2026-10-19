@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
-import type { PenStroke } from "../types";
+import type { PenStroke, PenTool } from "../types";
 import { PenLayer } from "./PenLayer";
 
 type PdfPageProps = {
@@ -11,9 +11,13 @@ type PdfPageProps = {
   pageNumber: number;
   strokes: PenStroke[];
   penWidth: number;
+  penColor: string;
+  tool: PenTool;
+  eraserWidth: number;
   zoom: number;
   disabled: boolean;
   onStrokeComplete: (stroke: PenStroke) => void;
+  onStrokesChange: (strokes: PenStroke[]) => void;
 };
 
 export function PdfPage({
@@ -21,9 +25,13 @@ export function PdfPage({
   pageNumber,
   strokes,
   penWidth,
+  penColor,
+  tool,
+  eraserWidth,
   zoom,
   disabled,
   onStrokeComplete,
+  onStrokesChange,
 }: PdfPageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -123,10 +131,15 @@ export function PdfPage({
           !disabled &&
           !error && (
             <PenLayer
+              key={`${tool}-${penWidth}-${penColor}-${eraserWidth}-${renderedPage.scale}`}
               strokes={strokes}
               penWidth={penWidth}
+              penColor={penColor}
+              tool={tool}
+              eraserWidth={eraserWidth}
               pageScale={renderedPage.scale}
               onStrokeComplete={onStrokeComplete}
+              onStrokesChange={onStrokesChange}
             />
           )}
       </div>
