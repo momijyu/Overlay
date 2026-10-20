@@ -8,9 +8,11 @@ export type PenStroke = {
   width: number;
   // 色がない旧ノートは従来の黒として表示する。
   color?: string;
+  // 未指定の旧ノートは通常のペン。マーカーも同じ線として消去・履歴管理する。
+  kind?: "pen" | "marker";
 };
 
-export type PenTool = "pen" | "eraser";
+export type PenTool = "pen" | "marker" | "eraser";
 export type EditorTool = PenTool | "text" | "sticky";
 export type TextNote = {
   id: string;
@@ -24,6 +26,9 @@ export type TextNote = {
   // 未指定の旧ボックスは文章の高さに合わせる。指定値も文章よりは小さくしない。
   height?: number;
   fontSize: number;
+  color?: string;
+  // 付箋のみ。未指定なら従来の薄黄色。
+  backgroundColor?: string;
 };
 export type TextNotesByPage = Record<number, TextNote[]>;
 

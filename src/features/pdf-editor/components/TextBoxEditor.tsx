@@ -4,6 +4,7 @@ import { MAX_NOTE_TEXT_LENGTH, MAX_NOTE_FONT_SIZE, MIN_NOTE_FONT_SIZE, normalize
 import { fitTextNote, textNoteLayout, TEXT_PADDING, STICKY_BACKGROUND } from "../textLayout";
 import type { TextNote } from "../types";
 import { TextSizeControl } from "./TextSizeControl";
+import { isPenColor, PEN_COLOR } from "../penStyle";
 
 export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, existing, openedByPointer = false, onCommit, onCancel, onDelete, onPreview }: {
   note: TextNote;
@@ -22,6 +23,7 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
   const [error, setError] = useState<string | null>(null);
   const [fontSize, setFontSize] = useState(note.fontSize);
   const [fitToText, setFitToText] = useState(note.autoSize ?? false);
+  const [colors, setColors] = useState({ color: note.color, backgroundColor: note.backgroundColor });
   const root = useRef<HTMLDivElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false);
@@ -31,9 +33,20 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
   const draftSize = useRef(note.fontSize);
   const draftAutoSize = useRef(note.autoSize ?? false);
   const ignoreOpeningClick = useRef(openedByPointer);
+  const draftColors = useRef(colors);
 
   function snapshot(text = draft.current, size = draftSize.current, autoSize = draftAutoSize.current): TextNote {
-    return { ...note, text: normalizeNoteText(text), fontSize: size, ...(autoSize ? { autoSize: true } : {}) };
+    return { ...note, ...draftColors.current, text: normalizeNoteText(text), fontSize: size, ...(autoSize ? { autoSize: true } : {}) };
+  }
+
+  function changeColor(field: "color" | "backgroundColor", value: string) {
+    if (composing.current || !isPenColor(value) || (field === "backgroundColor" && note.kind !== "sticky")) return;
+    draftColors.current = { ...draftColors.current, [field]: value };
+    setColors(draftColors.current);
+    setError(null);
+    // 色だけの変更では、旧ボックスの幅・高さを自動サイズへ切り替えない。
+    try { onPreview?.(fitTextNote(snapshot(), pageWidth, pageHeight, font)); }
+    catch { /* 入力中の文章は保持し、確定時に検証する。 */ }
   }
 
   function changeSize(size: number) {
@@ -100,7 +113,7 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
     if (!finish()) textarea.current?.focus();
   }
 
-  let fitted = { ...note, fontSize, ...(fitToText ? { autoSize: true } : {}) };
+  let fitted: TextNote = { ...note, ...colors, fontSize, ...(fitToText ? { autoSize: true } : {}) };
   try { fitted = fitTextNote({ ...fitted, text: normalizeNoteText(text) }, pageWidth, pageHeight, font); }
   catch { /* 不正な入力も捨てず、直せるよう入力欄に残す。 */ }
   let layout;
@@ -116,7 +129,8 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
         autoFocus value={text} maxLength={MAX_NOTE_TEXT_LENGTH} spellCheck={false} wrap="soft"
         style={{ width: "100%", height: "100%", minHeight: 0, resize: "none", overflow: "auto", boxSizing: "border-box",
           padding: `${TEXT_PADDING - leading / 2}px ${TEXT_PADDING}px`, border: "none", outline: "1px solid #666666", outlineOffset: -1,
-          background: note.kind === "sticky" ? STICKY_BACKGROUND : "transparent", color: "#111827", fontFamily: "OverlayNotes", fontSize: fitted.fontSize,
+          background: note.kind === "sticky" ? fitted.backgroundColor ?? STICKY_BACKGROUND : "transparent",
+          color: fitted.color ?? PEN_COLOR, fontFamily: "OverlayNotes", fontSize: fitted.fontSize,
           lineHeight: `${layout.lineHeight}px`, fontKerning: "none", fontVariantLigatures: "none",
           fontWeight: 400, fontStyle: "normal", letterSpacing: "normal",
           whiteSpace: "pre-wrap", wordBreak: "break-all", lineBreak: "anywhere", overflowWrap: "anywhere" }}
@@ -142,6 +156,17 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
         style={fitted.y * pageHeight * pageScale < 90 ? { top: "100%", transform: `scale(${1 / pageScale})`, transformOrigin: "top left" }
           : { bottom: "100%", transform: `scale(${1 / pageScale})`, transformOrigin: "bottom left" }}>
         <TextSizeControl value={fontSize} onChange={changeSize} />
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 text-sm">文字色
+            <input type="color" className="input input-xs w-10 p-0.5" aria-label="文字色"
+              value={colors.color ?? PEN_COLOR} onChange={(event) => changeColor("color", event.target.value)} />
+          </label>
+          {note.kind === "sticky" && <label className="flex items-center gap-1 text-sm">背景色
+            <input type="color" className="input input-xs w-10 p-0.5" aria-label="付箋の背景色"
+              value={colors.backgroundColor ?? STICKY_BACKGROUND}
+              onChange={(event) => changeColor("backgroundColor", event.target.value)} />
+          </label>}
+        </div>
         <div className="flex gap-1" onPointerDown={(event) => event.preventDefault()}>
           <button type="button" className="btn btn-xs" onClick={() => finish()}>完了</button>
           <button type="button" className="btn btn-xs" onClick={cancel}>キャンセル</button>

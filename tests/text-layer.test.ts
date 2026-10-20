@@ -222,3 +222,11 @@ test("メモ内容はHTMLではなく文字として表示し、付箋だけに�
   assert.doesNotMatch(markup, /<script>/);
   assert.match(markup, /font-family="OverlayNotes"/);
 });
+
+test("保存された文字色と付箋背景色をSVGに表示し、旧メモの色は維持する", () => {
+  const f = fixture("pen", [{ ...note, color: "#3366cc" },
+    { ...note, id: "sticky", kind: "sticky", color: "#cc0033", backgroundColor: "#aabbcc" },
+    { ...note, id: "old-sticky", kind: "sticky" }]);
+  const html = renderToStaticMarkup(f.render());
+  for (const color of ["#3366cc", "#cc0033", "#aabbcc", "#111827", "#fff3b0"]) assert.ok(html.includes(`fill="${color}"`));
+});

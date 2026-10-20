@@ -10,7 +10,7 @@ import { readRequest, withLocalTransaction } from "@/features/pdf-editor/localDa
 import type { PenStroke, TextNote } from "@/features/pdf-editor/types";
 import { createLocalAutosave } from "@/features/pdf-editor/localAutosave";
 import { eraseStrokes } from "@/features/pdf-editor/eraseStrokes";
-import { createStrokeHistory, recordStrokeEdit, undoStrokeEdit, redoStrokeEdit } from "@/features/pdf-editor/strokeHistory";
+import { createStrokeHistory, recordStrokeEdit, recordTextEdit, undoStrokeEdit, redoStrokeEdit } from "@/features/pdf-editor/strokeHistory";
 
 const file = new File(["%PDF-1.7\nlocal-test"], "授業.pdf", { type: "application/pdf" });
 const strokes: Record<number, PenStroke[]> = {
@@ -36,6 +36,51 @@ test("接続情報・認証・通信なしで空の一覧を開ける", async ()
 });
 
 const textNote: TextNote = { id: "text", kind: "text", text: "日本語メモ\n復習", x: 0.1, y: 0.2, width: 0.4, fontSize: 14 };
+
+test("マーカーと文字・付箋の色を自動保存し、部分消去・混在Undo・Redo後も再読込できる", async () => {
+  const marker: PenStroke = { kind: "marker", color: "#facc15", width: 16,
+    points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
+  const originalTexts: TextNote[] = [textNote, { ...textNote, id: "sticky", kind: "sticky" }];
+  const autosave = createLocalAutosave({ file, noteId: null, strokesByPage: {}, persist: saveLocalNote, onChange: () => {} });
+  let history = recordStrokeEdit(createStrokeHistory({}), 1, [marker]);
+  history = recordTextEdit(history, 1, originalTexts);
+  autosave.update(history.strokesByPage, history.textsByPage);
+  assert.equal(await autosave.flush(), true);
+  const id = autosave.getState().noteId!;
+  const colored = recordTextEdit(history, 1, [{ ...textNote, color: "#3366cc" },
+    { ...originalTexts[1], color: "#cc0033", backgroundColor: "#aabbcc" }]);
+  const center = { x: 0.5, y: 0.5 };
+  const erased = recordStrokeEdit(colored, 1, eraseStrokes(colored.strokesByPage[1], center, center, 400, 600, 12, 1));
+  assert.equal(erased.strokesByPage[1].length, 2);
+  const beforeErase = undoStrokeEdit(erased);
+  const beforeColors = undoStrokeEdit(beforeErase);
+  const afterColors = redoStrokeEdit(beforeColors);
+  const afterErase = redoStrokeEdit(afterColors);
+  for (const next of [colored, erased, beforeErase, beforeColors, afterColors, afterErase]) {
+    autosave.update(next.strokesByPage, next.textsByPage);
+    assert.equal(await autosave.flush(), true);
+    const loaded = await loadLocalNote(id);
+    assert.deepEqual(loaded.strokesByPage, next.strokesByPage);
+    assert.deepEqual(loaded.textsByPage, next.textsByPage);
+    assert.equal(await loaded.file.text(), await file.text());
+  }
+  assert.deepEqual(beforeColors.textsByPage[1], originalTexts);
+  assert.ok(afterErase.strokesByPage[1].every((stroke) => stroke.kind === "marker"));
+  assert.deepEqual(await counts(), [1, 1, 0]);
+});
+
+test("不正なマーカー種別・文字色の更新は保存済みデータを上書きしない", async () => {
+  const id = await saveLocalNote({ file, noteId: null, strokesByPage: strokes, textsByPage: { 1: [textNote] } });
+  const before = await loadLocalNote(id);
+  await assert.rejects(saveLocalNote({ file, noteId: id,
+    strokesByPage: { 1: [{ ...strokes[1][0], kind: "invalid" as "marker" }] } }), /書き込み情報/);
+  await assert.rejects(saveLocalNote({ file, noteId: id, strokesByPage: {},
+    textsByPage: { 1: [{ ...textNote, color: "url(test)" }] } }), /テキスト情報/);
+  const after = await loadLocalNote(id);
+  assert.deepEqual(after.strokesByPage, before.strokesByPage);
+  assert.deepEqual(after.textsByPage, before.textsByPage);
+  assert.equal(after.revision, before.revision);
+});
 
 test("旧付箋の文字サイズ・自動調整への変更を保存し、Undo・Redoと再読込でも種類を保つ", async () => {
   const original: TextNote = { ...textNote, kind: "sticky" };

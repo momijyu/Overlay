@@ -1,6 +1,6 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
-import { PEN_COLOR } from "./penStyle";
+import { MARKER_OPACITY, PEN_COLOR } from "./penStyle";
 import { readStrokes } from "./strokeData";
 import type { PenPoint, PenStroke, TextNotesByPage } from "./types";
 import { readTextNotes } from "./textData";
@@ -13,7 +13,9 @@ export async function exportAnnotatedPdf(
   strokesByPage: Record<number, PenStroke[]>,
   textsByPage?: TextNotesByPage,
 ): Promise<Uint8Array> {
-  const { PDFDocument, LineCapStyle, rgb, degrees } = await import("pdf-lib");
+  const { PDFDocument, LineCapStyle, LineJoinStyle, BlendMode, pushGraphicsState, popGraphicsState, setLineJoin, rgb, degrees } = await import("pdf-lib");
+  const toColor = (color: string) => rgb(parseInt(color.slice(1, 3), 16) / 255,
+    parseInt(color.slice(3, 5), 16) / 255, parseInt(color.slice(5, 7), 16) / 255);
   const checkedStrokes = readStrokes(strokesByPage);
   const checkedTexts = readTextNotes(textsByPage);
   const pdf = await PDFDocument.load(await file.arrayBuffer());
@@ -47,17 +49,28 @@ export async function exportAnnotatedPdf(
 
     for (const stroke of strokes) {
       const color = stroke.color ?? PEN_COLOR;
-      const penColor = rgb(
-        parseInt(color.slice(1, 3), 16) / 255,
-        parseInt(color.slice(3, 5), 16) / 255,
-        parseInt(color.slice(5, 7), 16) / 255,
-      );
+      const penColor = toColor(color);
+      const markerStyle = stroke.kind === "marker" ? { opacity: MARKER_OPACITY, blendMode: BlendMode.Multiply } : {};
       const [first, ...rest] = stroke.points;
       if (!first) continue;
 
       if (rest.every((point) => point.x === first.x && point.y === first.y)) {
         const { x, y } = toPdfPoint(first);
-        outputPage.drawCircle({ x, y, size: stroke.width / 2, color: penColor });
+        outputPage.drawCircle({ x, y, size: stroke.width / 2, color: penColor, ...markerStyle });
+        continue;
+      }
+
+      if (stroke.kind === "marker") {
+        // 1本を一度だけ半透明で描く。線分ごとに描くと継ぎ目が重なって濃くなる。
+        // drawSvgPathはY軸を反転するため、変換済みPDF座標のYを先に反転する。
+        const path = stroke.points.map((point, index) => {
+          const { x, y } = toPdfPoint(point);
+          return `${index === 0 ? "M" : "L"} ${x} ${-y}`;
+        }).join(" ");
+        outputPage.pushOperators(pushGraphicsState(), setLineJoin(LineJoinStyle.Round));
+        outputPage.drawSvgPath(path, { x: 0, y: 0, borderWidth: stroke.width, borderColor: penColor,
+          borderLineCap: LineCapStyle.Round, borderOpacity: MARKER_OPACITY, blendMode: BlendMode.Multiply });
+        outputPage.pushOperators(popGraphicsState());
         continue;
       }
 
@@ -85,15 +98,14 @@ export async function exportAnnotatedPdf(
         if (note.kind === "sticky") {
           const [x, y] = viewport.convertToPdfPoint(note.x * viewport.width, note.y * viewport.height + layout.height);
           outputPage.drawRectangle({ x, y, width: layout.width * unitScale, height: layout.height * unitScale,
-            rotate: degrees(angle), color: rgb(parseInt(STICKY_BACKGROUND.slice(1, 3), 16) / 255,
-              parseInt(STICKY_BACKGROUND.slice(3, 5), 16) / 255, parseInt(STICKY_BACKGROUND.slice(5, 7), 16) / 255) });
+            rotate: degrees(angle), color: toColor(note.backgroundColor ?? STICKY_BACKGROUND) });
         }
         layout.lines.forEach((line, index) => {
           if (!line) return;
           const [x, y] = viewport.convertToPdfPoint(note.x * viewport.width + TEXT_PADDING,
             note.y * viewport.height + layout.baseline + layout.lineHeight * index);
           outputPage.drawText(line, { x, y, font: outputFont, size: note.fontSize * unitScale,
-            rotate: degrees(angle), color: rgb(17 / 255, 24 / 255, 39 / 255) });
+            rotate: degrees(angle), color: toColor(note.color ?? PEN_COLOR) });
         });
       }
     }

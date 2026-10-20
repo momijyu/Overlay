@@ -68,6 +68,9 @@ const { PdfWorkspace } = await import("@/features/pdf-editor/components/PdfWorks
 const { PdfPage } = await import("@/features/pdf-editor/components/PdfPage");
 const { HistoryControls } = await import("@/features/pdf-editor/components/HistoryControls");
 const { NotebookSidebar } = await import("@/features/pdf-editor/components/NotebookSidebar");
+const { NotebookDrawer } = await import("@/features/pdf-editor/components/NotebookDrawer");
+const { PenWidthControl } = await import("@/features/pdf-editor/components/PenWidthControl");
+const { EditorIcon } = await import("@/features/pdf-editor/components/EditorIcon");
 
 beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; persistFails = false; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; openedTexts = undefined; });
 
@@ -104,9 +107,116 @@ function setup() {
 
 const red: PenStroke = { width: 2.5, color: "#ff0000", points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
 
+test("道具はアイコンだけを表示し、名前・選択状態・道具切替の接続を維持する", () => {
+  const { calls } = setup();
+  const tools = [["ペン", "pen"], ["マーカー", "marker"], ["消しゴム", "eraser"], ["テキスト", "text"], ["付箋", "sticky"]] as const;
+  for (const [label, tool] of tools) {
+    const control = button(label)!;
+    const controlProps = control.props as React.ComponentProps<"button">;
+    assert.equal(controlProps["aria-label"], label);
+    assert.equal(controlProps.title, label);
+    assert.equal(controlProps.disabled, false);
+    const icon = find(controlProps.children, (element) => element.type === EditorIcon)!;
+    assert.equal((icon.props as React.ComponentProps<typeof EditorIcon>).name, tool);
+    (controlProps.onClick as () => void)();
+    assert.equal(props(PdfPage).tool, tool);
+    for (const [otherLabel, otherTool] of tools) {
+      const other = button(otherLabel)!.props as React.ComponentProps<"button">;
+      assert.equal(other["aria-pressed"], otherTool === tool);
+      assert.equal(other.className?.includes("bg-base-300"), otherTool === tool);
+    }
+  }
+  assert.equal(props(HistoryControls).canUndo, false);
+  assert.equal(calls.length, 0);
+});
+
+test("処理中はアイコンの道具切替を無効にし、現在の道具を保持する", () => {
+  setup();
+  props(NotebookSidebar).onMutationChange(true);
+  for (const label of ["ペン", "マーカー", "消しゴム", "テキスト", "付箋"]) {
+    const control = button(label)!.props as React.ComponentProps<"button">;
+    assert.equal(control.disabled, true);
+    (control.onClick as () => void)();
+    assert.equal(props(PdfPage).tool, "pen");
+  }
+});
+
+test("マーカーとペンの色・太さを別々に保持し、設定変更だけでは保存や履歴を増やさない", () => {
+  const { calls } = setup();
+  function chooseColor(value: string) {
+    const input = find(render(), (element) => element.type === "input"
+      && (element.props as { id?: string }).id === "pen-color")!;
+    (input.props as { onChange: (event: { target: { value: string } }) => void }).onChange({ target: { value } });
+  }
+  props(PenWidthControl).onChange(5);
+  chooseColor("#112233");
+  (button("マーカー")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).tool, "marker");
+  assert.equal(props(PdfPage).penWidth, 16);
+  assert.equal(props(PdfPage).penColor, "#facc15");
+  assert.equal(props(PenWidthControl).tool, "marker");
+  props(PenWidthControl).onChange(24);
+  chooseColor("#00ff00");
+  (button("ペン")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).penWidth, 5);
+  assert.equal(props(PdfPage).penColor, "#112233");
+  (button("マーカー")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).penWidth, 24);
+  assert.equal(props(PdfPage).penColor, "#00ff00");
+  assert.equal(props(HistoryControls).canUndo, false);
+  assert.equal(calls.length, 0);
+});
+
+test("一覧は初期状態で閉じ、開閉してもPDFの倍率・内容・履歴と保存状態を変更しない", async () => {
+  const { autosave, calls } = setup();
+  props(PdfPage).onStrokeComplete(red);
+  await autosave.flush();
+  const before = props(PdfPage);
+  const savedCount = calls.length;
+  assert.equal(props(NotebookDrawer).open, false);
+  props(NotebookDrawer).onOpen();
+  assert.equal(props(NotebookDrawer).open, true);
+  assert.equal(props(PdfPage).strokes, before.strokes);
+  assert.deepEqual(props(PdfPage).texts, before.texts);
+  assert.equal(props(PdfPage).zoom, before.zoom);
+  assert.equal(props(PdfPage).editVersion, before.editVersion);
+  props(NotebookDrawer).onClose();
+  assert.equal(props(NotebookDrawer).open, false);
+  assert.equal(props(HistoryControls).canUndo, true);
+  assert.equal(calls.length, savedCount);
+  assert.equal(find(render(), (element) => element.type === "aside"), undefined);
+});
+
+test("別ノートを読み込めた時だけ一覧を閉じ、失敗時は一覧とエラーを残す", async () => {
+  setup();
+  props(NotebookDrawer).onOpen();
+  openFails = true;
+  props(NotebookSidebar).onOpen({ id: "other", title: "授業メモ" } as SavedNoteSummary);
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.equal(props(NotebookDrawer).open, true);
+  assert.ok(find(props(NotebookDrawer).children, (element) => element.type === "p"
+    && (element.props as { role?: string }).role === "alert"));
+  openFails = false;
+  await openOther();
+  assert.equal(props(NotebookDrawer).open, false);
+});
+
+test("一覧を閉じても整理中の編集ロックを解除しない", () => {
+  setup();
+  props(NotebookDrawer).onOpen();
+  props(NotebookSidebar).onMutationChange(true);
+  assert.equal(props(NotebookDrawer).busy, true);
+  assert.equal(props(PdfPage).disabled, true);
+  props(NotebookDrawer).onClose();
+  assert.equal(props(PdfPage).disabled, true);
+  props(NotebookSidebar).onMutationChange(false);
+  assert.equal(props(PdfPage).disabled, false);
+});
+
 function button(label: string) {
   return find(render(), (element) => element.type === "button"
-    && (element.props as { children?: string }).children === label);
+    && ((element.props as { children?: string }).children === label
+      || (element.props as { "aria-label"?: string })["aria-label"] === label));
 }
 
 async function openOther() {

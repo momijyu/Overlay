@@ -12,11 +12,14 @@ export function readStrokes(value: unknown): Record<number, PenStroke[]> {
       if (!stroke || typeof stroke !== "object" || !("width" in stroke) || !("points" in stroke)) throw invalid();
       const { width, points } = stroke;
       const color = "color" in stroke ? stroke.color : undefined;
+      const kind = "kind" in stroke ? stroke.kind : undefined;
       if (color !== undefined && !isPenColor(color)) throw invalid();
+      if (kind !== undefined && kind !== "pen" && kind !== "marker") throw invalid();
       if (typeof width !== "number" || !Number.isFinite(width) || width <= 0 || !Array.isArray(points) || points.length === 0) throw invalid();
       return {
         width,
         ...(color === undefined ? {} : { color }),
+        ...(kind === undefined ? {} : { kind }),
         points: points.map((point: unknown) => {
           if (!point || typeof point !== "object" || !("x" in point) || !("y" in point)) throw invalid();
           const { x, y } = point;

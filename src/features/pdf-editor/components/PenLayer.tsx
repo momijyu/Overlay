@@ -2,7 +2,7 @@
 
 import { useRef, useState, type PointerEvent } from "react";
 
-import { PEN_COLOR } from "../penStyle";
+import { MARKER_OPACITY, PEN_COLOR } from "../penStyle";
 import { eraseStrokes } from "../eraseStrokes";
 import type { PenPoint, PenStroke, PenTool } from "../types";
 
@@ -83,7 +83,8 @@ export function PenLayer({
       eraseAt(event);
       return;
     }
-    currentStroke.current = { points: [pointFromEvent(event)], width: penWidth, color: penColor };
+    currentStroke.current = { points: [pointFromEvent(event)], width: penWidth, color: penColor,
+      ...(tool === "marker" ? { kind: "marker" as const } : {}) };
     setDraft(currentStroke.current);
   }
 
@@ -144,7 +145,7 @@ export function PenLayer({
       style={{ pointerEvents: interactive ? "auto" : "none" }}
       viewBox="0 0 1 1"
       preserveAspectRatio="none"
-      aria-label={tool === "eraser" ? "書き込みを部分的に消す領域" : "ペンで書き込む領域"}
+      aria-label={tool === "eraser" ? "書き込みを部分的に消す領域" : tool === "marker" ? "マーカーで書き込む領域" : "ペンで書き込む領域"}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -159,6 +160,8 @@ export function PenLayer({
           fill="none"
           stroke={stroke.color ?? PEN_COLOR}
           strokeWidth={stroke.width * pageScale}
+          strokeOpacity={stroke.kind === "marker" ? MARKER_OPACITY : undefined}
+          style={stroke.kind === "marker" ? { mixBlendMode: "multiply" } : undefined}
           strokeLinecap="round"
           strokeLinejoin="round"
           vectorEffect="non-scaling-stroke"

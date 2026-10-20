@@ -145,8 +145,8 @@ export function PdfPage({
               strokes={strokes}
               penWidth={penWidth}
               penColor={penColor}
-              tool={tool === "eraser" ? "eraser" : "pen"}
-              interactive={tool === "pen" || tool === "eraser"}
+              tool={tool === "eraser" ? "eraser" : tool === "marker" ? "marker" : "pen"}
+              interactive={tool === "pen" || tool === "marker" || tool === "eraser"}
               eraserWidth={eraserWidth}
               pageScale={renderedPage.scale}
               onStrokeComplete={onStrokeComplete}

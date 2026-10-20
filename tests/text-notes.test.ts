@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { afterEach, mock } from "node:test";
 import { readFileSync } from "node:fs";
 import fontkit from "@pdf-lib/fontkit";
-import { PDFDocument, degrees } from "pdf-lib";
+import { PDFArray, PDFDocument, PDFRawStream, decodePDFRawStream, degrees } from "pdf-lib";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { readTextNotes, normalizeNoteText } from "@/features/pdf-editor/textData";
 import { fitTextNote, textNoteLayout } from "@/features/pdf-editor/textLayout";
@@ -24,6 +24,18 @@ test("旧ノートは空テキストとして扱い、新データは日本語�
   assert.notEqual(result[1], source[1]);
   assert.notEqual(result[1][0], source[1][0]);
   assert.equal(normalizeNoteText("授業\r\nメモ\t重要\r次"), "授業\nメモ    重要\n次");
+});
+
+test("文字色・付箋背景色を複製して保持し、不正な色とテキストの背景色を拒否する", () => {
+  const source = { 1: [{ ...note, color: "#1234aB" },
+    { ...note, id: "sticky", kind: "sticky" as const, color: "#000000", backgroundColor: "#ABCDEF" }] };
+  assert.deepEqual(readTextNotes(source), source);
+  for (const color of [null, 1, "red", "#fff", "#gggggg", "url(test)", "#12345678"]) {
+    assert.throws(() => readTextNotes({ 1: [{ ...note, color }] }), /テキスト情報/);
+    assert.throws(() => readTextNotes({ 1: [{ ...note, kind: "sticky", backgroundColor: color }] }), /テキスト情報/);
+  }
+  assert.throws(() => readTextNotes({ 1: [{ ...note, backgroundColor: "#ffffff" }] }), /テキスト情報/);
+  assert.deepEqual(readTextNotes({ 1: [note] })[1][0], note);
 });
 
 test("不正なページ・重複ID・内容・座標・幅・文字サイズを保存前に拒否する", () => {
@@ -147,10 +159,22 @@ test("実PDFの日本語・付箋・改行を0/90/180/270度で出力し、文�
     const texts: TextNotesByPage = {};
     for (const page of [1, 2, 3, 4]) {
       const viewport = (await displayed.getPage(page)).getViewport({ scale: 1 });
-      texts[page] = [fitTextNote({ ...note, fontSize: 28, autoSize: true }, viewport.width, viewport.height, font),
-        fitTextNote({ ...note, id: "sticky", kind: "sticky", y: 0.4, text: "付箋\n要復習", fontSize: 24, autoSize: true }, viewport.width, viewport.height, font)];
+      texts[page] = [fitTextNote({ ...note, color: "#ff0000", fontSize: 28, autoSize: true }, viewport.width, viewport.height, font),
+        fitTextNote({ ...note, id: "sticky", kind: "sticky", color: "#0000ff", backgroundColor: "#00ff00",
+          y: 0.4, text: "付箋\n要復習", fontSize: 24, autoSize: true }, viewport.width, viewport.height, font)];
     }
     const output = await exportAnnotatedPdf(file, displayed, {}, texts);
+    const parsed = await PDFDocument.load(output);
+    for (const page of parsed.getPages()) {
+      const contents = page.node.Contents();
+      assert.ok(contents instanceof PDFArray);
+      const operators = Array.from({ length: contents.size() }, (_, i) => {
+        const stream = parsed.context.lookup(contents.get(i));
+        assert.ok(stream instanceof PDFRawStream);
+        return new TextDecoder().decode(decodePDFRawStream(stream).decode());
+      }).join("\n");
+      for (const color of ["1 0 0 rg", "0 0 1 rg", "0 1 0 rg"]) assert.ok(operators.includes(color));
+    }
     assert.ok(output.length < 5000000); // フォントをPDF内で共有し、ページごとには複製しない。
     const result = await getDocument({ data: output.slice(), disableFontFace: true }).promise;
     try {

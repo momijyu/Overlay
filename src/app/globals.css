@@ -6,6 +6,11 @@ body {
   min-height: 100%;
 }
 
+/* 一覧の開閉でスクロールがロックされても、PDFの表示幅を変えない。 */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
 }

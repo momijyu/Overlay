@@ -4,6 +4,7 @@ import { fitTextNote, textNoteLayout, TEXT_PADDING, STICKY_BACKGROUND } from "..
 import { readTextNotes } from "../textData";
 import type { EditorTool, TextNote } from "../types";
 import { TextBoxEditor } from "./TextBoxEditor";
+import { PEN_COLOR } from "../penStyle";
 
 export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, disabled = false, onChange }: {
   notes: TextNote[];
@@ -144,9 +145,9 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
         const isEditing = editing?.id === note.id;
         return <g key={note.id} data-note-id={note.id}>
           <rect x={x} y={y} width={layout.width} height={layout.height}
-            fill={note.kind === "sticky" ? STICKY_BACKGROUND : "transparent"}
+            fill={note.kind === "sticky" ? note.backgroundColor ?? STICKY_BACKGROUND : "transparent"}
             stroke="none" visibility={isEditing ? "hidden" : "visible"} />
-          <text fontFamily="OverlayNotes" fontSize={note.fontSize} fill="#111827" visibility={isEditing ? "hidden" : "visible"} style={{ fontKerning: "none", fontVariantLigatures: "none", whiteSpace: "pre" }}>
+          <text fontFamily="OverlayNotes" fontSize={note.fontSize} fill={note.color ?? PEN_COLOR} visibility={isEditing ? "hidden" : "visible"} style={{ fontKerning: "none", fontVariantLigatures: "none", whiteSpace: "pre" }}>
             {layout.lines.map((line, index) => <tspan key={index} x={x + TEXT_PADDING} y={y + layout.baseline + layout.lineHeight * index}>{line}</tspan>)}
           </text>
         </g>;

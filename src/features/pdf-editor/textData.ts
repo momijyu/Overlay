@@ -1,4 +1,5 @@
 import type { TextNote, TextNotesByPage } from "./types";
+import { isPenColor } from "./penStyle";
 
 export const MAX_NOTE_TEXT_LENGTH = 2000;
 export const MIN_NOTE_FONT_SIZE = 8;
@@ -15,7 +16,7 @@ export function readTextNotes(value: unknown): TextNotesByPage {
     result[Number(page)] = notes.map((value: unknown): TextNote => {
       if (!value || typeof value !== "object") throw invalid();
       const note = value as Record<string, unknown>;
-      const { id, kind, text, x, y, width, height, fontSize, autoSize } = note;
+      const { id, kind, text, x, y, width, height, fontSize, autoSize, color, backgroundColor } = note;
       if (typeof id !== "string" || !id || id.length > 100 || ids.has(id)
         || (kind !== "text" && kind !== "sticky") || typeof text !== "string"
         || !text.trim() || text.length > MAX_NOTE_TEXT_LENGTH
@@ -26,11 +27,15 @@ export function readTextNotes(value: unknown): TextNotesByPage {
         || (height !== undefined && (typeof height !== "number" || !Number.isFinite(height)
           || height <= 0 || height > 1 || y + height > 1.000001 || kind !== "text"))
         || (autoSize !== undefined && typeof autoSize !== "boolean")
+        || (color !== undefined && !isPenColor(color))
+        || (backgroundColor !== undefined && (kind !== "sticky" || !isPenColor(backgroundColor)))
         || typeof fontSize !== "number" || !Number.isFinite(fontSize)
         || fontSize < MIN_NOTE_FONT_SIZE || fontSize > MAX_NOTE_FONT_SIZE) throw invalid();
       ids.add(id);
       return { id, kind, text, x, y, width, fontSize, ...(height === undefined ? {} : { height: height as number }),
-        ...(autoSize === undefined ? {} : { autoSize: autoSize as boolean }) };
+        ...(autoSize === undefined ? {} : { autoSize: autoSize as boolean }),
+        ...(color === undefined ? {} : { color: color as string }),
+        ...(backgroundColor === undefined ? {} : { backgroundColor: backgroundColor as string }) };
     });
   }
   return result;

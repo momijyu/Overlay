@@ -6,12 +6,18 @@ import { HistoryControls } from "@/features/pdf-editor/components/HistoryControl
 test("履歴の有無と処理中状態に応じてUndo・Redoボタンを無効化する", () => {
   for (const canUndo of [false, true]) for (const canRedo of [false, true]) for (const disabled of [false, true]) {
     const markup = renderToStaticMarkup(HistoryControls({ canUndo, canRedo, disabled, onUndo: () => {}, onRedo: () => {} }));
-    const buttons = markup.match(/<button[^>]*>[^<]*<\/button>/g)!;
+    const buttons = markup.match(/<button\b[\s\S]*?<\/button>/g)!;
     assert.match(markup, /aria-label="編集履歴"/);
     assert.equal(buttons[0].includes('disabled=""'), disabled || !canUndo);
     assert.equal(buttons[1].includes('disabled=""'), disabled || !canRedo);
     assert.ok(buttons[0].includes("元に戻す"));
     assert.ok(buttons[1].includes("やり直す"));
+    assert.match(buttons[0], /aria-label="元に戻す" title="元に戻す"/);
+    assert.match(buttons[1], /aria-label="やり直す" title="やり直す"/);
+    for (const button of buttons) {
+      assert.match(button, /<svg[^>]*aria-hidden="true"/);
+      assert.equal(button.replace(/<[^>]+>/g, ""), "");
+    }
   }
 });
 

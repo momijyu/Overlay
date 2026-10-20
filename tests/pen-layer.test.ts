@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { beforeEach, mock } from "node:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PEN_COLOR, PEN_WIDTH_OPTIONS } from "@/features/pdf-editor/penStyle";
+import { MARKER_OPACITY, PEN_COLOR, PEN_WIDTH_OPTIONS } from "@/features/pdf-editor/penStyle";
 import type { PenStroke, PenTool } from "@/features/pdf-editor/types";
 
 // 状態の保持だけを置き換えてポインターハンドラーを検証する。
@@ -52,6 +52,31 @@ test("描画時の色と太さを線へ記録し、移動中には保存せず�
   assert.deepEqual(completed, [{ width: 5, color: "#1234ab", points: [
     { x: 0.1, y: 0.2 }, { x: 0.5, y: 0.6 }, { x: 0.9, y: 0.8 },
   ] }]);
+});
+
+test("マーカーは指を離した時に種別と色・太さを記録し、SVGも1本の半透明パスで描く", () => {
+  const { handlers, event, completed } = layer("marker", [], 16, 20);
+  handlers.onPointerDown(event(10, 20));
+  handlers.onPointerMove(event(50, 20));
+  assert.equal(completed.length, 0);
+  handlers.onPointerUp(event(90, 20));
+  assert.equal(completed[0].kind, "marker");
+  assert.equal(completed[0].width, 20);
+  assert.equal(completed[0].color, "#1234ab");
+  const legacy = { width: 2.5, points: [{ x: 0.1, y: 0.1 }] };
+  const html = renderToStaticMarkup(layer("marker", [completed[0], legacy]).element);
+  assert.match(html, new RegExp(`stroke-opacity="${MARKER_OPACITY}"`));
+  assert.match(html, /mix-blend-mode:multiply/);
+  assert.equal([...html.matchAll(/stroke-opacity=/g)].length, 1);
+  assert.match(html, /マーカーで書き込む領域/);
+});
+
+test("マーカーの中断では保存しない", () => {
+  const { handlers, event, completed } = layer("marker", []);
+  handlers.onPointerDown(event(10, 20));
+  handlers.onPointerCancel(event(10, 20));
+  handlers.onPointerUp(event(90, 20));
+  assert.equal(completed.length, 0);
 });
 
 test("テキスト選択中のペン表示は入力を受けず、二重描画しない", () => {

@@ -105,6 +105,63 @@ test("ページ上のtextareaで入力し、外へフォーカスを移すと1�
   assert.equal((tree.props as React.HTMLAttributes<HTMLDivElement>).style?.transform, "scale(1.5)");
 });
 
+function colorInput(f: ReturnType<typeof fixture>, label: string) {
+  return find(f.render(), (element) => element.type === "input"
+    && (element.props as { "aria-label"?: string })["aria-label"] === label)?.props as React.ComponentProps<"input"> | undefined;
+}
+
+test("テキストの文字色をプレビューし、色だけの変更では旧幅・高さを変えない", () => {
+  const original = { ...note, height: 0.2 };
+  const f = fixture(true, original);
+  assert.equal(colorInput(f, "文字色")!.value, "#111827");
+  assert.equal(colorInput(f, "付箋の背景色"), undefined);
+  colorInput(f, "文字色")!.onChange!({ target: { value: "#3366cc" } } as React.ChangeEvent<HTMLInputElement>);
+  assert.equal(f.input().style?.color, "#3366cc");
+  assert.equal(f.commits.length, 0);
+  // カラー欄へフォーカスを移しても確定しない。
+  f.input().onBlur!({ relatedTarget: f.inside } as React.FocusEvent<HTMLTextAreaElement>);
+  assert.equal(f.commits.length, 0);
+  f.key("Enter", true);
+  assert.equal(f.commits[0].color, "#3366cc");
+  assert.equal(f.commits[0].width, original.width);
+  assert.equal(f.commits[0].height, original.height);
+  assert.equal(f.commits[0].autoSize, undefined);
+  assert.equal(note.color, undefined);
+});
+
+test("付箋の文字色・背景色と文章・サイズを1回で確定し、キャンセル時は変更しない", () => {
+  const f = fixture(true, { ...note, kind: "sticky" });
+  colorInput(f, "文字色")!.onChange!({ target: { value: "#123456" } } as React.ChangeEvent<HTMLInputElement>);
+  colorInput(f, "付箋の背景色")!.onChange!({ target: { value: "#fedcba" } } as React.ChangeEvent<HTMLInputElement>);
+  f.change("色付き付箋");
+  f.size().onChange(24);
+  assert.equal(f.input().style?.color, "#123456");
+  assert.equal(f.input().style?.background, "#fedcba");
+  assert.equal(f.commits.length, 0);
+  doc.emit("pointerdown");
+  assert.equal(f.commits.length, 1);
+  assert.equal(f.commits[0].text, "色付き付箋");
+  assert.equal(f.commits[0].color, "#123456");
+  assert.equal(f.commits[0].backgroundColor, "#fedcba");
+  assert.equal(f.commits[0].fontSize, 24);
+  states = []; refs = [];
+  const cancelled = fixture(true, { ...note, kind: "sticky", color: "#123456", backgroundColor: "#fedcba" });
+  colorInput(cancelled, "付箋の背景色")!.onChange!({ target: { value: "#ffffff" } } as React.ChangeEvent<HTMLInputElement>);
+  cancelled.key("Escape");
+  doc.emit("pointerdown");
+  assert.equal(cancelled.commits.length, 0);
+  assert.equal(cancelled.getCancelled(), 1);
+});
+
+test("不正な色とIME変換中の色変更を拒否し、元の色を残す", () => {
+  const f = fixture(true, { ...note, color: "#123456" });
+  colorInput(f, "文字色")!.onChange!({ target: { value: "red" } } as React.ChangeEvent<HTMLInputElement>);
+  assert.equal(f.input().style?.color, "#123456");
+  f.input().onCompositionStart!({} as React.CompositionEvent<HTMLTextAreaElement>);
+  colorInput(f, "文字色")!.onChange!({ target: { value: "#ffffff" } } as React.ChangeEvent<HTMLInputElement>);
+  assert.equal(f.input().style?.color, "#123456");
+});
+
 test("空の新規ボックスは保存せず、Escape・キャンセルで元の文章を維持する", () => {
   const f = fixture(false, { ...note, text: "" });
   f.input().onBlur!({ relatedTarget: null } as React.FocusEvent<HTMLTextAreaElement>);

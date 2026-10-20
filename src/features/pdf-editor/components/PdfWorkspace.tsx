@@ -5,15 +5,17 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { pdfDownloadName } from "../pdfDownloadName";
-import { DEFAULT_ERASER_WIDTH, DEFAULT_PEN_WIDTH, isPenColor, PEN_COLOR } from "../penStyle";
+import { DEFAULT_ERASER_WIDTH, DEFAULT_MARKER_WIDTH, DEFAULT_PEN_WIDTH, isPenColor, MARKER_COLOR, PEN_COLOR } from "../penStyle";
 import { deleteSavedNote, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
 import type { PenStroke, EditorTool, TextNote, TextNotesByPage } from "../types";
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
+import { NotebookDrawer } from "./NotebookDrawer";
 import { EraserSizeControl } from "./EraserSizeControl";
 import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
+import { EditorIcon } from "./EditorIcon";
 import { createStrokeHistory, recordStrokeEdit, recordTextEdit, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
 
 type PdfInput = {
@@ -24,6 +26,14 @@ type PdfInput = {
   textsByPage?: TextNotesByPage;
   revision?: number;
 };
+
+const editorTools: { tool: EditorTool; label: string }[] = [
+  { tool: "pen", label: "ペン" },
+  { tool: "marker", label: "マーカー" },
+  { tool: "eraser", label: "消しゴム" },
+  { tool: "text", label: "テキスト" },
+  { tool: "sticky", label: "付箋" },
+];
 
 export function PdfWorkspace() {
   const [file, setFile] = useState<File | null>(null);
@@ -38,7 +48,7 @@ export function PdfWorkspace() {
   const [zoom, setZoom] = useState(1);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [noteName, setNoteName] = useState("");
-  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [sidebarVisible, setSidebarVisible] = useState(false);
   const [isOrganizing, setIsOrganizing] = useState(false);
   const [savedStrokes, setSavedStrokes] = useState<Record<number, PenStroke[]> | null>(
     null,
@@ -51,6 +61,8 @@ export function PdfWorkspace() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [documentVersion, setDocumentVersion] = useState(0);
   const [savedTexts, setSavedTexts] = useState<TextNotesByPage | null>(null);
+  const [markerWidth, setMarkerWidth] = useState(DEFAULT_MARKER_WIDTH);
+  const [markerColor, setMarkerColor] = useState(MARKER_COLOR);
   const mountedRef = useRef(false);
   const operationRef = useRef(false);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
@@ -146,6 +158,7 @@ export function PdfWorkspace() {
         },
       });
       autosaveRef.current = autosave;
+      setSidebarVisible(false);
       // 開いただけのPDFは未変更。最初の描画完了でupdateから保存を開始する。
     } catch (openError) {
       void loadingTask?.destroy();
@@ -273,14 +286,10 @@ export function PdfWorkspace() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div>
-        <button type="button" className="btn btn-sm" aria-controls="notebook-sidebar"
-          aria-expanded={sidebarVisible} onClick={() => setSidebarVisible((value) => !value)}>
-          ノート
-        </button>
-      </div>
-      <div className="flex items-start gap-4">
-        <aside id="notebook-sidebar" hidden={!sidebarVisible} className="w-80 shrink-0">
+      <NotebookDrawer open={sidebarVisible} busy={isOrganizing}
+        onOpen={() => setSidebarVisible(true)} onClose={() => setSidebarVisible(false)}>
+          {error && <p role="alert" className="px-4 pt-3 text-error">{error}</p>}
+          {isLoading && <p role="status" className="px-4 pt-3">PDFを読み込んでいます…</p>}
           <NotebookSidebar
             refreshVersion={refreshVersion}
             currentNoteId={noteId}
@@ -297,8 +306,8 @@ export function PdfWorkspace() {
               setIsOrganizing(busy);
             }}
           />
-        </aside>
-        <section className="card min-w-0 flex-1 border border-base-300 bg-base-100 shadow-sm">
+      </NotebookDrawer>
+        <section className="card min-w-0 w-full border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body gap-5">
             <div>
               <label className="label" htmlFor="pdf-upload">
@@ -341,24 +350,28 @@ export function PdfWorkspace() {
                       {noteName}
                     </p>
                     <div className="join" role="group" aria-label="編集ツール">
-                      <button type="button" className={`btn btn-sm join-item ${penTool === "pen" ? "btn-active" : ""}`}
-                        aria-pressed={penTool === "pen"} disabled={isBusy} onClick={() => setPenTool("pen")}>ペン</button>
-                      <button type="button" className={`btn btn-sm join-item ${penTool === "eraser" ? "btn-active" : ""}`}
-                        aria-pressed={penTool === "eraser"} disabled={isBusy} onClick={() => setPenTool("eraser")}>消しゴム</button>
-                      <button type="button" className={`btn btn-sm join-item ${penTool === "text" ? "btn-active" : ""}`}
-                        aria-pressed={penTool === "text"} disabled={isBusy} onClick={() => setPenTool("text")}>テキスト</button>
-                      <button type="button" className={`btn btn-sm join-item ${penTool === "sticky" ? "btn-active" : ""}`}
-                        aria-pressed={penTool === "sticky"} disabled={isBusy} onClick={() => setPenTool("sticky")}>付箋</button>
+                      {editorTools.map(({ tool, label }) => <button key={tool} type="button"
+                        className={`btn btn-square btn-ghost join-item ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
+                        aria-label={label} title={label} aria-pressed={penTool === tool} disabled={isBusy}
+                        onClick={() => { if (!isBusy) setPenTool(tool); }}>
+                        <EditorIcon name={tool} />
+                      </button>)}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <label className="label" htmlFor="pen-color">ペンの色</label>
-                      <input id="pen-color" type="color" className="input input-sm w-14 p-1" value={penColor}
-                        disabled={isBusy || penTool !== "pen"} onChange={(event) => {
-                          if (isPenColor(event.target.value)) setPenColor(event.target.value);
+                    {/* マーカーの表示の挙動めっちゃすき。 */}
+                    {(penTool === "pen" || penTool === "marker") && <div className="flex items-center gap-2">
+                      <label className="label" htmlFor="pen-color">{penTool === "marker" ? "マーカーの色" : "ペンの色"}</label>
+                      <input id="pen-color" type="color" className="input input-sm w-14 p-1" value={penTool === "marker" ? markerColor : penColor}
+                        disabled={isBusy} onChange={(event) => {
+                          if (isPenColor(event.target.value)) {
+                            if (penTool === "marker") setMarkerColor(event.target.value);
+                            else setPenColor(event.target.value);
+                          }
                         }} />
-                    </div>
+                    </div>}
                     {penTool === "pen" && <PenWidthControl value={penWidth}
                       disabled={isBusy} onChange={setPenWidth} />}
+                    {penTool === "marker" && <PenWidthControl tool="marker" value={markerWidth}
+                      disabled={isBusy} onChange={setMarkerWidth} />}
                     {penTool === "eraser" && <EraserSizeControl
                       value={eraserWidth} disabled={isBusy} onChange={setEraserWidth}
                     />}
@@ -434,8 +447,8 @@ export function PdfWorkspace() {
                   texts={history.textsByPage[pageNumber] ?? []}
                   onTextsChange={updatePageTexts}
                   editVersion={history.version}
-                  penWidth={penWidth}
-                  penColor={penColor}
+                  penWidth={penTool === "marker" ? markerWidth : penWidth}
+                  penColor={penTool === "marker" ? markerColor : penColor}
                   tool={penTool}
                   eraserWidth={eraserWidth}
                   zoom={zoom}
@@ -449,7 +462,6 @@ export function PdfWorkspace() {
             )}
           </div>
         </section>
-      </div>
     </div>
   );
 }

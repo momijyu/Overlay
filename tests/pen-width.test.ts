@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ChangeEvent, ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PenWidthControl } from "@/features/pdf-editor/components/PenWidthControl";
-import { DEFAULT_PEN_WIDTH, PEN_WIDTH_OPTIONS } from "@/features/pdf-editor/penStyle";
+import { DEFAULT_MARKER_WIDTH, DEFAULT_PEN_WIDTH, MARKER_WIDTH_OPTIONS, PEN_WIDTH_OPTIONS } from "@/features/pdf-editor/penStyle";
 
 function input(disabled: boolean, changes: number[]) {
   const element = PenWidthControl({ value: DEFAULT_PEN_WIDTH, disabled, onChange: (value) => changes.push(value) });
@@ -25,6 +25,24 @@ test("ペンの太さを5段階で表示し、標準は従来の太さを維持�
     assert.ok(markup.includes(`aria-valuetext="${option.label}（${index + 1}/5）"`));
     assert.ok(markup.includes(`>${option.label}</output>`));
   });
+});
+
+test("マーカーは同じスライダーで専用の5段階を選び、ペンの値と混同しない", () => {
+  const changes: number[] = [];
+  const element = PenWidthControl({ tool: "marker", value: DEFAULT_MARKER_WIDTH, disabled: false,
+    onChange: (value) => changes.push(value) });
+  const html = renderToStaticMarkup(element);
+  assert.match(html, /マーカーの太さ/);
+  assert.match(html, /id="marker-width"/);
+  assert.match(html, /min="0" max="4" step="1"/);
+  const children = element.props.children as ReactElement<{ onChange: (event: ChangeEvent<HTMLInputElement>) => void }>[];
+  for (const value of ["0", "1", "2", "3", "4", "-1", "5", "", "0.5"]) {
+    children[1].props.onChange({ target: { value } } as ChangeEvent<HTMLInputElement>);
+  }
+  assert.deepEqual(changes, MARKER_WIDTH_OPTIONS.map<number>((option) => option.width));
+  const locked = PenWidthControl({ tool: "marker", value: 16, disabled: true, onChange: (value) => changes.push(value) });
+  (locked.props.children as typeof children)[1].props.onChange({ target: { value: "4" } } as ChangeEvent<HTMLInputElement>);
+  assert.equal(changes.length, 5);
 });
 
 test("スライダーの各段階を実際の線幅へ変換し、不正な段階は通知しない", () => {
