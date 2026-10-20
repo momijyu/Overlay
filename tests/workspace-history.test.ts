@@ -15,6 +15,8 @@ let stateCursor = 0;
 let refCursor = 0;
 let deleteFails = false;
 let openFails = false;
+let persistFails = false;
+let exportFails = true;
 const exported: Record<number, PenStroke[]>[] = [];
 const openedStrokes = { 2: [{ width: 5, points: [{ x: 0.2, y: 0.3 }] }] };
 
@@ -35,6 +37,10 @@ mock.module("react", { exports: {
 } });
 mock.module("@/features/pdf-editor/localNotes", { exports: {
   ...localNotes,
+  saveLocalNote: async (input: LocalSaveInput) => {
+    if (persistFails) throw new Error("容量不足");
+    return input.noteId ?? "created";
+  },
   deleteSavedNote: async () => { if (deleteFails) throw new Error("削除失敗"); },
   loadLocalNote: async () => {
     if (openFails) throw new Error("読込失敗");
@@ -49,7 +55,8 @@ mock.module("@/features/pdf-editor/exportAnnotatedPdf", { exports: {
   exportAnnotatedPdf: async (_file: unknown, _pdf: unknown, strokes: Record<number, PenStroke[]>) => {
     exported.push(strokes);
     // 出力に渡すデータだけを確認し、DOMでのダウンロードは実行しない。
-    throw new Error("テスト用の出力停止");
+    if (exportFails) throw new Error("テスト用の出力停止");
+    return new Uint8Array([1, 2, 3]);
   },
 } });
 const { PdfWorkspace } = await import("@/features/pdf-editor/components/PdfWorkspace");
@@ -57,7 +64,7 @@ const { PdfPage } = await import("@/features/pdf-editor/components/PdfPage");
 const { HistoryControls } = await import("@/features/pdf-editor/components/HistoryControls");
 const { NotebookSidebar } = await import("@/features/pdf-editor/components/NotebookSidebar");
 
-beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; exported.length = 0; });
+beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; persistFails = false; exportFails = true; exported.length = 0; });
 
 function render() {
   stateCursor = 0;
@@ -92,8 +99,68 @@ function setup() {
 
 const red: PenStroke = { width: 2.5, color: "#ff0000", points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
 
+function button(label: string) {
+  return find(render(), (element) => element.type === "button"
+    && (element.props as { children?: string }).children === label);
+}
+
+async function openOther() {
+  props(NotebookSidebar).onOpen({ id: "other", title: "授業メモ" } as SavedNoteSummary);
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.equal(refs[1].current, false);
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+}
+
+test("PDFダウンロードは元ファイル名ではなく、変更後のノート名を使う", async () => {
+  setup();
+  await openOther();
+  props(NotebookSidebar).onRenamed("other", "自分の復習メモ.pdf");
+  exportFails = false;
+  const downloads: string[] = [];
+  const anchor = { href: "", download: "", click: () => { downloads.push(anchor.download); }, remove: () => {} };
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    document: { createElement: () => anchor, body: { appendChild: () => {} } },
+    setTimeout: (callback: () => void) => { callback(); return 0; },
+  } });
+  try {
+    // a要素の入口だけを置き換え、OSへの実ファイル出力は行わない。
+    (button("PDFをダウンロード")!.props as { onClick: () => void }).onClick();
+    await new Promise(setImmediate);
+    assert.deepEqual(downloads, ["自分の復習メモ.pdf"]);
+    assert.equal(file.name, "sample.pdf");
+  } finally {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
+test("通常の保存ボタンは表示せず、自動保存失敗時だけ再試行できる", async () => {
+  setup();
+  await openOther();
+  assert.equal(button("今すぐ保存"), undefined);
+  assert.equal(button("保存を再試行"), undefined);
+  persistFails = true;
+  props(PdfPage).onStrokeComplete(red);
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
+  assert.equal(await autosave.flush(), false);
+  const retry = button("保存を再試行")!;
+  assert.ok(retry);
+  assert.equal((retry.props as { disabled: boolean }).disabled, false);
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+  persistFails = false;
+  (retry.props as { onClick: () => void }).onClick();
+  assert.equal(await autosave.flush(), true);
+  assert.equal(button("保存を再試行"), undefined);
+  assert.equal(button("今すぐ保存"), undefined);
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+});
+
 test("画面の描画・消去・Undo・Redoが同じ履歴と自動保存へ接続される", async () => {
   const { autosave, calls } = setup();
+  const notice = find(render(), (element) => element.type === "p"
+    && String((element.props as { children?: unknown }).children).includes("編集履歴は直近"));
+  assert.equal(notice, undefined);
   assert.equal(props(HistoryControls).canUndo, false);
   props(PdfPage).onStrokeComplete(red);
   await autosave.flush();

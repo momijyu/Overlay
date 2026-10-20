@@ -21,17 +21,12 @@ const library: NoteLibrary = {
   notes: [{ id: "note", title: "ノート1", fileName: "sample.pdf", updatedAt: "2026-10-12", folderId: "subject" }],
 };
 
-test("編集画面はサーバー描画でIndexedDBを開かず、保存先と移行の制約を案内する", () => {
+test("編集画面はサーバー描画でIndexedDBを開かず、定期的なPDF保管だけを案内する", () => {
   const html = renderToStaticMarkup(createElement(PdfWorkspace));
-  assert.match(html, /保存先はこのブラウザです/);
-  assert.match(html, /最初の線を描き終えた時から自動保存します/);
-  assert.match(html, /PDFを開いただけでは保存しません/);
-  assert.match(html, /一定期間アクセスがないとブラウザの仕様によりデータが消去される場合があります/);
   assert.match(html, /重要なノートは定期的に『PDFをダウンロード』して保管してください/);
-  assert.match(html, /サイトデータを削除するとノートも失われます/);
-  assert.match(html, /以前のSupabaseノートについて/);
-  assert.match(html, /以前のノートは削除していません/);
-  assert.match(html, /移行と再編集用バックアップは未対応/);
+  assert.doesNotMatch(html, /保存先はこのブラウザ|最初の線を描き終えた時から自動保存|PDFを開いただけでは保存しません/);
+  assert.doesNotMatch(html, /別の端末・ブラウザ・URL|サイトデータを削除すると|一定期間アクセスがないと|iOS Safari/);
+  assert.doesNotMatch(html, /以前のSupabase|以前のノート|移行と再編集用バックアップ|編集履歴は直近/);
   assert.match(html, /id="pdf-upload"/);
 });
 

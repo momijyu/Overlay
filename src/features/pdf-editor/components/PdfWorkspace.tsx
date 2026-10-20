@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
+import { pdfDownloadName } from "../pdfDownloadName";
 import { DEFAULT_ERASER_WIDTH, DEFAULT_PEN_WIDTH, isPenColor, PEN_COLOR } from "../penStyle";
 import { deleteSavedNote, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
@@ -13,7 +14,7 @@ import { NotebookSidebar } from "./NotebookSidebar";
 import { EraserSizeControl } from "./EraserSizeControl";
 import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
-import { createStrokeHistory, recordStrokeEdit, undoStrokeEdit, redoStrokeEdit, STROKE_HISTORY_LIMIT, type StrokeHistory } from "../strokeHistory";
+import { createStrokeHistory, recordStrokeEdit, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
 
 type PdfInput = {
   file: File;
@@ -174,7 +175,7 @@ export function PdfWorkspace() {
     void openPdf(async () => ({ file: selectedFile, id: null, strokesByPage: {} }));
   }
 
-  async function handleSave() {
+  async function handleRetrySave() {
     if (!autosaveRef.current || operationRef.current) return;
     await autosaveRef.current.flush(true);
   }
@@ -245,7 +246,7 @@ export function PdfWorkspace() {
       const url = URL.createObjectURL(blob);
       const link = window.document.createElement("a");
       link.href = url;
-      link.download = `${file.name.replace(/\.pdf$/i, "")}-overlay.pdf`;
+      link.download = pdfDownloadName(noteName);
       window.document.body.appendChild(link);
       link.click();
       link.remove();
@@ -304,13 +305,8 @@ export function PdfWorkspace() {
             </div>
 
             <p className="text-sm text-base-content/70">
-              保存先はこのブラウザです。最初の線を描き終えた時から自動保存します。PDFを開いただけでは保存しません。別の端末・ブラウザ・URLとは共有されません。サイトデータを削除するとノートも失われます。
-              iOS Safariなどでは、一定期間アクセスがないとブラウザの仕様によりデータが消去される場合があります。重要なノートは定期的に『PDFをダウンロード』して保管してください。
+              重要なノートは定期的に『PDFをダウンロード』して保管してください。
             </p>
-            <details className="text-sm text-base-content/70">
-              <summary className="cursor-pointer">以前のSupabaseノートについて</summary>
-              <p className="mt-2">以前のノートは削除していません。この一覧にはローカル保存したノートだけを表示します。Supabaseからの移行と再編集用バックアップは未対応です。必要な内容はPDFのダウンロードでも保管してください。</p>
-            </details>
 
             {error && (
               <div className="alert alert-error" role="alert">
@@ -319,6 +315,8 @@ export function PdfWorkspace() {
             )}
             {saveError && <div className="alert alert-error" role="alert">
               <span>自動保存に失敗しました。{saveError}</span>
+              <button className="btn btn-sm" type="button" disabled={isBusy || isSaving}
+                onClick={() => void handleRetrySave()}>保存を再試行</button>
             </div>}
 
             {isLoading && <p role="status">PDFを読み込んでいます…</p>}
@@ -371,14 +369,6 @@ export function PdfWorkspace() {
                       </select>
                     </div>
                     <button
-                      className="btn"
-                      type="button"
-                      disabled={isBusy || isSaving || !hasUnsavedChanges}
-                      onClick={() => void handleSave()}
-                    >
-                      {saveError ? "保存を再試行" : "今すぐ保存"}
-                    </button>
-                    <button
                       className="btn btn-primary"
                       type="button"
                       disabled={isBusy}
@@ -418,9 +408,6 @@ export function PdfWorkspace() {
                       : hasUnsavedChanges ? "未保存の変更があります" : "未編集（書き込みを始めると自動保存）"}
                   </p>
                 )}
-                <p className="text-sm text-base-content/70">
-                  編集履歴は直近{STROKE_HISTORY_LIMIT}操作まで。ノートの切り替え・再読み込みでリセットされます。
-                </p>
                 {penTool === "eraser" && <p className="text-sm" role="status">
                   書き込みの触れた部分を消します。元PDFは消えません。指やペンを離すと自動保存します。
                 </p>}
