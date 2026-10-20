@@ -45,6 +45,30 @@ test("初回の保存中にUndoしても、同じノートへ取り消し後の�
   assert.equal(calls[2].strokesByPage, drawn.strokesByPage);
 });
 
+test("文章だけの変更で保存を始め、保存中の文章と線の最新状態を組にして保存する", async () => {
+  const write = deferred<string>();
+  const calls: LocalSaveInput[] = [];
+  const texts = { 1: [{ id: "one", kind: "text" as const, text: "日本語", x: 0.1, y: 0.1, width: 0.4, fontSize: 14 }] };
+  const revised = { 1: [{ ...texts[1][0], text: "変更" }] };
+  const autosave = createLocalAutosave({
+    file, noteId: null, strokesByPage: empty, textsByPage: {},
+    persist: async (input) => { calls.push(input); return calls.length === 1 ? write.promise : "same"; }, onChange: () => {},
+  });
+  autosave.update(empty, texts);
+  const saving = autosave.flush();
+  await Promise.resolve();
+  autosave.update(first, revised);
+  write.resolve("same");
+  assert.equal(await saving, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].textsByPage, texts);
+  assert.equal(calls[1].textsByPage, revised);
+  assert.equal(calls[1].strokesByPage, first);
+  assert.equal(calls[1].noteId, "same");
+  assert.equal(autosave.getState().savedTexts, revised);
+  assert.equal(autosave.hasPendingChanges(), false);
+});
+
 test("保存失敗後のUndo・Redoを画面側で保持し、再試行では現在の状態を保存する", async () => {
   let fails = true;
   const calls: LocalSaveInput[] = [];
@@ -100,7 +124,7 @@ test("最初の線から新規PDFを自動保存し、保存の応答前に保�
   write.resolve("note-1");
   assert.equal(await saving, true);
   assert.equal(calls[0].strokesByPage, first);
-  assert.deepEqual(autosave.getState(), { status: "saved", noteId: "note-1", savedStrokes: first, error: null });
+  assert.deepEqual(autosave.getState(), { status: "saved", noteId: "note-1", savedStrokes: first, savedTexts: {}, error: null });
   assert.equal(autosave.hasPendingChanges(), false);
   assert.equal(states.at(-1)?.status, "saved");
 });

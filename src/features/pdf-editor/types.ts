@@ -11,6 +11,21 @@ export type PenStroke = {
 };
 
 export type PenTool = "pen" | "eraser";
+export type EditorTool = PenTool | "text" | "sticky";
+export type TextNote = {
+  id: string;
+  kind: "text" | "sticky";
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  // 新しいテキスト・付箋は文章と文字サイズから幅・高さを計算する。旧データはそのまま表示する。
+  autoSize?: boolean;
+  // 未指定の旧ボックスは文章の高さに合わせる。指定値も文章よりは小さくしない。
+  height?: number;
+  fontSize: number;
+};
+export type TextNotesByPage = Record<number, TextNote[]>;
 
 export type SavedNoteSummary = {
   id: string;
@@ -36,6 +51,7 @@ export type LoadedNote = {
   id: string;
   file: File;
   strokesByPage: Record<number, PenStroke[]>;
+  textsByPage?: TextNotesByPage;
   // ローカル保存の更新番号。番号のない旧データは0として読み込む。
   revision?: number;
 };

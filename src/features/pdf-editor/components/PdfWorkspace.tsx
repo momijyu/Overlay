@@ -8,19 +8,20 @@ import { pdfDownloadName } from "../pdfDownloadName";
 import { DEFAULT_ERASER_WIDTH, DEFAULT_PEN_WIDTH, isPenColor, PEN_COLOR } from "../penStyle";
 import { deleteSavedNote, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
-import type { PenStroke, PenTool } from "../types";
+import type { PenStroke, EditorTool, TextNote, TextNotesByPage } from "../types";
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { EraserSizeControl } from "./EraserSizeControl";
 import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
-import { createStrokeHistory, recordStrokeEdit, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
+import { createStrokeHistory, recordStrokeEdit, recordTextEdit, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
 
 type PdfInput = {
   file: File;
   id: string | null;
   name?: string;
   strokesByPage: Record<number, PenStroke[]>;
+  textsByPage?: TextNotesByPage;
   revision?: number;
 };
 
@@ -32,7 +33,7 @@ export function PdfWorkspace() {
   const strokesByPage = history.strokesByPage;
   const [penWidth, setPenWidth] = useState(DEFAULT_PEN_WIDTH);
   const [penColor, setPenColor] = useState(PEN_COLOR);
-  const [penTool, setPenTool] = useState<PenTool>("pen");
+  const [penTool, setPenTool] = useState<EditorTool>("pen");
   const [eraserWidth, setEraserWidth] = useState(DEFAULT_ERASER_WIDTH);
   const [zoom, setZoom] = useState(1);
   const [noteId, setNoteId] = useState<string | null>(null);
@@ -49,6 +50,7 @@ export function PdfWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [documentVersion, setDocumentVersion] = useState(0);
+  const [savedTexts, setSavedTexts] = useState<TextNotesByPage | null>(null);
   const mountedRef = useRef(false);
   const operationRef = useRef(false);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
@@ -57,7 +59,7 @@ export function PdfWorkspace() {
   // 自動保存中も描画・ページ切り替え・PDF出力を止めない。
   // ノートを開き直すときだけ、openPdfで保存完了を待つ。
   const isBusy = isLoading || isExporting || isOrganizing;
-  const hasUnsavedChanges = file !== null && savedStrokes !== strokesByPage;
+  const hasUnsavedChanges = file !== null && (savedStrokes !== strokesByPage || savedTexts !== history.textsByPage);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -105,7 +107,7 @@ export function PdfWorkspace() {
       const loadedDocument = await loadingTask.promise;
       if (!mountedRef.current) return;
       if (
-        Object.keys(input.strokesByPage).some(
+        [...Object.keys(input.strokesByPage), ...Object.keys(input.textsByPage ?? {})].some(
           (page) => Number(page) > loadedDocument.numPages,
         )
       ) {
@@ -114,12 +116,13 @@ export function PdfWorkspace() {
 
       // PDFと線を両方読み込めてから切り替え、失敗時は編集中の内容を残す。
       previousAutosave?.dispose();
-      const nextHistory = createStrokeHistory(input.strokesByPage);
+      const nextHistory = createStrokeHistory(input.strokesByPage, input.textsByPage);
       historyRef.current = nextHistory;
       setFile(input.file);
       setDocument(loadedDocument);
       setHistory(nextHistory);
       setSavedStrokes(input.strokesByPage);
+      setSavedTexts(nextHistory.textsByPage);
       setNoteId(input.id);
       setNoteName(input.name ?? (input.file.name.replace(/\.pdf$/i, "") || input.file.name));
       setPageNumber(1);
@@ -129,13 +132,14 @@ export function PdfWorkspace() {
       setIsSaving(false);
       setDocumentVersion((value) => value + 1);
       const autosave = createLocalAutosave({
-        file: input.file, noteId: input.id, strokesByPage: input.strokesByPage,
+        file: input.file, noteId: input.id, strokesByPage: input.strokesByPage, textsByPage: nextHistory.textsByPage,
         revision: input.revision, persist: saveNote,
         onChange: (state) => {
           // 古いノートの保存結果が、新しく開いた画面に混ざらないようにする。
           if (!mountedRef.current || autosaveRef.current !== autosave) return;
           setNoteId(state.noteId);
           setSavedStrokes(state.savedStrokes);
+          setSavedTexts(state.savedTexts);
           setIsSaving(state.status === "saving");
           setSaveError(state.error);
           if (state.status === "saved") setRefreshVersion((value) => value + 1);
@@ -185,13 +189,18 @@ export function PdfWorkspace() {
     applyHistory(recordStrokeEdit(historyRef.current, pageNumber, strokes));
   }
 
+  function updatePageTexts(notes: TextNote[]) {
+    if (operationRef.current) return;
+    applyHistory(recordTextEdit(historyRef.current, pageNumber, notes));
+  }
+
   function applyHistory(next: StrokeHistory, revealPage = false) {
     if (next === historyRef.current) return;
     historyRef.current = next;
     setHistory(next);
     if (revealPage && next.changedPage !== null) setPageNumber(next.changedPage);
     // Undo / Redoも通常の編集として保存係へ渡し、保存中の古い結果で上書きしない。
-    autosaveRef.current?.update(next.strokesByPage);
+    autosaveRef.current?.update(next.strokesByPage, next.textsByPage);
   }
 
   function handleUndo() {
@@ -221,6 +230,7 @@ export function PdfWorkspace() {
     setDocument(null);
     setHistory(nextHistory);
     setSavedStrokes(null);
+    setSavedTexts(null);
     setNoteId(null);
     setNoteName("");
     setPageNumber(1);
@@ -238,7 +248,7 @@ export function PdfWorkspace() {
     setError(null);
 
     try {
-      const pdfBytes = await exportAnnotatedPdf(file, document, strokesByPage);
+      const pdfBytes = await exportAnnotatedPdf(file, document, strokesByPage, history.textsByPage);
       if (!mountedRef.current) return;
       const blob = new Blob([new Uint8Array(pdfBytes)], {
         type: "application/pdf",
@@ -251,9 +261,9 @@ export function PdfWorkspace() {
       link.click();
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch {
+    } catch (exportError) {
       if (mountedRef.current) {
-        setError("PDFを書き出せませんでした。別のPDFでお試しください。");
+        setError(exportError instanceof Error ? `PDFを書き出せませんでした。${exportError.message}` : "PDFを書き出せませんでした。");
       }
     } finally {
       operationRef.current = false;
@@ -335,6 +345,10 @@ export function PdfWorkspace() {
                         aria-pressed={penTool === "pen"} disabled={isBusy} onClick={() => setPenTool("pen")}>ペン</button>
                       <button type="button" className={`btn btn-sm join-item ${penTool === "eraser" ? "btn-active" : ""}`}
                         aria-pressed={penTool === "eraser"} disabled={isBusy} onClick={() => setPenTool("eraser")}>消しゴム</button>
+                      <button type="button" className={`btn btn-sm join-item ${penTool === "text" ? "btn-active" : ""}`}
+                        aria-pressed={penTool === "text"} disabled={isBusy} onClick={() => setPenTool("text")}>テキスト</button>
+                      <button type="button" className={`btn btn-sm join-item ${penTool === "sticky" ? "btn-active" : ""}`}
+                        aria-pressed={penTool === "sticky"} disabled={isBusy} onClick={() => setPenTool("sticky")}>付箋</button>
                     </div>
                     <div className="flex items-center gap-2">
                       <label className="label" htmlFor="pen-color">ペンの色</label>
@@ -343,8 +357,9 @@ export function PdfWorkspace() {
                           if (isPenColor(event.target.value)) setPenColor(event.target.value);
                         }} />
                     </div>
-                    {penTool === "pen" ? <PenWidthControl value={penWidth}
-                      disabled={isBusy} onChange={setPenWidth} /> : <EraserSizeControl
+                    {penTool === "pen" && <PenWidthControl value={penWidth}
+                      disabled={isBusy} onChange={setPenWidth} />}
+                    {penTool === "eraser" && <EraserSizeControl
                       value={eraserWidth} disabled={isBusy} onChange={setEraserWidth}
                     />}
                     <HistoryControls canUndo={history.past.length > 0} canRedo={history.future.length > 0}
@@ -402,7 +417,7 @@ export function PdfWorkspace() {
                 {!isSaving && (
                   <p className="text-sm" role="status">
                     {saveError ? "未保存の変更があります" : noteId
-                      ? savedStrokes === strokesByPage
+                      ? !hasUnsavedChanges
                         ? "このブラウザに保存済み"
                         : "未保存の変更があります"
                       : hasUnsavedChanges ? "未保存の変更があります" : "未編集（書き込みを始めると自動保存）"}
@@ -416,6 +431,8 @@ export function PdfWorkspace() {
                   document={document}
                   pageNumber={pageNumber}
                   strokes={strokesByPage[pageNumber] ?? []}
+                  texts={history.textsByPage[pageNumber] ?? []}
+                  onTextsChange={updatePageTexts}
                   editVersion={history.version}
                   penWidth={penWidth}
                   penColor={penColor}

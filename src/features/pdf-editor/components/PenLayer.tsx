@@ -13,6 +13,7 @@ type PenLayerProps = {
   tool: PenTool;
   eraserWidth: number;
   pageScale: number;
+  interactive?: boolean;
   onStrokeComplete: (stroke: PenStroke) => void;
   onStrokesChange: (strokes: PenStroke[]) => void;
 };
@@ -43,6 +44,7 @@ export function PenLayer({
   tool,
   eraserWidth,
   pageScale,
+  interactive = true,
   onStrokeComplete,
   onStrokesChange,
 }: PenLayerProps) {
@@ -67,6 +69,7 @@ export function PenLayer({
   }
 
   function handlePointerDown(event: PointerEvent<SVGSVGElement>) {
+    if (!interactive) return;
     if (activePointerId.current !== null) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -138,6 +141,7 @@ export function PenLayer({
   return (
     <svg
       className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
+      style={{ pointerEvents: interactive ? "auto" : "none" }}
       viewBox="0 0 1 1"
       preserveAspectRatio="none"
       aria-label={tool === "eraser" ? "書き込みを部分的に消す領域" : "ペンで書き込む領域"}
@@ -147,7 +151,7 @@ export function PenLayer({
       onPointerCancel={handlePointerCancel}
       onLostPointerCapture={handlePointerCancel}
     >
-      <rect width="1" height="1" fill="transparent" pointerEvents="all" />
+      <rect width="1" height="1" fill="transparent" pointerEvents={interactive ? "all" : "none"} />
       {[...(erasePreview ?? strokes), ...(draft ? [draft] : [])].map((stroke, index) => (
         <path
           key={index}

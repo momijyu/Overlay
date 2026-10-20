@@ -1,6 +1,6 @@
 # Overlayのコードが動く場所
 
-2026年10月18日時点の構成を説明する。機能追加の計画ではなく、現在のコードを読むための資料。
+2026年10月20日時点の構成を説明する。機能追加の計画ではなく、現在のコードを読むための資料。
 
 ## 全体像
 
@@ -21,14 +21,18 @@ Next.jsは画面の土台と実行に必要なファイルを用意する。Verc
 | `components/PdfWorkspace.tsx` | PDF選択、ページ切り替え、描画・保存・削除・出力の取りまとめ |
 | `components/PdfPage.tsx` | PDF.jsで選択中のページをcanvasへ描画 |
 | `components/PenLayer.tsx` | PDFの上にSVGを重ね、色付きの線を記録する。消しゴムのプレビューと操作完了を扱う |
+| `components/TextLayer.tsx`・`TextBoxEditor.tsx`・`TextSizeControl.tsx` | テキスト・付箋の設置・直接入力・文字サイズ調整、移動・削除。旧TextNoteDialogは通常画面では未使用 |
+| `textData.ts`・`textLayout.ts` | テキストの検証、同じフォントを使った改行・配置の計算 |
+| `noteFont.ts` | 同梱の日本語フォントを同じサイトから取得し、ブラウザの表示とPDF出力へ渡す |
+| `strokeHistory.ts` | ペンとテキストの編集履歴を管理する。履歴はメモリ内だけで、保存しない |
 | `eraseStrokes.ts` | 消しゴムの移動跡と線の交差を計算し、触れた部分だけを除いた線へ分割 |
 | `components/NotebookSidebar.tsx` | 一覧取得、選択、作成・整理・削除、ドラッグ操作の管理 |
 | `components/NotebookTree.tsx` | フォルダとノートの階層表示、開閉、操作イベントの受け渡し |
 | `components/NotebookActionDialog.tsx` | 作成・名前変更・移動・削除確認のモーダル |
 | `localAutosave.ts` | 保存の順番、保存中の追記、失敗時の再試行と状態通知 |
-| `localNotes.ts` | 元PDF・線・名前・所属先・フォルダの保存、読み込み、整理、削除 |
+| `localNotes.ts` | 元PDF・線・テキスト・名前・所属先・フォルダの保存、読み込み、整理、削除 |
 | `localDatabase.ts` | IndexedDBの接続管理とトランザクションの完了・失敗処理 |
-| `exportAnnotatedPdf.ts` | pdf-libで元PDFに線を反映し、ダウンロード用のPDFを作成 |
+| `exportAnnotatedPdf.ts` | pdf-libで元PDFに線とテキスト・付箋を反映し、ダウンロード用のPDFを作成 |
 | `noteTree.ts`・`noteDrag.ts` | 階層の組み立てと移動先の検証 |
 | `strokeData.ts`・`penStyle.ts` | 線のデータ検証とペンの設定 |
 

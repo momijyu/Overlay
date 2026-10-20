@@ -1,9 +1,10 @@
-import type { PenStroke } from "./types";
+import type { PenStroke, TextNotesByPage } from "./types";
 
 type Strokes = Record<number, PenStroke[]>;
 export type LocalSaveInput = {
   file: File;
   strokesByPage: Strokes;
+  textsByPage?: TextNotesByPage;
   noteId: string | null;
   expectedRevision: number;
 };
@@ -11,6 +12,7 @@ export type LocalSaveState = {
   status: "idle" | "saving" | "saved" | "error";
   noteId: string | null;
   savedStrokes: Strokes | null;
+  savedTexts: TextNotesByPage;
   error: string | null;
 };
 
@@ -19,11 +21,14 @@ export function createLocalAutosave(options: {
   file: File;
   noteId: string | null;
   strokesByPage: Strokes;
+  textsByPage?: TextNotesByPage;
   revision?: number;
   persist: (input: LocalSaveInput) => Promise<string>;
   onChange: (state: LocalSaveState) => void;
 }) {
   let latest = options.strokesByPage;
+  let latestTexts = options.textsByPage ?? {};
+  let savedTexts = latestTexts;
   // 新規PDFを選んだだけではDirtyにしない。最初のupdate（描画完了）で保存する。
   let saved = latest;
   let noteId = options.noteId;
@@ -34,7 +39,7 @@ export function createLocalAutosave(options: {
   let disposed = false;
 
   function getState(): LocalSaveState {
-    return { status, noteId, savedStrokes: saved, error };
+    return { status, noteId, savedStrokes: saved, savedTexts, error };
   }
 
   function notify() {
@@ -42,7 +47,7 @@ export function createLocalAutosave(options: {
   }
 
   function hasPendingChanges() {
-    return latest !== saved;
+    return latest !== saved || latestTexts !== savedTexts;
   }
 
   function flush(retry = false): Promise<boolean> {
@@ -58,11 +63,13 @@ export function createLocalAutosave(options: {
       try {
         while (hasPendingChanges()) {
           const snapshot = latest;
+          const textSnapshot = latestTexts;
           noteId = await options.persist({
-            file: options.file, strokesByPage: snapshot, noteId, expectedRevision: revision,
+            file: options.file, strokesByPage: snapshot, textsByPage: textSnapshot, noteId, expectedRevision: revision,
           });
           revision += 1;
           saved = snapshot;
+          savedTexts = textSnapshot;
           // 保存中に追加された線は保存済みにせず、最新の状態を続けて保存する。
           notify();
         }
@@ -87,9 +94,10 @@ export function createLocalAutosave(options: {
     getState,
     hasPendingChanges,
     flush,
-    update(strokesByPage: Strokes) {
+    update(strokesByPage: Strokes, textsByPage = latestTexts) {
       if (disposed) return;
       latest = strokesByPage;
+      latestTexts = textsByPage;
       // 失敗後は勝手な連続再試行をせず、最新の線を保持して手動の再試行を待つ。
       if (error) notify();
       else void flush();

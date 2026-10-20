@@ -7,7 +7,7 @@ import {
   moveNoteFolder, moveSavedNote, organizeNote, renameNoteFolder, saveLocalNote,
 } from "@/features/pdf-editor/localNotes";
 import { readRequest, withLocalTransaction } from "@/features/pdf-editor/localDatabase";
-import type { PenStroke } from "@/features/pdf-editor/types";
+import type { PenStroke, TextNote } from "@/features/pdf-editor/types";
 import { createLocalAutosave } from "@/features/pdf-editor/localAutosave";
 import { eraseStrokes } from "@/features/pdf-editor/eraseStrokes";
 import { createStrokeHistory, recordStrokeEdit, undoStrokeEdit, redoStrokeEdit } from "@/features/pdf-editor/strokeHistory";
@@ -33,6 +33,100 @@ async function counts() {
 
 test("接続情報・認証・通信なしで空の一覧を開ける", async () => {
   assert.deepEqual(await loadNoteLibrary(), { notes: [], folders: [], foldersEnabled: true });
+});
+
+const textNote: TextNote = { id: "text", kind: "text", text: "日本語メモ\n復習", x: 0.1, y: 0.2, width: 0.4, fontSize: 14 };
+
+test("旧付箋の文字サイズ・自動調整への変更を保存し、Undo・Redoと再読込でも種類を保つ", async () => {
+  const original: TextNote = { ...textNote, kind: "sticky" };
+  const id = await saveLocalNote({ file, noteId: null, strokesByPage: {}, textsByPage: { 1: [original] } });
+  const loaded = await loadLocalNote(id);
+  assert.deepEqual(loaded.textsByPage, { 1: [original] });
+  const autosave = createLocalAutosave({ file: loaded.file, noteId: id, strokesByPage: loaded.strokesByPage,
+    textsByPage: loaded.textsByPage, revision: loaded.revision, persist: saveLocalNote, onChange: () => {} });
+  const { recordTextEdit } = await import("@/features/pdf-editor/strokeHistory");
+  let history = recordTextEdit(createStrokeHistory(loaded.strokesByPage, loaded.textsByPage), 1,
+    [{ ...original, text: "メモ", width: 0.2, fontSize: 32, autoSize: true }]);
+  const changed = history.textsByPage;
+  for (const next of [history, undoStrokeEdit(history), redoStrokeEdit(undoStrokeEdit(history))]) {
+    history = next;
+    autosave.update(history.strokesByPage, history.textsByPage);
+    await autosave.flush();
+    assert.deepEqual((await loadLocalNote(id)).textsByPage, history.textsByPage);
+  }
+  assert.deepEqual((await loadLocalNote(id)).textsByPage, changed);
+  assert.deepEqual(await counts(), [1, 1, 0]);
+});
+
+test("テキストだけで初回自動保存し、付箋・移動・編集・削除・Undoを同じノートへ保存する", async () => {
+  const autosave = createLocalAutosave({ file, noteId: null, strokesByPage: {}, persist: saveLocalNote, onChange: () => {} });
+  let history = createStrokeHistory({});
+  const { recordTextEdit } = await import("@/features/pdf-editor/strokeHistory");
+  history = recordTextEdit(history, 1, [textNote]);
+  autosave.update(history.strokesByPage, history.textsByPage);
+  await autosave.flush();
+  const id = autosave.getState().noteId!;
+  assert.deepEqual((await loadLocalNote(id)).textsByPage, { 1: [textNote] });
+  const folder = await createNoteFolder("授業", null);
+  await organizeNote(id, "日本語ノート", folder);
+  history = recordTextEdit(history, 2, [{ ...textNote, id: "sticky", kind: "sticky" }]);
+  history = recordTextEdit(history, 1, [{ ...textNote, x: 0.3, width: 0.6, height: 0.25, text: "変更後" }]);
+  autosave.update(history.strokesByPage, history.textsByPage);
+  await autosave.flush();
+  const withText = await loadLocalNote(id);
+  assert.equal(withText.textsByPage![1][0].x, 0.3);
+  assert.equal(withText.textsByPage![1][0].width, 0.6);
+  assert.equal(withText.textsByPage![1][0].height, 0.25);
+  assert.equal(withText.textsByPage![2][0].kind, "sticky");
+  history = recordTextEdit(history, 1, [{ ...textNote, x: 0.3, width: 0.6, fontSize: 32, autoSize: true }]);
+  autosave.update(history.strokesByPage, history.textsByPage);
+  await autosave.flush();
+  const sized = (await loadLocalNote(id)).textsByPage![1][0];
+  assert.equal(sized.fontSize, 32);
+  assert.equal(sized.autoSize, true);
+  assert.equal(sized.height, undefined);
+  history = undoStrokeEdit(history);
+  autosave.update(history.strokesByPage, history.textsByPage);
+  await autosave.flush();
+  assert.deepEqual((await loadLocalNote(id)).textsByPage, withText.textsByPage);
+  history = recordTextEdit(history, 1, []);
+  autosave.update(history.strokesByPage, history.textsByPage);
+  await autosave.flush();
+  assert.deepEqual((await loadLocalNote(id)).textsByPage![1], []);
+  history = undoStrokeEdit(history);
+  autosave.update(history.strokesByPage, history.textsByPage);
+  await autosave.flush();
+  assert.deepEqual((await loadLocalNote(id)).textsByPage, withText.textsByPage);
+  assert.equal(await (await loadLocalNote(id)).file.text(), await file.text());
+  assert.deepEqual(await counts(), [1, 1, 1]);
+  const library = await loadNoteLibrary();
+  assert.equal(library.notes[0].title, "日本語ノート");
+  assert.equal(library.notes[0].folderId, folder);
+  assert.equal("textsByPage" in library.notes[0], false);
+});
+
+test("旧ノートのテキスト欠落は空として復元し、線だけの更新で新テキストを消さない", async () => {
+  const id = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  await withLocalTransaction(["notes"], "readwrite", async (transaction) => {
+    const store = transaction.objectStore("notes");
+    const value = await readRequest<Record<string, unknown>>(store.get(id));
+    delete value.textsByPage;
+    await readRequest(store.put(value));
+  });
+  assert.deepEqual((await loadLocalNote(id)).textsByPage, {});
+  await saveLocalNote({ file, noteId: id, strokesByPage: strokes, textsByPage: { 1: [textNote] } });
+  await saveLocalNote({ file, noteId: id, strokesByPage: {} });
+  assert.deepEqual((await loadLocalNote(id)).textsByPage, { 1: [textNote] });
+});
+
+test("不正なテキストの更新は拒否し、保存済みの線・文章・更新番号を維持する", async () => {
+  const id = await saveLocalNote({ file, noteId: null, strokesByPage: strokes, textsByPage: { 1: [textNote] } });
+  const before = await loadLocalNote(id);
+  await assert.rejects(saveLocalNote({ file, noteId: id, strokesByPage: {}, textsByPage: { 1: [{ ...textNote, x: NaN }] } }), /テキスト情報/);
+  const after = await loadLocalNote(id);
+  assert.deepEqual(after.strokesByPage, before.strokesByPage);
+  assert.deepEqual(after.textsByPage, before.textsByPage);
+  assert.equal(after.revision, before.revision);
 });
 
 test("消去のUndo・Redo結果を自動保存して再読込し、元PDF・他ページ・整理情報を維持する", async () => {

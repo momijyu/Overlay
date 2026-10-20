@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
-import type { PenStroke, PenTool } from "../types";
+import type { PenStroke, EditorTool, TextNote } from "../types";
 import { PenLayer } from "./PenLayer";
+import { TextLayer } from "./TextLayer";
 
 type PdfPageProps = {
   document: PDFDocumentProxy;
@@ -13,7 +14,9 @@ type PdfPageProps = {
   editVersion: number;
   penWidth: number;
   penColor: string;
-  tool: PenTool;
+  tool: EditorTool;
+  texts?: TextNote[];
+  onTextsChange: (notes: TextNote[]) => void;
   eraserWidth: number;
   zoom: number;
   disabled: boolean;
@@ -29,6 +32,8 @@ export function PdfPage({
   penWidth,
   penColor,
   tool,
+  texts = [],
+  onTextsChange,
   eraserWidth,
   zoom,
   disabled,
@@ -42,6 +47,8 @@ export function PdfPage({
     availableWidth: number;
     zoom: number;
     scale: number;
+    width: number;
+    height: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,7 +102,7 @@ export function PdfPage({
         await renderTask.promise;
         if (active) {
           setError(null);
-          setRenderedPage({ availableWidth, zoom, scale });
+          setRenderedPage({ availableWidth, zoom, scale, width: original.width, height: original.height });
         }
       } catch {
         if (active) setError("このページを表示できませんでした。");
@@ -132,18 +139,26 @@ export function PdfPage({
           renderedPage.zoom === zoom &&
           !disabled &&
           !error && (
-            <PenLayer
+            <>
+              <PenLayer
               key={`${editVersion}-${tool}-${penWidth}-${penColor}-${eraserWidth}-${renderedPage.scale}`}
               strokes={strokes}
               penWidth={penWidth}
               penColor={penColor}
-              tool={tool}
+              tool={tool === "eraser" ? "eraser" : "pen"}
+              interactive={tool === "pen" || tool === "eraser"}
               eraserWidth={eraserWidth}
               pageScale={renderedPage.scale}
               onStrokeComplete={onStrokeComplete}
               onStrokesChange={onStrokesChange}
             />
+            </>
           )}
+        {/* 倍率・幅の再描画中も入力欄をアンマウントせず、入力中の文章を維持する。 */}
+        {renderedPage && (texts.length > 0 || tool === "text" || tool === "sticky") && <TextLayer notes={texts} tool={tool}
+          disabled={disabled || !!error || renderedPage.availableWidth !== availableWidth || renderedPage.zoom !== zoom}
+          pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={renderedPage.scale}
+          onChange={onTextsChange} />}
       </div>
     </div>
   );

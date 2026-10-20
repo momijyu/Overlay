@@ -2,9 +2,10 @@ import { readRequest, withLocalTransaction } from "./localDatabase";
 import { canMoveItem } from "./noteDrag";
 import { canDeleteEmptyFolder, hasFolderNameConflict } from "./noteTree";
 import { readStrokes } from "./strokeData";
-import type { LoadedNote, NoteFolder, NoteLibrary, PenStroke, SavedNoteSummary } from "./types";
+import { readTextNotes } from "./textData";
+import type { LoadedNote, NoteFolder, NoteLibrary, PenStroke, SavedNoteSummary, TextNotesByPage } from "./types";
 
-type LocalNote = SavedNoteSummary & { strokesByPage: Record<number, PenStroke[]>; revision?: number };
+type LocalNote = SavedNoteSummary & { strokesByPage: Record<number, PenStroke[]>; textsByPage?: TextNotesByPage; revision?: number };
 type LocalPdf = { id: string; blob: Blob };
 
 function readRevision(note: LocalNote): number {
@@ -49,9 +50,11 @@ export async function loadNoteLibrary(): Promise<NoteLibrary> {
 export async function saveLocalNote(input: {
   file: File; strokesByPage: Record<number, PenStroke[]>; noteId: string | null;
   expectedRevision?: number;
+  textsByPage?: TextNotesByPage;
 }): Promise<string> {
   // 入力を複製・検証してから保存し、保存中に編集されても内容が混ざらないようにする。
   const strokesByPage = readStrokes(input.strokesByPage);
+  const textsByPage = input.textsByPage === undefined ? undefined : readTextNotes(input.textsByPage);
   const id = input.noteId ?? crypto.randomUUID();
   return withLocalTransaction(["notes", "pdfs"], "readwrite", async (transaction) => {
     const notes = transaction.objectStore("notes");
@@ -67,11 +70,13 @@ export async function saveLocalNote(input: {
       if (input.expectedRevision !== undefined && input.expectedRevision !== revision) {
         throw new Error("別のタブでこのノートが更新されています。上書きしていません。必要な内容をPDFへ書き出してからノートを開き直してください。");
       }
-      await readRequest(notes.put({ ...existing, strokesByPage, updatedAt, revision: revision + 1 }));
+      await readRequest(notes.put({ ...existing, strokesByPage,
+        ...(textsByPage === undefined ? {} : { textsByPage }), updatedAt, revision: revision + 1 }));
     } else {
       if (input.file.size === 0) throw new Error("空のPDFは保存できません。");
       const title = (input.file.name.replace(/\.pdf$/i, "") || input.file.name).slice(0, 120);
-      const note: LocalNote = { id, title, fileName: input.file.name, folderId: null, updatedAt, strokesByPage, revision: 1 };
+      const note: LocalNote = { id, title, fileName: input.file.name, folderId: null, updatedAt, strokesByPage,
+        textsByPage: textsByPage ?? {}, revision: 1 };
       // 元PDFと線は別ストアだが、片方だけ保存されないよう同じトランザクションにする。
       await readRequest(pdfs.add({ id, blob: input.file.slice(0, input.file.size, "application/pdf") } satisfies LocalPdf));
       await readRequest(notes.add(note));
@@ -89,7 +94,8 @@ export async function loadLocalNote(noteId: string): Promise<LoadedNote> {
     if (!note || !pdf || !(pdf.blob instanceof Blob) || pdf.blob.size === 0) {
       throw new Error("このブラウザにノートの元PDFが見つかりません。保存時と同じブラウザ・URLか確認してください。");
     }
-    return { id: note.id, file: new File([pdf.blob], note.fileName, { type: "application/pdf" }), strokesByPage: readStrokes(note.strokesByPage), revision: readRevision(note) };
+    return { id: note.id, file: new File([pdf.blob], note.fileName, { type: "application/pdf" }),
+      strokesByPage: readStrokes(note.strokesByPage), textsByPage: readTextNotes(note.textsByPage), revision: readRevision(note) };
   });
 }
 

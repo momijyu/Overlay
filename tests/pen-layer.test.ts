@@ -54,6 +54,17 @@ test("描画時の色と太さを線へ記録し、移動中には保存せず�
   ] }]);
 });
 
+test("テキスト選択中のペン表示は入力を受けず、二重描画しない", () => {
+  let completed = 0;
+  const element = PenLayer({ tool: "pen", strokes: [], penWidth: 2, penColor: "#111827", eraserWidth: 16,
+    pageScale: 1, interactive: false, onStrokeComplete: () => { completed++; }, onStrokesChange: () => {} });
+  const handlers = element.props as Record<string, (event: unknown) => void>;
+  handlers.onPointerDown({});
+  handlers.onPointerUp({});
+  assert.equal(completed, 0);
+  assert.match(renderToStaticMarkup(element), /pointer-events:none/);
+});
+
 test("消しゴムは途中の表示だけ変更し、離した時に分割結果を一度だけ通知する", () => {
   const { handlers, event, completed, changes } = layer("eraser");
   handlers.onPointerDown(event(50, 0));
