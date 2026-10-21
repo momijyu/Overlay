@@ -15,6 +15,7 @@ import { NotebookDrawer } from "./NotebookDrawer";
 import { EraserSizeControl } from "./EraserSizeControl";
 import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
+import { ZoomControl } from "./ZoomControl";
 import { EditorIcon } from "./EditorIcon";
 import { createStrokeHistory, recordStrokeEdit, recordTextEdit, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
 
@@ -339,16 +340,16 @@ export function PdfWorkspace() {
             </div>}
 
             {isLoading && <p role="status">PDFを読み込んでいます…</p>}
-            {isExporting && <p role="status">PDFを書き出しています…</p>}
-            {isSaving && <p role="status">ノートを保存しています…</p>}
 
             {document && file && (
               <>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex min-w-0 flex-wrap items-center gap-3">
-                    <p className="min-w-0 truncate" title={file.name}>
-                      {noteName}
-                    </p>
+                <div className="min-w-0 space-y-3">
+                  <p className="min-w-0 truncate" title={noteName || file.name}>
+                    {noteName}
+                  </p>
+                  {/* 道具の列は設定やノート名と分け、切り替えても折り返さない。 */}
+                  <div data-editor-row="tools" role="group" aria-label="編集操作"
+                    className="flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
                     <div className="join" role="group" aria-label="編集ツール">
                       {editorTools.map(({ tool, label }) => <button key={tool} type="button"
                         className={`btn btn-square btn-ghost join-item ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
@@ -357,6 +358,13 @@ export function PdfWorkspace() {
                         <EditorIcon name={tool} />
                       </button>)}
                     </div>
+                    <HistoryControls canUndo={history.past.length > 0} canRedo={history.future.length > 0}
+                      disabled={isBusy} onUndo={handleUndo} onRedo={handleRedo} />
+                    <ZoomControl value={zoom} disabled={isBusy} onChange={setZoom} />
+                  </div>
+                  {/* 設定のない道具でも高さを維持し、下の操作とPDFを押し上げない。 */}
+                  <div data-editor-row="settings" role="group" aria-label="道具の設定"
+                    className="flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
                     {/* マーカーの表示の挙動めっちゃすき。 */}
                     {(penTool === "pen" || penTool === "marker") && <div className="flex items-center gap-2">
                       <label className="label" htmlFor="pen-color">{penTool === "marker" ? "マーカーの色" : "ペンの色"}</label>
@@ -375,27 +383,8 @@ export function PdfWorkspace() {
                     {penTool === "eraser" && <EraserSizeControl
                       value={eraserWidth} disabled={isBusy} onChange={setEraserWidth}
                     />}
-                    <HistoryControls canUndo={history.past.length > 0} canRedo={history.future.length > 0}
-                      disabled={isBusy} onUndo={handleUndo} onRedo={handleRedo} />
-                    <div className="flex items-center gap-2">
-                      <label className="label" htmlFor="pdf-zoom">
-                        表示倍率
-                      </label>
-                      <select
-                        id="pdf-zoom"
-                        className="select select-sm w-auto"
-                        value={zoom}
-                        disabled={isLoading}
-                        onChange={(event) => setZoom(Number(event.target.value))}
-                      >
-                        <option value="0.5">50%</option>
-                        <option value="0.75">75%</option>
-                        <option value="1">100%</option>
-                        <option value="1.25">125%</option>
-                        <option value="1.5">150%</option>
-                        <option value="2">200%</option>
-                      </select>
-                    </div>
+                  </div>
+                  <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
                     <button
                       className="btn btn-primary"
                       type="button"
@@ -404,41 +393,37 @@ export function PdfWorkspace() {
                     >
                       PDFをダウンロード
                     </button>
-                  </div>
-                  <div className="join" aria-label="ページ切り替え">
-                    <button
-                      className="btn join-item"
-                      type="button"
-                      disabled={isLoading || pageNumber === 1}
-                      onClick={() => setPageNumber((page) => page - 1)}
-                    >
-                      前へ
-                    </button>
-                    <span className="btn join-item pointer-events-none" aria-live="polite">
-                      {pageNumber} / {document.numPages}
-                    </span>
-                    <button
-                      className="btn join-item"
-                      type="button"
-                      disabled={isLoading || pageNumber === document.numPages}
-                      onClick={() => setPageNumber((page) => page + 1)}
-                    >
-                      次へ
-                    </button>
+                    <div className="join shrink-0" aria-label="ページ切り替え">
+                      <button
+                        className="btn join-item"
+                        type="button"
+                        disabled={isLoading || pageNumber === 1}
+                        onClick={() => setPageNumber((page) => page - 1)}
+                      >
+                        前へ
+                      </button>
+                      <span className="btn join-item pointer-events-none" aria-live="polite">
+                        {pageNumber} / {document.numPages}
+                      </span>
+                      <button
+                        className="btn join-item"
+                        type="button"
+                        disabled={isLoading || pageNumber === document.numPages}
+                        onClick={() => setPageNumber((page) => page + 1)}
+                      >
+                        次へ
+                      </button>
+                    </div>
                   </div>
                 </div>
-                {!isSaving && (
-                  <p className="text-sm" role="status">
-                    {saveError ? "未保存の変更があります" : noteId
-                      ? !hasUnsavedChanges
-                        ? "このブラウザに保存済み"
-                        : "未保存の変更があります"
-                      : hasUnsavedChanges ? "未保存の変更があります" : "未編集（書き込みを始めると自動保存）"}
-                  </p>
-                )}
-                {penTool === "eraser" && <p className="text-sm" role="status">
-                  書き込みの触れた部分を消します。元PDFは消えません。指やペンを離すと自動保存します。
-                </p>}
+                <p data-editor-row="status" className="min-h-5 text-sm" role="status">
+                  {isExporting ? "PDFを書き出しています…" : isSaving ? "ノートを保存しています…"
+                    : saveError ? "未保存の変更があります" : noteId
+                    ? !hasUnsavedChanges
+                      ? "このブラウザに保存済み"
+                      : "未保存の変更があります"
+                    : hasUnsavedChanges ? "未保存の変更があります" : "未編集（書き込みを始めると自動保存）"}
+                </p>
                 <PdfPage
                   key={`${documentVersion}-${pageNumber}`}
                   document={document}
@@ -452,6 +437,7 @@ export function PdfWorkspace() {
                   tool={penTool}
                   eraserWidth={eraserWidth}
                   zoom={zoom}
+                  onZoomChange={setZoom}
                   disabled={isBusy}
                   onStrokeComplete={(stroke) => {
                     updatePageStrokes([...(historyRef.current.strokesByPage[pageNumber] ?? []), stroke]);

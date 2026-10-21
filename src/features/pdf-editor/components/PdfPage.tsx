@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
 import type { PenStroke, EditorTool, TextNote } from "../types";
 import { PenLayer } from "./PenLayer";
 import { TextLayer } from "./TextLayer";
+import { bindPageZoomWheel, capturePageZoomAnchor, restorePageZoomAnchor, type PageZoomAnchor } from "../pageZoom";
 
 type PdfPageProps = {
   document: PDFDocumentProxy;
@@ -19,6 +20,7 @@ type PdfPageProps = {
   onTextsChange: (notes: TextNote[]) => void;
   eraserWidth: number;
   zoom: number;
+  onZoomChange: (zoom: number) => void;
   disabled: boolean;
   onStrokeComplete: (stroke: PenStroke) => void;
   onStrokesChange: (strokes: PenStroke[]) => void;
@@ -36,21 +38,57 @@ export function PdfPage({
   onTextsChange,
   eraserWidth,
   zoom,
+  onZoomChange,
   disabled,
   onStrokeComplete,
   onStrokesChange,
 }: PdfPageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(zoom);
+  const anchorRef = useRef<PageZoomAnchor | null>(null);
+  const displaySizeRef = useRef<string | null>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
   const [renderedPage, setRenderedPage] = useState<{
-    availableWidth: number;
-    zoom: number;
-    scale: number;
     width: number;
     height: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const displayScale = renderedPage ? Math.min(1, availableWidth / renderedPage.width) * zoom : 0;
+
+  useLayoutEffect(() => {
+    zoomRef.current = zoom;
+    const viewport = containerRef.current;
+    const surface = surfaceRef.current;
+    const canvas = canvasRef.current;
+    if (!viewport || !surface || !canvas || !renderedPage || displayScale <= 0) return;
+    const size = `${renderedPage.width * displayScale}-${renderedPage.height * displayScale}`;
+    if (displaySizeRef.current === size) { anchorRef.current = null; return; }
+    // スライダーの場合は表示領域の中心、ホイールの場合はポインター位置を維持する。
+    const anchor = displaySizeRef.current ? anchorRef.current ?? capturePageZoomAnchor(viewport, surface) : null;
+    canvas.style.width = `${renderedPage.width * displayScale}px`;
+    canvas.style.height = `${renderedPage.height * displayScale}px`;
+    if (anchor) restorePageZoomAnchor(viewport, surface, anchor);
+    anchorRef.current = null;
+    displaySizeRef.current = size;
+  }, [zoom, displayScale, renderedPage]);
+
+  useEffect(() => {
+    const viewport = containerRef.current;
+    if (!viewport) return;
+    return bindPageZoomWheel(viewport, {
+      getZoom: () => zoomRef.current,
+      isEnabled: () => !disabled && !error && displaySizeRef.current !== null,
+      onZoom: (next, event) => {
+        const surface = surfaceRef.current;
+        if (!surface) return;
+        anchorRef.current = capturePageZoomAnchor(viewport, surface, event);
+        zoomRef.current = next; // 同じ描画フレーム内の連続入力も積み重ねる。
+        onZoomChange(next);
+      },
+    });
+  }, [disabled, error, onZoomChange]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -89,30 +127,38 @@ export function PdfPage({
         const viewport = page.getViewport({ scale });
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
 
-        canvas.width = Math.ceil(viewport.width * pixelRatio);
-        canvas.height = Math.ceil(viewport.height * pixelRatio);
-        canvas.style.width = `${viewport.width}px`;
-        canvas.style.height = `${viewport.height}px`;
+        // 表示中のビットマップを消さず、別キャンバスで次の倍率を描画する。
+        const buffer = canvas.ownerDocument.createElement("canvas");
+        buffer.width = Math.ceil(viewport.width * pixelRatio);
+        buffer.height = Math.ceil(viewport.height * pixelRatio);
 
         renderTask = page.render({
-          canvas,
+          canvas: buffer,
           viewport,
           transform: [pixelRatio, 0, 0, pixelRatio, 0, 0],
         });
         await renderTask.promise;
         if (active) {
+          const context = canvas.getContext("2d");
+          if (!context) throw new Error("Canvas is unavailable");
+          canvas.width = buffer.width;
+          canvas.height = buffer.height;
+          context.drawImage(buffer, 0, 0);
           setError(null);
-          setRenderedPage({ availableWidth, zoom, scale, width: original.width, height: original.height });
+          setRenderedPage({ width: original.width, height: original.height });
         }
       } catch {
         if (active) setError("このページを表示できませんでした。");
       }
     }
 
-    void renderPage();
+    // 操作中は既存画像をCSSで即座に拡縮し、入力が落ち着いてから高精細に描き直す。
+    const timer = displaySizeRef.current ? setTimeout(() => void renderPage(), 100) : null;
+    if (timer === null) void renderPage();
 
     return () => {
       active = false;
+      if (timer !== null) clearTimeout(timer);
       renderTask?.cancel();
     };
   }, [document, pageNumber, availableWidth, zoom]);
@@ -120,44 +166,43 @@ export function PdfPage({
   return (
     <div
       ref={containerRef}
-      className="min-w-0 w-full overflow-auto bg-base-200 p-2 sm:p-4"
+      className="max-h-[75dvh] min-w-0 w-full overflow-auto bg-base-200 p-2 sm:p-4"
+      style={{ scrollbarGutter: "stable", overflowAnchor: "none" }}
+      tabIndex={0}
+      aria-label="PDF表示領域"
     >
       {error && (
         <div className="alert alert-error" role="alert">
           {error}
         </div>
       )}
-      <div className="relative mx-auto w-fit">
+      <div ref={surfaceRef} className="relative mx-auto w-fit">
         <canvas
-          key={`${pageNumber}-${availableWidth}-${zoom}`}
           ref={canvasRef}
           className="block bg-white shadow-sm"
           aria-label={`PDFの${pageNumber}ページ目`}
           role="img"
         />
-        {renderedPage?.availableWidth === availableWidth &&
-          renderedPage.zoom === zoom &&
+        {renderedPage && displayScale > 0 &&
           !disabled &&
           !error && (
-            <>
-              <PenLayer
-              key={`${editVersion}-${tool}-${penWidth}-${penColor}-${eraserWidth}-${renderedPage.scale}`}
+            <PenLayer
+              key={`${editVersion}-${tool}-${penWidth}-${penColor}-${eraserWidth}-${displayScale}`}
               strokes={strokes}
               penWidth={penWidth}
               penColor={penColor}
               tool={tool === "eraser" ? "eraser" : tool === "marker" ? "marker" : "pen"}
               interactive={tool === "pen" || tool === "marker" || tool === "eraser"}
               eraserWidth={eraserWidth}
-              pageScale={renderedPage.scale}
+              pageScale={displayScale}
               onStrokeComplete={onStrokeComplete}
               onStrokesChange={onStrokesChange}
             />
-            </>
           )}
         {/* 倍率・幅の再描画中も入力欄をアンマウントせず、入力中の文章を維持する。 */}
         {renderedPage && (texts.length > 0 || tool === "text" || tool === "sticky") && <TextLayer notes={texts} tool={tool}
-          disabled={disabled || !!error || renderedPage.availableWidth !== availableWidth || renderedPage.zoom !== zoom}
-          pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={renderedPage.scale}
+          disabled={disabled || !!error || displayScale <= 0}
+          pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={displayScale}
           onChange={onTextsChange} />}
       </div>
     </div>

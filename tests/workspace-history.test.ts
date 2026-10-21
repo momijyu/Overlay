@@ -16,6 +16,7 @@ let refCursor = 0;
 let deleteFails = false;
 let openFails = false;
 let persistFails = false;
+let persistWait: Promise<void> | null = null;
 let exportFails = true;
 const exported: Record<number, PenStroke[]>[] = [];
 const exportedTexts: (TextNotesByPage | undefined)[] = [];
@@ -43,6 +44,7 @@ mock.module("@/features/pdf-editor/localNotes", { exports: {
   saveLocalNote: async (input: LocalSaveInput) => {
     savedInputs.push(input);
     if (persistFails) throw new Error("容量不足");
+    if (persistWait) await persistWait;
     return input.noteId ?? "created";
   },
   deleteSavedNote: async () => { if (deleteFails) throw new Error("削除失敗"); },
@@ -67,12 +69,13 @@ mock.module("@/features/pdf-editor/exportAnnotatedPdf", { exports: {
 const { PdfWorkspace } = await import("@/features/pdf-editor/components/PdfWorkspace");
 const { PdfPage } = await import("@/features/pdf-editor/components/PdfPage");
 const { HistoryControls } = await import("@/features/pdf-editor/components/HistoryControls");
+const { ZoomControl } = await import("@/features/pdf-editor/components/ZoomControl");
 const { NotebookSidebar } = await import("@/features/pdf-editor/components/NotebookSidebar");
 const { NotebookDrawer } = await import("@/features/pdf-editor/components/NotebookDrawer");
 const { PenWidthControl } = await import("@/features/pdf-editor/components/PenWidthControl");
 const { EditorIcon } = await import("@/features/pdf-editor/components/EditorIcon");
 
-beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; persistFails = false; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; openedTexts = undefined; });
+beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; openedTexts = undefined; });
 
 function render() {
   stateCursor = 0;
@@ -106,6 +109,85 @@ function setup() {
 }
 
 const red: PenStroke = { width: 2.5, color: "#ff0000", points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
+
+function editorRow(name: string) {
+  return find(render(), (element) => (element.props as { "data-editor-row"?: string })["data-editor-row"] === name)! as React.ReactElement<React.ComponentProps<"div">>;
+}
+
+function assertStableToolRows() {
+  const row = editorRow("tools");
+  assert.match(row.props.className!, /h-14/);
+  assert.match(row.props.className!, /overflow-x-auto/);
+  assert.match(row.props.className!, /\[&>\*\]:shrink-0/);
+  assert.doesNotMatch(row.props.className!, /flex-wrap/);
+  const children = React.Children.toArray(row.props.children) as React.ReactElement<React.ComponentProps<"div">>[];
+  assert.equal(children.length, 3);
+  assert.equal(children[0].props["aria-label"], "編集ツール");
+  assert.equal(children[1].type, HistoryControls);
+  assert.equal(children[2].type, ZoomControl);
+  assert.equal(find(row, (element) => element.type === PenWidthControl), undefined);
+  assert.match(editorRow("settings").props.className!, /h-14/);
+  assert.match(editorRow("settings").props.className!, /overflow-x-auto/);
+  assert.equal(find(editorRow("settings"), (element) => element.type === HistoryControls), undefined);
+}
+
+test("道具切替で編集操作の並びを変えず、設定欄は空のときも同じ高さを確保する", () => {
+  const { calls } = setup();
+  for (const label of ["ペン", "マーカー", "消しゴム", "テキスト", "付箋"]) {
+    (button(label)!.props as { onClick: () => void }).onClick();
+    assertStableToolRows();
+    if (label === "テキスト" || label === "付箋") {
+      assert.equal(React.Children.toArray(editorRow("settings").props.children).length, 0);
+    }
+    if (label === "消しゴム") {
+      assert.equal(React.Children.toArray(editorRow("settings").props.children).length, 1); // サイズ操作だけ残す。
+      assert.equal(find(render(), (element) => element.type === "p"
+        && String((element.props as { children?: unknown }).children).includes("書き込みの触れた部分を消します")), undefined);
+      assert.equal(props(PdfPage).tool, "eraser");
+    }
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(props(HistoryControls).canUndo, false);
+});
+
+test("長いノート名・保存中・保存完了でも道具の行は移動させず、状態は同じ下部の欄に表示する", async () => {
+  setup();
+  props(NotebookSidebar).onOpen({ id: "other", title: "授業ノート" } as SavedNoteSummary);
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.equal(refs[1].current, false);
+  const longName = "長い授業ノート名".repeat(100);
+  props(NotebookSidebar).onRenamed("other", longName);
+  const title = find(render(), (element) => element.type === "p"
+    && (element.props as { title?: string }).title === longName)!;
+  assert.match((title.props as { className: string }).className, /truncate/);
+  assert.equal(find(editorRow("tools"), (element) => (element.props as { title?: string }).title === longName), undefined);
+  assertStableToolRows();
+  let finish!: () => void;
+  persistWait = new Promise<void>((resolve) => { finish = resolve; });
+  props(PdfPage).onStrokeComplete(red);
+  const saving = (refs[3].current as ReturnType<typeof createLocalAutosave>).flush();
+  await Promise.resolve();
+  try {
+    assert.equal(editorRow("status").props.children, "ノートを保存しています…");
+    assertStableToolRows();
+    assert.equal(find(editorRow("tools"), (element) => (element.props as { role?: string }).role === "status"), undefined);
+  } finally { finish(); await saving; }
+  assert.equal(editorRow("status").props.children, "このブラウザに保存済み");
+  assertStableToolRows();
+});
+
+test("スライダーとPDF上のズームを相互に反映し、保存や編集履歴には追加しない", () => {
+  const { calls } = setup();
+  props(ZoomControl).onChange(1.25);
+  assert.equal(props(PdfPage).zoom, 1.25);
+  props(PdfPage).onZoomChange(1.67);
+  assert.equal(props(ZoomControl).value, 1.67);
+  assert.equal(props(HistoryControls).canUndo, false);
+  assert.equal(calls.length, 0);
+  props(NotebookSidebar).onMutationChange(true);
+  assert.equal(props(ZoomControl).disabled, true);
+  assert.equal(props(PdfPage).disabled, true);
+});
 
 test("道具はアイコンだけを表示し、名前・選択状態・道具切替の接続を維持する", () => {
   const { calls } = setup();
