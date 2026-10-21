@@ -15,6 +15,7 @@ let stateCursor = 0;
 let refCursor = 0;
 let deleteFails = false;
 let openFails = false;
+let pdfFails = false;
 let persistFails = false;
 let persistWait: Promise<void> | null = null;
 let exportFails = true;
@@ -55,7 +56,7 @@ mock.module("@/features/pdf-editor/localNotes", { exports: {
 } });
 mock.module("pdfjs-dist/legacy/build/pdf.mjs", { exports: {
   GlobalWorkerOptions: {},
-  getDocument: () => ({ promise: Promise.resolve(pdf), destroy: async () => {} }),
+  getDocument: () => ({ promise: pdfFails ? Promise.reject(new Error("PDF解析失敗")) : Promise.resolve(pdf), destroy: async () => {} }),
 } });
 mock.module("@/features/pdf-editor/exportAnnotatedPdf", { exports: {
   exportAnnotatedPdf: async (_file: unknown, _pdf: unknown, strokes: Record<number, PenStroke[]>, texts?: TextNotesByPage) => {
@@ -74,8 +75,9 @@ const { NotebookSidebar } = await import("@/features/pdf-editor/components/Noteb
 const { NotebookDrawer } = await import("@/features/pdf-editor/components/NotebookDrawer");
 const { PenWidthControl } = await import("@/features/pdf-editor/components/PenWidthControl");
 const { EditorIcon } = await import("@/features/pdf-editor/components/EditorIcon");
+const { AppHeader } = await import("@/components/layout/AppHeader");
 
-beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; openedTexts = undefined; });
+beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; openedTexts = undefined; });
 
 function render() {
   stateCursor = 0;
@@ -131,13 +133,18 @@ function assertStableToolRows() {
   assert.equal(find(editorRow("settings"), (element) => element.type === HistoryControls), undefined);
 }
 
-test("道具切替で編集操作の並びを変えず、設定欄は空のときも同じ高さを確保する", () => {
+test("道具切替で編集操作の並びを変えず、テキスト・付箋も同じ高さの設定欄を使う", () => {
   const { calls } = setup();
   for (const label of ["ペン", "マーカー", "消しゴム", "テキスト", "付箋"]) {
     (button(label)!.props as { onClick: () => void }).onClick();
     assertStableToolRows();
     if (label === "テキスト" || label === "付箋") {
-      assert.equal(React.Children.toArray(editorRow("settings").props.children).length, 0);
+      const children = React.Children.toArray(editorRow("settings").props.children) as React.ReactElement<React.ComponentProps<"div">>[];
+      assert.equal(children.length, 1);
+      assert.equal(children[0].props["data-text-controls" as keyof React.ComponentProps<"div">], true);
+      const container = {} as HTMLDivElement;
+      (children[0].props.ref as (element: HTMLDivElement | null) => void)(container);
+      assert.equal(props(PdfPage).textControlsContainer, container);
     }
     if (label === "消しゴム") {
       assert.equal(React.Children.toArray(editorRow("settings").props.children).length, 1); // サイズ操作だけ残す。
@@ -150,7 +157,7 @@ test("道具切替で編集操作の並びを変えず、設定欄は空のと�
   assert.equal(props(HistoryControls).canUndo, false);
 });
 
-test("長いノート名・保存中・保存完了でも道具の行は移動させず、状態は同じ下部の欄に表示する", async () => {
+test("長いノート名・保存中・保存完了でも道具の行は移動させず、状態は名前横の同じ欄に表示する", async () => {
   setup();
   props(NotebookSidebar).onOpen({ id: "other", title: "授業ノート" } as SavedNoteSummary);
   for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
@@ -162,18 +169,76 @@ test("長いノート名・保存中・保存完了でも道具の行は移動�
   assert.match((title.props as { className: string }).className, /truncate/);
   assert.equal(find(editorRow("tools"), (element) => (element.props as { title?: string }).title === longName), undefined);
   assertStableToolRows();
+  const titleChildren = React.Children.toArray(editorRow("title").props.children) as React.ReactElement<Record<string, unknown>>[];
+  assert.equal(titleChildren.length, 2);
+  assert.equal(titleChildren[0].props.title, longName);
+  assert.equal(titleChildren[1].props["data-editor-row"], "status");
+  assert.match(String(titleChildren[1].props.className), /w-20 shrink-0 whitespace-nowrap/);
   let finish!: () => void;
   persistWait = new Promise<void>((resolve) => { finish = resolve; });
   props(PdfPage).onStrokeComplete(red);
   const saving = (refs[3].current as ReturnType<typeof createLocalAutosave>).flush();
   await Promise.resolve();
   try {
-    assert.equal(editorRow("status").props.children, "ノートを保存しています…");
+    assert.equal(editorRow("status").props.children, "保存中…");
     assertStableToolRows();
     assert.equal(find(editorRow("tools"), (element) => (element.props as { role?: string }).role === "status"), undefined);
   } finally { finish(); await saving; }
-  assert.equal(editorRow("status").props.children, "このブラウザに保存済み");
+  assert.equal(editorRow("status").props.children, "保存済み");
   assertStableToolRows();
+});
+
+test("保存状態は未編集・保存中・保存失敗・再試行後の保存済みを実際の保存結果に合わせて表示する", async () => {
+  setup();
+  const fileInput = find(render(), (element) => element.type === "input"
+    && (element.props as { id?: string }).id === "pdf-upload")!;
+  (fileInput.props as React.ComponentProps<"input">).onChange!({ target: { files: [file], value: file.name } } as unknown as React.ChangeEvent<HTMLInputElement>);
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.equal(refs[1].current, false);
+  assert.equal(editorRow("status").props.children, "未編集");
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
+  persistFails = true;
+  props(PdfPage).onStrokeComplete(red);
+  assert.equal(editorRow("status").props.children, "保存中…");
+  await autosave.flush();
+  assert.equal(editorRow("status").props.children, "保存失敗");
+  assert.match(editorRow("status").props.className!, /text-error/);
+  assert.ok(button("保存を再試行"));
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+  persistFails = false;
+  (button("保存を再試行")!.props as { onClick: () => void }).onClick();
+  await autosave.flush();
+  assert.equal(editorRow("status").props.children, "保存済み");
+  assert.equal(button("保存を再試行"), undefined);
+});
+
+test("前後のページは矢印だけを表示し、操作名・端の無効化とページ番号を維持する", () => {
+  const { calls } = setup();
+  function check(label: string, iconName: string, disabled: boolean) {
+    const control = button(label)!.props as React.ComponentProps<"button">;
+    assert.equal(control["aria-label"], label);
+    assert.equal(control.title, label);
+    assert.equal(control.disabled, disabled);
+    assert.match(control.className!, /btn-square/);
+    const children = React.Children.toArray(control.children) as React.ReactElement<{ name: string }>[];
+    assert.equal(children.length, 1);
+    assert.equal(children[0].type, EditorIcon);
+    assert.equal(children[0].props.name, iconName);
+    return control.onClick as () => void;
+  }
+  check("前のページ", "previous-page", true)();
+  assert.equal(props(PdfPage).pageNumber, 1);
+  check("次のページ", "next-page", false)();
+  assert.equal(props(PdfPage).pageNumber, 2);
+  check("前のページ", "previous-page", false);
+  check("次のページ", "next-page", false)();
+  assert.equal(props(PdfPage).pageNumber, 3);
+  check("次のページ", "next-page", true)();
+  assert.equal(props(PdfPage).pageNumber, 3);
+  const counter = find(render(), (element) => element.type === "span"
+    && (element.props as { "aria-live"?: string })["aria-live"] === "polite")!;
+  assert.equal(React.Children.toArray((counter.props as { children: React.ReactNode }).children).join(""), "3 / 3");
+  assert.equal(calls.length, 0);
 });
 
 test("スライダーとPDF上のズームを相互に反映し、保存や編集履歴には追加しない", () => {
@@ -256,8 +321,15 @@ test("一覧は初期状態で閉じ、開閉してもPDFの倍率・内容・�
   const before = props(PdfPage);
   const savedCount = calls.length;
   assert.equal(props(NotebookDrawer).open, false);
-  props(NotebookDrawer).onOpen();
+  const headerButton = find(props(AppHeader).children, (element) => element.type === "button")!;
+  const trigger = headerButton.props as React.ComponentProps<"button">;
+  assert.equal(trigger["aria-label"], "ノート一覧を開く");
+  assert.equal(trigger["aria-controls"], "notebook-sidebar");
+  assert.equal(trigger["aria-expanded"], false);
+  assert.equal(trigger["aria-haspopup"], "dialog");
+  (button("ノート一覧を開く")!.props as { onClick: () => void }).onClick();
   assert.equal(props(NotebookDrawer).open, true);
+  assert.equal((button("ノート一覧を開く")!.props as React.ComponentProps<"button">)["aria-expanded"], true);
   assert.equal(props(PdfPage).strokes, before.strokes);
   assert.deepEqual(props(PdfPage).texts, before.texts);
   assert.equal(props(PdfPage).zoom, before.zoom);
@@ -269,9 +341,61 @@ test("一覧は初期状態で閉じ、開閉してもPDFの倍率・内容・�
   assert.equal(find(render(), (element) => element.type === "aside"), undefined);
 });
 
+test("編集中はファイル選択枠を隠し、保管案内を出力付近に1つだけ残す。削除後は選択枠へ戻る", async () => {
+  setup();
+  function uploadArea() {
+    return find(render(), (element) => element.type === "div"
+      && "data-pdf-upload" in (element.props as Record<string, unknown>))!;
+  }
+  assert.equal((uploadArea().props as { hidden: boolean }).hidden, true);
+  const actionsContainer = find(render(), (element) => element.type === "div"
+    && React.Children.toArray((element.props as { children?: React.ReactNode }).children).some((child) =>
+      React.isValidElement<{ "data-editor-row"?: string }>(child) && child.props["data-editor-row"] === "actions"))!;
+  const rows = React.Children.toArray((actionsContainer.props as { children: React.ReactNode }).children);
+  assert.equal((rows.at(-1) as React.ReactElement<Record<string, unknown>>).props["data-pdf-backup-notice"], true);
+  await props(NotebookSidebar).onDelete("existing");
+  assert.equal((uploadArea().props as { hidden: boolean }).hidden, false);
+  assert.ok(find(render(), (element) => element.type === "p"
+    && "data-pdf-backup-notice" in (element.props as Record<string, unknown>)));
+});
+
+test("メニューからのPDF選択はキャンセル・失敗で内容を維持し、成功時だけ切り替えて一覧を閉じる", async () => {
+  const { autosave } = setup();
+  props(PdfPage).onStrokeComplete(red);
+  await autosave.flush();
+  const before = props(PdfPage);
+  (button("ノート一覧を開く")!.props as { onClick: () => void }).onClick();
+  const select = (files: File[]) => {
+    const target = { files, value: "selected.pdf" };
+    props(NotebookDrawer).onFileChange({ target } as unknown as React.ChangeEvent<HTMLInputElement>);
+    assert.equal(target.value, ""); // 同じファイルを再選択できる。
+  };
+  select([]);
+  assert.equal(props(PdfPage).strokes, before.strokes);
+  assert.equal(props(NotebookDrawer).open, true);
+  const nextFile = new File(["new pdf"], "次の授業.pdf", { type: "application/pdf" });
+  const settle = async () => {
+    for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+    assert.equal(refs[1].current, false);
+  };
+  pdfFails = true;
+  select([nextFile]); await settle();
+  assert.equal(props(PdfPage).strokes, before.strokes);
+  assert.equal(props(HistoryControls).canUndo, true);
+  assert.equal(props(NotebookDrawer).open, true);
+  pdfFails = false;
+  select([nextFile]); await settle();
+  assert.deepEqual(props(PdfPage).strokes, []);
+  assert.equal(props(HistoryControls).canUndo, false);
+  assert.equal(props(NotebookDrawer).open, false);
+  assert.equal(savedInputs.length, 0); // 開いただけでは新しいPDFを保存しない。
+  assert.ok(find(render(), (element) => element.type === "p"
+    && (element.props as { title?: string }).title === "次の授業"));
+});
+
 test("別ノートを読み込めた時だけ一覧を閉じ、失敗時は一覧とエラーを残す", async () => {
   setup();
-  props(NotebookDrawer).onOpen();
+  (button("ノート一覧を開く")!.props as { onClick: () => void }).onClick();
   openFails = true;
   props(NotebookSidebar).onOpen({ id: "other", title: "授業メモ" } as SavedNoteSummary);
   for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
@@ -285,9 +409,10 @@ test("別ノートを読み込めた時だけ一覧を閉じ、失敗時は一�
 
 test("一覧を閉じても整理中の編集ロックを解除しない", () => {
   setup();
-  props(NotebookDrawer).onOpen();
+  (button("ノート一覧を開く")!.props as { onClick: () => void }).onClick();
   props(NotebookSidebar).onMutationChange(true);
   assert.equal(props(NotebookDrawer).busy, true);
+  assert.equal(props(NotebookDrawer).pdfOpenDisabled, true);
   assert.equal(props(PdfPage).disabled, true);
   props(NotebookDrawer).onClose();
   assert.equal(props(PdfPage).disabled, true);
@@ -410,11 +535,11 @@ test("画面の描画・消去・Undo・Redoが同じ履歴と自動保存へ接
 test("別ページでのUndoは対象ページを表示し、新規描画でRedoを無効化する", () => {
   setup();
   props(PdfPage).onStrokeComplete(red);
-  const next = find(render(), (element) => element.type === "button" && (element.props as { children?: string }).children === "次へ")!;
+  const next = button("次のページ")!;
   (next.props as { onClick: () => void }).onClick();
   assert.equal(props(PdfPage).pageNumber, 2);
   props(PdfPage).onStrokeComplete(red);
-  const previous = find(render(), (element) => element.type === "button" && (element.props as { children?: string }).children === "前へ")!;
+  const previous = button("前のページ")!;
   (previous.props as { onClick: () => void }).onClick();
   assert.equal(props(PdfPage).pageNumber, 1);
   props(HistoryControls).onUndo();

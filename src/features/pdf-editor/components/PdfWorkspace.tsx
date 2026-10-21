@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
+import { AppHeader } from "@/components/layout/AppHeader";
 
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { pdfDownloadName } from "../pdfDownloadName";
@@ -64,6 +65,7 @@ export function PdfWorkspace() {
   const [savedTexts, setSavedTexts] = useState<TextNotesByPage | null>(null);
   const [markerWidth, setMarkerWidth] = useState(DEFAULT_MARKER_WIDTH);
   const [markerColor, setMarkerColor] = useState(MARKER_COLOR);
+  const [textControlsContainer, setTextControlsContainer] = useState<HTMLDivElement | null>(null);
   const mountedRef = useRef(false);
   const operationRef = useRef(false);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
@@ -285,10 +287,26 @@ export function PdfWorkspace() {
     }
   }
 
+  const statusText = isExporting ? "出力中…" : saveError ? "保存失敗" : isSaving ? "保存中…"
+    : hasUnsavedChanges ? "未保存" : noteId ? "保存済み" : "未編集";
+  const backupNotice = <p className="text-sm text-red-400" data-pdf-backup-notice>
+    ※ 重要なノートは定期的に『PDFをダウンロード』して保管してください。
+  </p>;
+
   return (
-    <div className="flex flex-col gap-3">
+    <div className="min-h-screen bg-base-200">
+      <AppHeader>
+        <button type="button" className="btn btn-sm btn-square" aria-label="ノート一覧を開く"
+          title="ノート一覧" aria-haspopup="dialog" aria-controls="notebook-sidebar"
+          aria-expanded={sidebarVisible} onClick={() => setSidebarVisible(true)}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5" fill="none"
+            stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+      </AppHeader>
       <NotebookDrawer open={sidebarVisible} busy={isOrganizing}
-        onOpen={() => setSidebarVisible(true)} onClose={() => setSidebarVisible(false)}>
+        onFileChange={handleFileChange} pdfOpenDisabled={isBusy} onClose={() => setSidebarVisible(false)}>
           {error && <p role="alert" className="px-4 pt-3 text-error">{error}</p>}
           {isLoading && <p role="status" className="px-4 pt-3">PDFを読み込んでいます…</p>}
           <NotebookSidebar
@@ -308,9 +326,10 @@ export function PdfWorkspace() {
             }}
           />
       </NotebookDrawer>
+      <main className="mx-auto w-full max-w-6xl p-4 sm:p-6">
         <section className="card min-w-0 w-full border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body gap-5">
-            <div>
+            <div hidden={!!document && !!file} data-pdf-upload>
               <label className="label" htmlFor="pdf-upload">
                 PDFファイル
               </label>
@@ -324,9 +343,7 @@ export function PdfWorkspace() {
               />
             </div>
 
-            <p className="text-sm text-base-content/70">
-              重要なノートは定期的に『PDFをダウンロード』して保管してください。
-            </p>
+            {(!document || !file) && backupNotice}
 
             {error && (
               <div className="alert alert-error" role="alert">
@@ -344,9 +361,15 @@ export function PdfWorkspace() {
             {document && file && (
               <>
                 <div className="min-w-0 space-y-3">
-                  <p className="min-w-0 truncate" title={noteName || file.name}>
-                    {noteName}
-                  </p>
+                  <div data-editor-row="title" className="flex h-6 min-w-0 items-center gap-3">
+                    <p className="min-w-0 flex-1 truncate" title={noteName || file.name}>
+                      {noteName}
+                    </p>
+                    <span data-editor-row="status" role="status"
+                      className={`w-20 shrink-0 whitespace-nowrap text-right text-xs ${saveError ? "text-error" : "text-base-content/60"}`}>
+                      {statusText}
+                    </span>
+                  </div>
                   {/* 道具の列は設定やノート名と分け、切り替えても折り返さない。 */}
                   <div data-editor-row="tools" role="group" aria-label="編集操作"
                     className="flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
@@ -362,7 +385,7 @@ export function PdfWorkspace() {
                       disabled={isBusy} onUndo={handleUndo} onRedo={handleRedo} />
                     <ZoomControl value={zoom} disabled={isBusy} onChange={setZoom} />
                   </div>
-                  {/* 設定のない道具でも高さを維持し、下の操作とPDFを押し上げない。 */}
+                  {/* 高さは維持し、テキスト・付箋の操作もこの行へ表示する。 */}
                   <div data-editor-row="settings" role="group" aria-label="道具の設定"
                     className="flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
                     {/* マーカーの表示の挙動めっちゃすき。 */}
@@ -383,6 +406,9 @@ export function PdfWorkspace() {
                     {penTool === "eraser" && <EraserSizeControl
                       value={eraserWidth} disabled={isBusy} onChange={setEraserWidth}
                     />}
+                    {(penTool === "text" || penTool === "sticky") && <div
+                      ref={setTextControlsContainer} data-text-controls
+                      className="flex items-center gap-2" />}
                   </div>
                   <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
                     <button
@@ -393,43 +419,39 @@ export function PdfWorkspace() {
                     >
                       PDFをダウンロード
                     </button>
-                    <div className="join shrink-0" aria-label="ページ切り替え">
+                    <div className="join shrink-0" role="group" aria-label="ページ切り替え">
                       <button
-                        className="btn join-item"
+                        className="btn btn-square join-item"
                         type="button"
+                        aria-label="前のページ" title="前のページ"
                         disabled={isLoading || pageNumber === 1}
-                        onClick={() => setPageNumber((page) => page - 1)}
+                        onClick={() => { if (!isLoading && pageNumber > 1) setPageNumber((page) => page - 1); }}
                       >
-                        前へ
+                        <EditorIcon name="previous-page" />
                       </button>
-                      <span className="btn join-item pointer-events-none" aria-live="polite">
+                      <span className="btn join-item pointer-events-none min-w-20 tabular-nums" aria-live="polite">
                         {pageNumber} / {document.numPages}
                       </span>
                       <button
-                        className="btn join-item"
+                        className="btn btn-square join-item"
                         type="button"
+                        aria-label="次のページ" title="次のページ"
                         disabled={isLoading || pageNumber === document.numPages}
-                        onClick={() => setPageNumber((page) => page + 1)}
+                        onClick={() => { if (!isLoading && pageNumber < document.numPages) setPageNumber((page) => page + 1); }}
                       >
-                        次へ
+                        <EditorIcon name="next-page" />
                       </button>
                     </div>
                   </div>
+                  {backupNotice}
                 </div>
-                <p data-editor-row="status" className="min-h-5 text-sm" role="status">
-                  {isExporting ? "PDFを書き出しています…" : isSaving ? "ノートを保存しています…"
-                    : saveError ? "未保存の変更があります" : noteId
-                    ? !hasUnsavedChanges
-                      ? "このブラウザに保存済み"
-                      : "未保存の変更があります"
-                    : hasUnsavedChanges ? "未保存の変更があります" : "未編集（書き込みを始めると自動保存）"}
-                </p>
                 <PdfPage
                   key={`${documentVersion}-${pageNumber}`}
                   document={document}
                   pageNumber={pageNumber}
                   strokes={strokesByPage[pageNumber] ?? []}
                   texts={history.textsByPage[pageNumber] ?? []}
+                  textControlsContainer={textControlsContainer}
                   onTextsChange={updatePageTexts}
                   editVersion={history.version}
                   penWidth={penTool === "marker" ? markerWidth : penWidth}
@@ -448,6 +470,7 @@ export function PdfWorkspace() {
             )}
           </div>
         </section>
+      </main>
     </div>
   );
 }

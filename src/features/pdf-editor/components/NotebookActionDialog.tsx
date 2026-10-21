@@ -46,7 +46,7 @@ export function NotebookActionDialog({ action, library, busy, error, onClose, on
   const hasDestination = !movingItem || canMoveItem(movingItem, null, library)
     || choices.some((folder) => canMoveItem(movingItem, folder.id, library));
   const title = action.kind === "create-folder" ? "フォルダ作成"
-    : action.kind === "edit-note" ? "ノート名・保存先"
+    : action.kind === "edit-note" ? "ノート名・フォルダ"
     : action.kind === "delete-note" ? "ノート削除"
     : renaming ? "フォルダ名変更" : deleting ? "空フォルダ削除" : "フォルダ移動";
 
@@ -64,7 +64,8 @@ export function NotebookActionDialog({ action, library, busy, error, onClose, on
   return (
     <dialog ref={dialogRef} className="modal" aria-labelledby="notebook-action-heading"
       onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
-      <div className="modal-box max-w-md">
+      {/* 一覧のmodal-startから継承する左右別の角丸を、確認画面では使わない。 */}
+      <div className="modal-box max-w-md rounded-box">
         <h3 id="notebook-action-heading" className="mb-4 text-lg font-semibold">{title}</h3>
         <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-3">
           {action.kind === "delete-note" ? <p className="break-all">{action.note.title}</p>
@@ -81,7 +82,7 @@ export function NotebookActionDialog({ action, library, busy, error, onClose, on
             <select id="notebook-destination" className="select w-full" value={destination}
               disabled={busy} onChange={(event) => setDestination(event.target.value)}>
               <option value="root" disabled={movingItem !== null && !canMoveItem(movingItem, null, library)}>
-                最上位{movingItem && initialParent === null ? "（現在）" : ""}
+                一番上{movingItem && initialParent === null ? "（現在）" : ""}
               </option>
               {choices.filter((folder) => !movingItem || folder.id === initialParent || canMoveItem(movingItem, folder.id, library))
                 .map((folder) => (

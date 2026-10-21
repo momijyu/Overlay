@@ -69,11 +69,12 @@ function fixture() {
   }) } as unknown as PDFDocumentProxy;
   let zoom = 1;
   let disabled = false;
+  const textControlsContainer = {} as HTMLDivElement;
   function render() {
     stateIndex = 0; refIndex = 0; effectIndex = 0;
     const element = PdfPage({ document, pageNumber: 1, strokes: [], texts: [], editVersion: 0,
       penWidth: 2.5, penColor: "#000000", tool: "text", eraserWidth: 16,
-      zoom, disabled, onZoomChange: changeZoom, onStrokeComplete: () => {}, onStrokesChange: () => {}, onTextsChange: () => {},
+      zoom, disabled, textControlsContainer, onZoomChange: changeZoom, onStrokeComplete: () => {}, onStrokesChange: () => {}, onTextsChange: () => {},
     });
     refs[0].current = viewport;
     refs[1].current = canvas;
@@ -89,7 +90,7 @@ function fixture() {
     viewport.dispatchEvent(event);
     return event;
   }
-  return { render, tasks, canvas, viewport, draws, wheel, setZoom: changeZoom,
+  return { render, tasks, canvas, viewport, draws, wheel, textControlsContainer, setZoom: changeZoom,
     disable: () => { disabled = true; }, zoom: () => zoom,
     cleanup: () => effects.forEach((entry) => entry.cleanup?.()),
   };
@@ -119,6 +120,7 @@ test("倍率変更中も表示キャンバスを消さず、PDF・線・文章�
   f.tasks[0].resolve(); await flush();
   const initial = f.render();
   const textKey = childElement(initial, TextLayer).key;
+  assert.equal(childProps(initial, TextLayer).controlsContainer, f.textControlsContainer);
   assert.equal(f.canvas.style.width, "400px");
   const width = f.canvas.width;
   f.setZoom(1.5);
@@ -129,6 +131,7 @@ test("倍率変更中も表示キャンバスを消さず、PDF・線・文章�
   assert.equal(childProps(pending, PenLayer).pageScale, 1);
   assert.equal(childProps(pending, TextLayer).pageScale, 1);
   assert.equal(childProps(pending, TextLayer).disabled, false);
+  assert.equal(childProps(pending, TextLayer).controlsContainer, f.textControlsContainer);
   assert.equal(childElement(pending, TextLayer).key, textKey); // 倍率をkeyに含めず、入力欄を保持する。
   t.mock.timers.tick(100); await flush();
   assert.notEqual(f.tasks[1].canvas, f.canvas);

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { EditorTool } from "../types";
 
-export type EditorIconName = EditorTool | "undo" | "redo";
+export type EditorIconName = EditorTool | "undo" | "redo" | "previous-page" | "next-page";
 
 // Lucide 1.59.0の公式SVGをインライン化。図形は変更せず、表示サイズと線幅は従来どおり。
 // Source: https://github.com/lucide-icons/lucide/tree/1.59.0/icons
@@ -51,6 +51,8 @@ export function EditorIcon({ name }: { name: EditorIconName }) {
       <path d="m15 14 5-5-5-5" />
       <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" />
     </>,
+    "previous-page": <path d="m15 18-6-6 6-6" />,
+    "next-page": <path d="m9 18 6-6-6-6" />,
   } satisfies Record<EditorIconName, ReactNode>;
 
   return <svg viewBox="0 0 24 24" className="size-6 shrink-0" fill="none" stroke="currentColor"

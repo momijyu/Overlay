@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { beforeEach, mock } from "node:test";
 import * as React from "react";
+import * as ReactDOM from "react-dom";
 import { readFileSync } from "node:fs";
 import fontkit from "@pdf-lib/fontkit";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -12,6 +13,15 @@ let states: { value: unknown }[] = [];
 let refs: { current: unknown }[] = [];
 let stateCursor = 0;
 let refCursor = 0;
+const portalTargets: Element[] = [];
+// 表示先への接続を検証する。実DOM上の配置はChromeで別途確認する。
+mock.module("react-dom", { exports: {
+  ...ReactDOM,
+  createPortal: (children: React.ReactNode, container: Element) => {
+    portalTargets.push(container);
+    return React.createElement(React.Fragment, null, children);
+  },
+} });
 mock.module("react", { exports: {
   ...React,
   useEffect: () => {},
@@ -27,7 +37,7 @@ mock.module("react", { exports: {
 const { TextLayer } = await import("@/features/pdf-editor/components/TextLayer");
 const { TextNoteDialog } = await import("@/features/pdf-editor/components/TextNoteDialog");
 const { TextBoxEditor } = await import("@/features/pdf-editor/components/TextBoxEditor");
-beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; });
+beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; portalTargets.length = 0; });
 
 function find(node: React.ReactNode, predicate: (element: React.ReactElement) => boolean): React.ReactElement | undefined {
   for (const child of React.Children.toArray(node)) {
@@ -43,10 +53,13 @@ const note: TextNote = { id: "one", kind: "text", text: "授業", x: 0.1, y: 0.1
 function fixture(tool: EditorTool, initial: TextNote[] = []) {
   let notes = initial;
   let updates = 0;
+  let disabled = false;
+  let controlsContainer: HTMLDivElement | null = {} as HTMLDivElement;
   function render() {
     stateCursor = 0;
     refCursor = 0;
-    return TextLayer({ notes, tool, pageWidth: 400, pageHeight: 600, onChange: (next) => { updates++; notes = next; } });
+    return TextLayer({ notes, tool, pageWidth: 400, pageHeight: 600, controlsContainer, disabled,
+      onChange: (next) => { updates++; notes = next; } });
   }
   function handlers() {
     return find(render(), (element) => element.type === "svg")!.props as Record<string, (event: unknown) => void>;
@@ -59,8 +72,54 @@ function fixture(tool: EditorTool, initial: TextNote[] = []) {
       target: { closest: (selector: string) => selector === "[data-note-action]"
         ? action ? { getAttribute: () => action } : null : id ? { getAttribute: () => id } : null } };
   }
-  return { render, handlers, editor, event, getNotes: () => notes, getUpdates: () => updates };
+  return { render, handlers, editor, event, getNotes: () => notes, getUpdates: () => updates,
+    getControlsContainer: () => controlsContainer,
+    removeControlsContainer: () => { controlsContainer = null; }, disable: () => { disabled = true; } };
 }
+
+test("テキスト・付箋のボタンは設定行へ渡し、PDF右上に操作欄を重ねない", () => {
+  for (const tool of ["text", "sticky"] as const) {
+    states = []; refs = []; portalTargets.length = 0;
+    const f = fixture(tool);
+    const rendered = f.render();
+    assert.equal(portalTargets.length, 1);
+    assert.equal(portalTargets[0], f.getControlsContainer());
+    const controls = find(rendered, (element) => (element.props as { role?: string }).role === "group")!;
+    assert.equal((controls.props as React.ComponentProps<"div">)["aria-label"], tool === "sticky" ? "付箋の操作" : "テキストの操作");
+    assert.doesNotMatch((controls.props as React.ComponentProps<"div">).className!, /absolute|right-0|top-0/);
+    assert.equal(f.getUpdates(), 0);
+  }
+});
+
+test("設定行がない間・操作不可・ペン選択中はボタンをPDF上へ戻さない", () => {
+  for (const mode of ["missing", "disabled", "pen"] as const) {
+    states = []; refs = []; portalTargets.length = 0;
+    const f = fixture(mode === "pen" ? "pen" : "text");
+    if (mode === "missing") f.removeControlsContainer();
+    if (mode === "disabled") f.disable();
+    assert.equal(find(f.render(), (element) => element.type === "button"), undefined);
+    assert.equal(portalTargets.length, 0);
+    assert.equal(f.getUpdates(), 0);
+  }
+});
+
+test("設定行へ移した文章編集・削除ボタンも選択中のメモだけを操作する", () => {
+  const f = fixture("text", [note, { ...note, id: "two", text: "別のメモ" }]);
+  f.handlers().onPointerDown(f.event(50, 80, note.id));
+  f.editor().onCommit(note);
+  function click(label: string) {
+    const button = find(f.render(), (element) => element.type === "button"
+      && (element.props as { children?: string }).children === label)!;
+    (button.props as React.ComponentProps<"button">).onClick!({} as React.MouseEvent<HTMLButtonElement>);
+  }
+  click("文章編集");
+  assert.equal(f.editor().note.id, note.id);
+  f.editor().onCommit({ ...note, text: "修正" });
+  assert.equal(f.getUpdates(), 1);
+  click("削除");
+  assert.deepEqual(f.getNotes().map((item) => item.id), ["two"]);
+  assert.equal(f.getUpdates(), 2);
+});
 
 test("テキスト・付箋は直接入力の確定まで保存せず、キャンセルした新規入力を残さない", () => {
   for (const tool of ["text", "sticky"] as const) {

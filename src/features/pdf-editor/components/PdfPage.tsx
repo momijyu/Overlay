@@ -17,6 +17,7 @@ type PdfPageProps = {
   penColor: string;
   tool: EditorTool;
   texts?: TextNote[];
+  textControlsContainer?: HTMLDivElement | null;
   onTextsChange: (notes: TextNote[]) => void;
   eraserWidth: number;
   zoom: number;
@@ -35,6 +36,7 @@ export function PdfPage({
   penColor,
   tool,
   texts = [],
+  textControlsContainer = null,
   onTextsChange,
   eraserWidth,
   zoom,
@@ -201,6 +203,7 @@ export function PdfPage({
           )}
         {/* 倍率・幅の再描画中も入力欄をアンマウントせず、入力中の文章を維持する。 */}
         {renderedPage && (texts.length > 0 || tool === "text" || tool === "sticky") && <TextLayer notes={texts} tool={tool}
+          controlsContainer={textControlsContainer}
           disabled={disabled || !!error || displayScale <= 0}
           pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={displayScale}
           onChange={onTextsChange} />}

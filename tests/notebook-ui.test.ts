@@ -10,6 +10,7 @@ import { NotebookSidebar } from "@/features/pdf-editor/components/NotebookSideba
 import { buildNoteTree, folderChoices } from "@/features/pdf-editor/noteTree";
 import type { NoteLibrary } from "@/features/pdf-editor/types";
 import { canMoveItem } from "@/features/pdf-editor/noteDrag";
+import Home from "@/app/page";
 
 const library: NoteLibrary = {
   foldersEnabled: true,
@@ -24,10 +25,25 @@ const library: NoteLibrary = {
 test("編集画面はサーバー描画でIndexedDBを開かず、定期的なPDF保管だけを案内する", () => {
   const html = renderToStaticMarkup(createElement(PdfWorkspace));
   assert.match(html, /重要なノートは定期的に『PDFをダウンロード』して保管してください/);
+  const notice = html.match(/<p[^>]*data-pdf-backup-notice[^>]*>[\s\S]*?<\/p>/)![0];
+  assert.match(notice, /class="text-sm text-red-400"/);
+  assert.match(notice, />※ 重要なノートは/);
   assert.doesNotMatch(html, /保存先はこのブラウザ|最初の線を描き終えた時から自動保存|PDFを開いただけでは保存しません/);
   assert.doesNotMatch(html, /別の端末・ブラウザ・URL|サイトデータを削除すると|一定期間アクセスがないと|iOS Safari/);
   assert.doesNotMatch(html, /以前のSupabase|以前のノート|移行と再編集用バックアップ|編集履歴は直近/);
   assert.match(html, /id="pdf-upload"/);
+});
+
+test("初期画面のヘッダーは1つで、Overlayの左に一覧ボタンを置き、PDFの選択操作も維持する", () => {
+  const html = renderToStaticMarkup(createElement(Home));
+  assert.equal((html.match(/<header\b/g) ?? []).length, 1);
+  assert.equal((html.match(/<main\b/g) ?? []).length, 1);
+  const header = html.match(/<header\b[\s\S]*?<\/header>/)![0];
+  assert.ok(header.indexOf('aria-label="ノート一覧を開く"') < header.indexOf(">Overlay<"));
+  assert.match(header, /aria-expanded="false"/);
+  assert.match(html, /id="pdf-upload"/);
+  assert.match(html, /PDFを追加/);
+  assert.equal((html.match(/重要なノートは定期的に/g) ?? []).length, 1);
 });
 
 test("未選択・読み込み中・他操作中も操作メニュー自体は有効で、未選択の案内を出す", () => {
@@ -39,6 +55,13 @@ test("未選択・読み込み中・他操作中も操作メニュー自体は�
     const summary = html.match(/<summary[^>]*>操作<\/summary>/)?.[0];
     assert.ok(summary);
     assert.doesNotMatch(summary, /disabled|tabindex/i);
+    assert.match(html, /class="relative flex min-w-0 gap-2" data-notebook-actions/);
+    assert.match(html, /<details class="dropdown static">/);
+    const menu = html.match(/<ul class="menu dropdown-content[^>]+>/)![0];
+    assert.match(menu, /start-0/);
+    assert.match(menu, /w-full min-w-0 max-w-64/);
+    assert.match(menu, /\[&amp;_button\]:whitespace-normal/);
+    assert.match(menu, /\[&amp;_button\]:break-words/);
     assert.match(html, /<button[^>]*disabled="">ノートまたはフォルダを選択してください<\/button>/);
   }
 });
@@ -48,6 +71,22 @@ function dialog(action: NotebookAction, busy = false, error: string | null = nul
     action, library: dialogLibrary, busy, error, onClose: () => {}, onSubmit: async () => {},
   }));
 }
+
+test("ノート・フォルダの管理画面はサイドメニューの片側角丸を使わず、四隅を統一する", () => {
+  const actions: NotebookAction[] = [
+    { kind: "create-folder", parentId: null },
+    { kind: "edit-note", note: library.notes[0] },
+    { kind: "delete-note", note: library.notes[0] },
+    { kind: "move-folder", folder: library.folders[1] },
+    { kind: "rename-folder", folder: library.folders[1] },
+    { kind: "delete-folder", folder: library.folders[2] },
+  ];
+  for (const action of actions) {
+    const html = dialog(action);
+    assert.match(html, /<div class="modal-box max-w-md rounded-box">/);
+    assert.doesNotMatch(html, /modal-start|rounded-none/);
+  }
+});
 
 test("ノート削除は対象名と取り消せない確認を表示し、名前・移動先入力を出さない", () => {
   const action: NotebookAction = { kind: "delete-note", note: library.notes[0] };
@@ -154,12 +193,13 @@ test("ノート整理は元の名前・保存先を維持して表示する", ()
   const html = dialog({ kind: "edit-note", note: library.notes[0] });
   assert.match(html, /value="ノート1"/);
   assert.match(html, /value="subject" selected=""/);
-  assert.match(html, /ノート名・保存先/);
+  assert.match(html, /ノート名・フォルダ/);
+  assert.doesNotMatch(html, /保存先|最上位/);
 });
 
 test("フォルダ移動は現在の場所を説明し、自己・子孫を候補にしない", () => {
   const html = dialog({ kind: "move-folder", folder: library.folders[0] });
-  assert.match(html, /最上位（現在）/);
+  assert.match(html, /一番上（現在）/);
   assert.match(html, /別の移動先を選択してください。/);
   assert.match(html, /type="submit"[^>]*disabled=""/);
   assert.doesNotMatch(html, /option value="year"|option value="subject"/);
@@ -171,7 +211,7 @@ test("子フォルダの移動では現在の親を残し、最上位も候補�
   const html = dialog({ kind: "move-folder", folder: library.folders[1] });
   assert.match(html, /value="year" disabled="" selected=""/);
   assert.match(html, /2026（現在）/);
-  assert.match(html, /option value="root">最上位/);
+  assert.match(html, /option value="root">一番上/);
 });
 
 test("移動先が存在しない場合は別フォルダの作成を案内する", () => {

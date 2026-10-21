@@ -5,10 +5,10 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { EditorIcon, type EditorIconName } from "@/features/pdf-editor/components/EditorIcon";
 
-test("道具とUndo・Redoの7種類を同じ線幅のSVGで描き、絵文字・画像・表示用テキストを使わない", () => {
-  const names: EditorIconName[] = ["pen", "marker", "eraser", "text", "sticky", "undo", "redo"];
+test("道具・Undo・Redo・ページ矢印の9種類を同じ線幅のSVGで描き、絵文字・画像・表示用テキストを使わない", () => {
+  const names: EditorIconName[] = ["pen", "marker", "eraser", "text", "sticky", "undo", "redo", "previous-page", "next-page"];
   const drawings = names.map((name) => renderToStaticMarkup(EditorIcon({ name })));
-  assert.equal(new Set(drawings).size, 7);
+  assert.equal(new Set(drawings).size, 9);
   for (const html of drawings) {
     assert.match(html, /viewBox="0 0 24 24"/);
     assert.match(html, /stroke="currentColor" stroke-width="1.75"/);
@@ -19,7 +19,7 @@ test("道具とUndo・Redoの7種類を同じ線幅のSVGで描き、絵文字�
   }
 });
 
-test("Lucide 1.59.0の7種類の図形を維持し、表示サイズと線幅は従来のままにする", () => {
+test("Lucide 1.59.0の9種類の図形を維持し、表示サイズと線幅は従来のままにする", () => {
   // 固定タグの公式SVGから取得したpath。取得元の対応はdocs/icon-sources.mdへ記録。
   const paths: Record<EditorIconName, string[]> = {
     pen: ["M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z", "m15 5 4 4"],
@@ -30,6 +30,8 @@ test("Lucide 1.59.0の7種類の図形を維持し、表示サイズと線幅は
     sticky: ["M21 9a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 15 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z", "M15 3v5a1 1 0 0 0 1 1h5"],
     undo: ["M9 14 4 9l5-5", "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"],
     redo: ["m15 14 5-5-5-5", "M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"],
+    "previous-page": ["m15 18-6-6 6-6"],
+    "next-page": ["m9 18 6-6-6-6"],
   };
   for (const name of Object.keys(paths) as EditorIconName[]) {
     const markup = renderToStaticMarkup(EditorIcon({ name }));
@@ -46,7 +48,7 @@ test("配信するLucideライセンス全文が取得元と一致し、出典�
   const sources = readFileSync(new URL("../docs/icon-sources.md", import.meta.url), "utf8");
   assert.match(sources, /1\.59\.0/);
   assert.match(sources, /\/licenses\/lucide-LICENSE\.txt/);
-  for (const name of ["pencil", "highlighter", "eraser", "square-dashed-text", "sticky-note", "undo-2", "redo-2"]) {
+  for (const name of ["pencil", "highlighter", "eraser", "square-dashed-text", "sticky-note", "undo-2", "redo-2", "chevron-left", "chevron-right"]) {
     assert.ok(sources.includes(`1.59.0/icons/${name}.svg`));
   }
 });

@@ -53,7 +53,7 @@ export function NotebookSidebar(props: SidebarProps) {
   const currentNote = result.library.notes.find((note) => note.id === props.currentNoteId);
   // 選択中のフォルダではなく、実際に開いているノートの所属先を示す。
   const currentNotePath = currentNote
-    ? folderChoices(result.tree).find((folder) => folder.id === currentNote.folderId)?.path ?? "最上位"
+    ? folderChoices(result.tree).find((folder) => folder.id === currentNote.folderId)?.path ?? "一番上"
     : null;
   const unavailable = props.disabled || isMutating || isLoading || result.error !== null;
   const canOrganize = !unavailable && result.library.foldersEnabled;
@@ -305,20 +305,21 @@ export function NotebookSidebar(props: SidebarProps) {
           <button type="button" className="btn btn-sm" disabled={props.disabled || isMutating || isLoading}
             onClick={() => setRetry((value) => value + 1)}>更新</button>
         </div>
-        <div className="flex gap-2">
+        <div className="relative flex min-w-0 gap-2" data-notebook-actions>
           <button type="button" className="btn btn-sm" disabled={!canOrganize}
             onClick={() => beginAction({
               kind: "create-folder", parentId: selectedFolder?.id ?? selectedNote?.folderId ?? null,
             })}>フォルダ作成</button>
-          <details ref={menuRef} className="dropdown">
+          <details ref={menuRef} className="dropdown static">
             {/* summaryは常に開閉可能。処理中の制限は各メニュー項目で行う。 */}
             <summary className="btn btn-sm">操作</summary>
-            <ul className="menu dropdown-content z-10 mt-2 w-64 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm">
+            {/* ボタンでなく操作行の左端を基準にし、狭い一覧の外へはみ出さない幅で開く。 */}
+            <ul className="menu dropdown-content start-0 z-10 mt-2 w-full min-w-0 max-w-64 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm [&_button]:whitespace-normal [&_button]:break-words">
               {!selectedNote && !selectedFolder && <li><button type="button" disabled>
                 ノートまたはフォルダを選択してください
               </button></li>}
               {selectedNote && <li><button type="button" disabled={!canOrganize}
-                onClick={() => beginAction({ kind: "edit-note", note: selectedNote })}>名前・保存先</button></li>}
+                onClick={() => beginAction({ kind: "edit-note", note: selectedNote })}>名前・フォルダ</button></li>}
               {selectedNote && <li><button type="button" className="text-error" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "delete-note", note: selectedNote })}>ノート削除</button></li>}
               {selectedFolder && <li><button type="button" disabled={!canOrganize}
@@ -341,12 +342,12 @@ export function NotebookSidebar(props: SidebarProps) {
               {result.library.foldersEnabled && (
                 <button type="button" disabled={unavailable}
                   className={`btn btn-sm btn-ghost w-full justify-start ${selection === "root" ? "bg-base-200" : ""} ${dropTarget === "root" ? "outline-2 outline-primary bg-base-200" : ""}`}
-                  aria-label="最上位"
+                  aria-label="一番上"
                   onClick={() => setSelection("root")}
                   onDragOver={(event) => dragOver(event, null)}
                   onDragLeave={dragLeave}
                   onDrop={(event) => drop(event, null)}
-                >最上位</button>
+                >一番上</button>
               )}
               {result.library.notes.length === 0 && result.library.folders.length === 0
                 ? <p>ノートはありません。</p>
@@ -372,7 +373,7 @@ export function NotebookSidebar(props: SidebarProps) {
                 </ul>}
               {currentNotePath && (
                 <dl className="border-t border-base-300 pt-3 text-sm">
-                  <dt className="mb-1 text-xs text-base-content/60">開いているノートの保存先</dt>
+                  <dt className="mb-1 text-xs text-base-content/60">開いているノートのフォルダ</dt>
                   <dd className="break-words">{currentNotePath}</dd>
                 </dl>
               )}

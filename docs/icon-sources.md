@@ -1,10 +1,11 @@
 # 編集アイコンの取得元
 
-2026年10月20日のユーザー指示により、先に実装した線画をLucideの公式SVGへ差し替えた。パッケージは追加せず、必要な7種類の図形だけを`EditorIcon.tsx`へインライン化している。
+2026年10月20日のユーザー指示により、先に実装した線画をLucideの公式SVGへ差し替えた。2026年10月21日のページ切り替えのアイコン化で左右の矢印を追加し、必要な9種類の図形を`EditorIcon.tsx`へインライン化している。パッケージは追加しない。
 
 - プロジェクト：[Lucide](https://lucide.dev/)
 - 採用バージョン：[1.59.0](https://github.com/lucide-icons/lucide/releases/tag/1.59.0)（更新時も取得バージョンを固定する）
 - 取得日：2026年10月20日
+- ページ矢印の追加取得日：2026年10月21日（同じ1.59.0の公式SVGを確認）
 - ライセンス：[同じタグのLICENSE](https://github.com/lucide-icons/lucide/blob/1.59.0/LICENSE)
 - 保持する全文：[public/licenses/lucide-LICENSE.txt](../public/licenses/lucide-LICENSE.txt)
 - 公開時の配信先：`/licenses/lucide-LICENSE.txt`
@@ -20,6 +21,8 @@
 | 付箋 | [sticky-note.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/sticky-note.svg) |
 | 元に戻す | [undo-2.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/undo-2.svg) |
 | やり直す | [redo-2.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/redo-2.svg) |
+| 前のページ | [chevron-left.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/chevron-left.svg) |
+| 次のページ | [chevron-right.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/chevron-right.svg) |
 
 ## Overlayでの変更点
 

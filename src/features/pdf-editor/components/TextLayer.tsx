@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { loadNoteFont, loadedNoteFont, type NoteFont } from "../noteFont";
 import { fitTextNote, textNoteLayout, TEXT_PADDING, STICKY_BACKGROUND } from "../textLayout";
 import { readTextNotes } from "../textData";
@@ -6,13 +7,14 @@ import type { EditorTool, TextNote } from "../types";
 import { TextBoxEditor } from "./TextBoxEditor";
 import { PEN_COLOR } from "../penStyle";
 
-export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, disabled = false, onChange }: {
+export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, disabled = false, controlsContainer = null, onChange }: {
   notes: TextNote[];
   tool: EditorTool;
   pageWidth: number;
   pageHeight: number;
   pageScale?: number;
   disabled?: boolean;
+  controlsContainer?: HTMLDivElement | null;
   onChange: (notes: TextNote[]) => void;
 }) {
   const [font, setFont] = useState<NoteFont | null>(loadedNoteFont);
@@ -153,7 +155,9 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
         </g>;
       })}
     </svg>
-    {active && <div className="absolute right-0 top-0 flex gap-1 pointer-events-auto">
+    {/* 操作と選択状態はここで保持し、ボタンの表示先だけを上部の設定行へ移す。 */}
+    {active && controlsContainer && createPortal(<div className="flex items-center gap-2 pointer-events-auto"
+      role="group" aria-label={tool === "sticky" ? "付箋の操作" : "テキストの操作"}>
       <button className="btn btn-sm" type="button" onClick={() => createNote(0.1, 0.1, tool === "sticky" ? "sticky" : "text")}>
         {tool === "sticky" ? "付箋を追加" : "テキストを追加"}
       </button>
@@ -161,7 +165,7 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
         <button className="btn btn-sm" type="button" onClick={() => { setOpenedByPointer(false); setEditing(notes.find((note) => note.id === selected)!); }}>文章編集</button>
         <button className="btn btn-sm" type="button" onClick={() => { onChange(notes.filter((note) => note.id !== selected)); setSelected(null); }}>削除</button>
       </>}
-    </div>}
+    </div>, controlsContainer)}
     {editing && <TextBoxEditor key={editing.id} note={editing} font={font.font}
       pageWidth={pageWidth} pageHeight={pageHeight} pageScale={pageScale}
       openedByPointer={openedByPointer}

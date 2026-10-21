@@ -9,6 +9,8 @@ const dialog = {
   open: false,
   showCount: 0,
   closeCount: 0,
+  pickerCount: 0,
+  click() { this.pickerCount++; },
   showModal() { this.open = true; this.showCount++; },
   close() { this.open = false; this.closeCount++; },
 };
@@ -19,28 +21,26 @@ mock.module("react", { exports: {
 } });
 const { NotebookDrawer } = await import("@/features/pdf-editor/components/NotebookDrawer");
 
-beforeEach(() => { effects = []; dialog.open = false; dialog.showCount = 0; dialog.closeCount = 0; });
+beforeEach(() => { effects = []; dialog.open = false; dialog.showCount = 0; dialog.closeCount = 0; dialog.pickerCount = 0; });
 
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   return React.Children.toArray(node).flatMap((child) => React.isValidElement<Record<string, unknown>>(child)
     ? [child, ...elements(child.props.children as React.ReactNode)] : []);
 }
 
-function render(open = false, busy = false) {
-  const calls = { open: 0, close: 0 };
-  const node = NotebookDrawer({ open, busy, onOpen: () => { calls.open++; },
+function render(open = false, busy = false, pdfOpenDisabled = busy) {
+  const calls = { close: 0, files: 0 };
+  const node = NotebookDrawer({ open, busy, pdfOpenDisabled, onFileChange: () => { calls.files++; },
     onClose: () => { calls.close++; }, children: React.createElement("nav", null, "一覧") });
   effects.splice(0).forEach((effect) => effect());
   return { calls, node, entries: elements(node) };
 }
 
-test("初期状態は閉じたハンバーガーメニューで、左端の固定ダイアログを使用する", () => {
+test("初期状態は閉じた左端のダイアログで、開くボタンはヘッダー側へ分離する", () => {
   const { entries, node } = render();
-  const trigger = entries.find((entry) => entry.props["aria-label"] === "ノート一覧を開く")!;
-  assert.equal(trigger.props["aria-expanded"], false);
-  assert.equal(trigger.props["aria-haspopup"], "dialog");
+  assert.equal(entries.find((entry) => entry.props["aria-label"] === "ノート一覧を開く"), undefined);
   const modal = entries.find((entry) => entry.type === "dialog")!;
-  assert.equal(trigger.props["aria-controls"], modal.props.id);
+  assert.equal(modal.props.id, "notebook-sidebar");
   assert.match(String(modal.props.className), /modal-start/);
   assert.equal(modal.props.open, undefined);
   assert.equal(dialog.showCount, 0);
@@ -48,6 +48,7 @@ test("初期状態は閉じたハンバーガーメニューで、左端の固�
   assert.match(html, /aria-hidden="true"/);
   assert.match(html, /max-w-\[calc\(100vw-2rem\)\]/);
   assert.match(html, /motion-reduce:transition-none/);
+  assert.match(html, /modal-box[^\"]*rounded-none/);
 });
 
 test("開閉状態をnative dialogへ同期し、開いているdialogを二重に開かない", () => {
@@ -60,15 +61,33 @@ test("開閉状態をnative dialogへ同期し、開いているdialogを二重�
   assert.equal(dialog.open, false);
 });
 
-test("ハンバーガー、閉じる、背景ボタンを開閉へ接続する", () => {
+test("閉じる、背景ボタンを閉じる処理へ接続する", () => {
   const { entries, calls } = render(true);
-  for (const label of ["ノート一覧を開く", "ノート一覧を閉じる", "ノート一覧の外側を押して閉じる"]) {
+  for (const label of ["ノート一覧を閉じる", "ノート一覧の外側を押して閉じる"]) {
     const button = entries.find((entry) => entry.props["aria-label"] === label)!;
     (button.props.onClick as () => void)();
   }
-  assert.deepEqual(calls, { open: 1, close: 2 });
+  assert.deepEqual(calls, { files: 0, close: 2 });
   const backdrop = entries.find((entry) => entry.props["aria-label"] === "ノート一覧の外側を押して閉じる")!;
   assert.equal(backdrop.props.tabIndex, -1);
+});
+
+test("メニュー内のPDFを追加ボタンで選択欄を呼び出し、処理中は開かない", () => {
+  for (const disabled of [false, true]) {
+    const { entries, calls } = render(true, false, disabled);
+    const button = entries.find((entry) => entry.type === "button" && entry.props.children === "PDFを追加")!;
+    const input = entries.find((entry) => entry.type === "input")!;
+    assert.equal(button.props.disabled, disabled);
+    assert.equal(input.props.disabled, disabled);
+    assert.equal(input.props.hidden, true);
+    assert.equal(input.props.accept, "application/pdf,.pdf");
+    const before = dialog.pickerCount;
+    (button.props.onClick as () => void)();
+    assert.equal(dialog.pickerCount - before, disabled ? 0 : 1);
+    (input.props.onChange as () => void)();
+    assert.equal(calls.files, 1);
+    assert.equal(calls.close, 0); // 選ぶ前には閉じず、キャンセルしても元のノートを維持。
+  }
 });
 
 test("Escapeで閉じるが、整理処理中は閉じず、子ダイアログのイベントは無視する", () => {
