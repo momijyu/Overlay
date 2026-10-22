@@ -7,6 +7,7 @@ import type { PenStroke, EditorTool, TextNote } from "../types";
 import { PenLayer } from "./PenLayer";
 import { TextLayer } from "./TextLayer";
 import { bindPageZoomWheel, capturePageZoomAnchor, restorePageZoomAnchor, type PageZoomAnchor } from "../pageZoom";
+import { bindPageGestures, createPageInteraction } from "../pageGestures";
 
 type PdfPageProps = {
   document: PDFDocumentProxy;
@@ -57,6 +58,7 @@ export function PdfPage({
     height: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [interaction] = useState(createPageInteraction);
   const displayScale = renderedPage ? Math.min(1, availableWidth / renderedPage.width) * zoom : 0;
 
   useLayoutEffect(() => {
@@ -91,6 +93,25 @@ export function PdfPage({
       },
     });
   }, [disabled, error, onZoomChange]);
+
+  useEffect(() => {
+    const viewport = containerRef.current;
+    if (!viewport) return;
+    return bindPageGestures(viewport, {
+      interaction,
+      getSurface: () => surfaceRef.current,
+      getZoom: () => zoomRef.current,
+      isEnabled: () => !disabled && !error && displaySizeRef.current !== null,
+      isHand: () => tool === "hand",
+      onTransform: (next, anchor) => {
+        const changed = next !== zoomRef.current;
+        zoomRef.current = next;
+        anchorRef.current = anchor;
+        if (changed) onZoomChange(next);
+        else if (surfaceRef.current) restorePageZoomAnchor(viewport, surfaceRef.current, anchor);
+      },
+    });
+  }, [disabled, error, tool, onZoomChange, interaction]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -168,7 +189,7 @@ export function PdfPage({
   return (
     <div
       ref={containerRef}
-      className="max-h-[75dvh] min-w-0 w-full overflow-auto bg-base-200 p-2 sm:p-4"
+      className={`pdf-viewport max-h-[75dvh] min-w-0 w-full overflow-auto bg-base-200 p-2 sm:p-4 touch-none ${tool === "hand" ? "cursor-grab" : ""}`}
       style={{ scrollbarGutter: "stable", overflowAnchor: "none" }}
       tabIndex={0}
       aria-label="PDF表示領域"
@@ -186,15 +207,16 @@ export function PdfPage({
           role="img"
         />
         {renderedPage && displayScale > 0 &&
-          !disabled &&
           !error && (
             <PenLayer
               key={`${editVersion}-${tool}-${penWidth}-${penColor}-${eraserWidth}-${displayScale}`}
               strokes={strokes}
+              pageWidth={renderedPage.width} pageHeight={renderedPage.height}
+              interaction={interaction}
               penWidth={penWidth}
               penColor={penColor}
               tool={tool === "eraser" ? "eraser" : tool === "marker" ? "marker" : "pen"}
-              interactive={tool === "pen" || tool === "marker" || tool === "eraser"}
+              interactive={!disabled && (tool === "pen" || tool === "marker" || tool === "eraser")}
               eraserWidth={eraserWidth}
               pageScale={displayScale}
               onStrokeComplete={onStrokeComplete}
@@ -204,6 +226,7 @@ export function PdfPage({
         {/* 倍率・幅の再描画中も入力欄をアンマウントせず、入力中の文章を維持する。 */}
         {renderedPage && (texts.length > 0 || tool === "text" || tool === "sticky") && <TextLayer notes={texts} tool={tool}
           controlsContainer={textControlsContainer}
+          interaction={interaction}
           disabled={disabled || !!error || displayScale <= 0}
           pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={displayScale}
           onChange={onTextsChange} />}

@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import fontkit from "@pdf-lib/fontkit";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { EditorTool, TextNote } from "@/features/pdf-editor/types";
+import { createPageInteraction, type PageInteraction } from "@/features/pdf-editor/pageGestures";
 
 const bytes = new Uint8Array(readFileSync(new URL("../public/fonts/NotoSansJP-Regular.otf", import.meta.url)));
 const font = { bytes, font: fontkit.create(bytes) };
@@ -24,7 +25,10 @@ mock.module("react-dom", { exports: {
 } });
 mock.module("react", { exports: {
   ...React,
-  useEffect: () => {},
+  useEffect: (effect: () => void, deps: unknown[]) => {
+    // 共有ジェスチャーの中断接続だけを動かし、フォント通信・実DOMは代用する。
+    if (deps?.length === 1 && deps[0] && typeof deps[0] === "object" && "cancellations" in deps[0]) effect();
+  },
   useState: <T,>(initial: T) => {
     const index = stateCursor++;
     const slot = states[index] ??= { value: index === 0 ? font : initial };
@@ -50,7 +54,7 @@ function find(node: React.ReactNode, predicate: (element: React.ReactElement) =>
 
 const note: TextNote = { id: "one", kind: "text", text: "授業", x: 0.1, y: 0.1, width: 0.5, fontSize: 14 };
 
-function fixture(tool: EditorTool, initial: TextNote[] = []) {
+function fixture(tool: EditorTool, initial: TextNote[] = [], interaction?: PageInteraction) {
   let notes = initial;
   let updates = 0;
   let disabled = false;
@@ -58,7 +62,7 @@ function fixture(tool: EditorTool, initial: TextNote[] = []) {
   function render() {
     stateCursor = 0;
     refCursor = 0;
-    return TextLayer({ notes, tool, pageWidth: 400, pageHeight: 600, controlsContainer, disabled,
+    return TextLayer({ notes, tool, pageWidth: 400, pageHeight: 600, controlsContainer, disabled, interaction,
       onChange: (next) => { updates++; notes = next; } });
   }
   function handlers() {
@@ -288,4 +292,60 @@ test("保存された文字色と付箋背景色をSVGに表示し、旧メモ�
     { ...note, id: "old-sticky", kind: "sticky" }]);
   const html = renderToStaticMarkup(f.render());
   for (const color of ["#3366cc", "#cc0033", "#aabbcc", "#111827", "#fff3b0"]) assert.ok(html.includes(`fill="${color}"`));
+});
+
+test("指では付箋・テキストの本文を選択・移動に使い、編集ボタンまでキーボードを開かない", () => {
+  for (const kind of ["text", "sticky"] as const) {
+    states = []; refs = [];
+    const f = fixture(kind, [{ ...note, kind }]);
+    const down = f.event(50, 80, note.id); down.pointerType = "touch";
+    f.handlers().onPointerDown(down);
+    assert.equal(find(f.render(), (element) => element.type === TextBoxEditor), undefined);
+    assert.match(renderToStaticMarkup(f.render()), /pointer-events:all;cursor:move/);
+    const up = f.event(50, 80); up.pointerType = "touch";
+    f.handlers().onPointerUp(up);
+    assert.equal(f.getUpdates(), 0);
+    const moveDown = f.event(50, 80, note.id); moveDown.pointerType = "touch";
+    f.handlers().onPointerDown(moveDown);
+    f.handlers().onPointerUp(f.event(90, 120));
+    assert.equal(f.getUpdates(), 1);
+    assert.ok(Math.abs(f.getNotes()[0].x - 0.2) < 1e-8);
+    const edit = find(f.render(), (element) => element.type === "button" && (element.props as { children?: string }).children === "文章編集")!;
+    (edit.props as React.ComponentProps<"button">).onClick!({} as React.MouseEvent<HTMLButtonElement>);
+    assert.equal(f.editor().note.id, note.id);
+  }
+});
+
+test("指の空白タップは離した時に設置し、移動・二本指への切り替えでは誤作成しない", () => {
+  const interaction = createPageInteraction();
+  const f = fixture("sticky", [], interaction);
+  const down = f.event(20, 30); down.pointerType = "touch";
+  f.handlers().onPointerDown(down);
+  assert.equal(find(f.render(), (element) => element.type === TextBoxEditor), undefined);
+  f.handlers().onPointerUp(down);
+  assert.equal(f.editor().note.kind, "sticky");
+  f.editor().onCancel();
+  f.handlers().onPointerDown(down);
+  f.handlers().onPointerUp(f.event(40, 60));
+  assert.equal(find(f.render(), (element) => element.type === TextBoxEditor), undefined);
+  f.handlers().onPointerDown(down);
+  interaction.blocked = true; interaction.cancellations.forEach((cancel) => cancel());
+  interaction.blocked = false;
+  f.handlers().onPointerUp(down);
+  assert.equal(find(f.render(), (element) => element.type === TextBoxEditor), undefined);
+  assert.equal(f.getUpdates(), 0);
+});
+
+test("指での付箋移動を二本指で中断しても元の位置と保存状態を維持する", () => {
+  const interaction = createPageInteraction();
+  const f = fixture("sticky", [{ ...note, kind: "sticky" }], interaction);
+  const down = f.event(50, 80, note.id); down.pointerType = "touch";
+  f.handlers().onPointerDown(down); f.handlers().onPointerMove(f.event(150, 200));
+  interaction.blocked = true; interaction.cancellations.forEach((cancel) => cancel());
+  f.handlers().onPointerUp(f.event(150, 200));
+  interaction.blocked = false;
+  f.handlers().onPointerUp(f.event(150, 200));
+  assert.equal(f.getUpdates(), 0);
+  assert.equal(f.getNotes()[0].x, note.x);
+  assert.equal(f.getNotes()[0].y, note.y);
 });

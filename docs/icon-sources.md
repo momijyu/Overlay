@@ -1,6 +1,6 @@
 # 編集アイコンの取得元
 
-2026年10月20日のユーザー指示により、先に実装した線画をLucideの公式SVGへ差し替えた。2026年10月21日のページ切り替えのアイコン化で左右の矢印を追加し、必要な9種類の図形を`EditorIcon.tsx`へインライン化している。パッケージは追加しない。
+2026年10月20日のユーザー指示により、先に実装した線画をLucideの公式SVGへ差し替えた。2026年10月21日のページ矢印とスマホ操作の追加後は12種類の図形を`EditorIcon.tsx`へインライン化している。パッケージは追加しない。
 
 - プロジェクト：[Lucide](https://lucide.dev/)
 - 採用バージョン：[1.59.0](https://github.com/lucide-icons/lucide/releases/tag/1.59.0)（更新時も取得バージョンを固定する）
@@ -23,6 +23,11 @@
 | やり直す | [redo-2.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/redo-2.svg) |
 | 前のページ | [chevron-left.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/chevron-left.svg) |
 | 次のページ | [chevron-right.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/chevron-right.svg) |
+| 移動・閲覧 | [hand.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/hand.svg) |
+| スマホの設定 | [settings-2.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/settings-2.svg) |
+| 書き出しメニュー | [ellipsis.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/ellipsis.svg) |
+
+スマホ用の3種類も2026年10月21日に同じ固定タグの公式SVGを取得して確認した。設定とメニューのcircleも元図形のまま保持する。スマホではCSSで表示サイズを20pxへ縮め、操作ボタンの高さは44pxを確保する。PCの24px・線幅1.75は維持する。
 
 ## Overlayでの変更点
 

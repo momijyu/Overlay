@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
+import type { PageInteraction } from "../pageGestures";
 
 import { MARKER_OPACITY, PEN_COLOR } from "../penStyle";
 import { eraseStrokes } from "../eraseStrokes";
@@ -13,6 +14,9 @@ type PenLayerProps = {
   tool: PenTool;
   eraserWidth: number;
   pageScale: number;
+  pageWidth: number;
+  pageHeight: number;
+  interaction?: PageInteraction;
   interactive?: boolean;
   onStrokeComplete: (stroke: PenStroke) => void;
   onStrokesChange: (strokes: PenStroke[]) => void;
@@ -25,15 +29,15 @@ function pointFromEvent(event: PointerEvent<SVGSVGElement>, clamp = true): PenPo
   return clamp ? { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) } : { x, y };
 }
 
-function strokePath(stroke: PenStroke): string {
+function strokePath(stroke: PenStroke, width: number, height: number): string {
   const [first, ...rest] = stroke.points;
   if (!first) return "";
 
   // 短い線に丸い端を付け、クリックだけでも点が見えるようにする。
-  if (rest.length === 0) return `M ${first.x} ${first.y} l 0.00001 0`;
+  if (rest.length === 0) return `M ${first.x * width} ${first.y * height} l 0.001 0`;
 
-  return `M ${first.x} ${first.y} ${rest
-    .map((point) => `L ${point.x} ${point.y}`)
+  return `M ${first.x * width} ${first.y * height} ${rest
+    .map((point) => `L ${point.x * width} ${point.y * height}`)
     .join(" ")}`;
 }
 
@@ -44,6 +48,9 @@ export function PenLayer({
   tool,
   eraserWidth,
   pageScale,
+  pageWidth,
+  pageHeight,
+  interaction,
   interactive = true,
   onStrokeComplete,
   onStrokesChange,
@@ -55,6 +62,16 @@ export function PenLayer({
   const previousEraserPoint = useRef<PenPoint | null>(null);
   const [erasePreview, setErasePreview] = useState<PenStroke[] | null>(null);
   const [eraserPosition, setEraserPosition] = useState<{ point: PenPoint; width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    const cancel = () => {
+      activePointerId.current = null; currentStroke.current = null; setDraft(null);
+      erasedStrokes.current = null; previousEraserPoint.current = null;
+      setErasePreview(null); setEraserPosition(null);
+    };
+    interaction?.cancellations.add(cancel);
+    return () => { interaction?.cancellations.delete(cancel); };
+  }, [interaction]);
 
   function eraseAt(event: PointerEvent<SVGSVGElement>) {
     if (!erasedStrokes.current || !previousEraserPoint.current) return;
@@ -69,7 +86,7 @@ export function PenLayer({
   }
 
   function handlePointerDown(event: PointerEvent<SVGSVGElement>) {
-    if (!interactive) return;
+    if (!interactive || interaction?.blocked) return;
     if (activePointerId.current !== null) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -89,6 +106,7 @@ export function PenLayer({
   }
 
   function handlePointerMove(event: PointerEvent<SVGSVGElement>) {
+    if (interaction?.blocked) return;
     if (activePointerId.current === event.pointerId && tool === "eraser") {
       eraseAt(event);
       return;
@@ -105,6 +123,7 @@ export function PenLayer({
   }
 
   function handlePointerUp(event: PointerEvent<SVGSVGElement>) {
+    if (interaction?.blocked) { handlePointerCancel(event); return; }
     if (activePointerId.current === event.pointerId && tool === "eraser") {
       eraseAt(event);
       const result = erasedStrokes.current;
@@ -143,7 +162,7 @@ export function PenLayer({
     <svg
       className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
       style={{ pointerEvents: interactive ? "auto" : "none" }}
-      viewBox="0 0 1 1"
+      viewBox={`0 0 ${pageWidth} ${pageHeight}`}
       preserveAspectRatio="none"
       aria-label={tool === "eraser" ? "書き込みを部分的に消す領域" : tool === "marker" ? "マーカーで書き込む領域" : "ペンで書き込む領域"}
       onPointerDown={handlePointerDown}
@@ -152,28 +171,26 @@ export function PenLayer({
       onPointerCancel={handlePointerCancel}
       onLostPointerCapture={handlePointerCancel}
     >
-      <rect width="1" height="1" fill="transparent" pointerEvents={interactive ? "all" : "none"} />
+      <rect width={pageWidth} height={pageHeight} fill="transparent" pointerEvents={interactive ? "all" : "none"} />
       {[...(erasePreview ?? strokes), ...(draft ? [draft] : [])].map((stroke, index) => (
         <path
           key={index}
-          d={strokePath(stroke)}
+          d={strokePath(stroke, pageWidth, pageHeight)}
           fill="none"
           stroke={stroke.color ?? PEN_COLOR}
-          strokeWidth={stroke.width * pageScale}
+          strokeWidth={stroke.width}
           strokeOpacity={stroke.kind === "marker" ? MARKER_OPACITY : undefined}
           style={stroke.kind === "marker" ? { mixBlendMode: "multiply" } : undefined}
           strokeLinecap="round"
           strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke"
           pointerEvents="none"
         />
       ))}
       {/* ページ縦横比を補正し、表示上では円形の消しゴム範囲を示す。 */}
       {tool === "eraser" && eraserPosition && <ellipse
-        cx={eraserPosition.point.x} cy={eraserPosition.point.y}
-        rx={eraserWidth * pageScale / 2 / eraserPosition.width}
-        ry={eraserWidth * pageScale / 2 / eraserPosition.height}
-        fill="none" stroke="#666666" strokeWidth="1" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
+        cx={eraserPosition.point.x * pageWidth} cy={eraserPosition.point.y * pageHeight}
+        rx={eraserWidth / 2} ry={eraserWidth / 2}
+        fill="none" stroke="#666666" strokeWidth={1 / pageScale} pointerEvents="none" />}
     </svg>
   );
 }

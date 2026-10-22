@@ -13,7 +13,7 @@ export type PenStroke = {
 };
 
 export type PenTool = "pen" | "marker" | "eraser";
-export type EditorTool = PenTool | "text" | "sticky";
+export type EditorTool = PenTool | "text" | "sticky" | "hand";
 export type TextNote = {
   id: string;
   kind: "text" | "sticky";

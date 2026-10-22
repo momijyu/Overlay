@@ -70,7 +70,9 @@ function fixture(existing = true, initial = note, openedByPointer = false) {
   let removed = 0;
   let focused = 0;
   const inside = {};
-  const root = { contains: (target: unknown) => target === inside };
+  const cssVariables = new Map<string, string>();
+  const root = { contains: (target: unknown) => target === inside,
+    parentElement: { style: { setProperty: (name: string, value: string) => cssVariables.set(name, value) } } };
   function render() {
     cleanups.forEach((cleanup) => cleanup()); cleanups = [];
     cursor = 0; refCursor = 0; effects = [];
@@ -89,8 +91,25 @@ function fixture(existing = true, initial = note, openedByPointer = false) {
       preventDefault() {} };
     input().onKeyDown!(event as React.KeyboardEvent<HTMLTextAreaElement>);
   }
-  return { render, input, size, change, key, inside, commits, getCancelled: () => cancelled, getRemoved: () => removed, getFocused: () => focused };
+  return { render, input, size, change, key, inside, commits, cssVariables, getCancelled: () => cancelled, getRemoved: () => removed, getFocused: () => focused };
 }
+
+test("スマホのキーボード表示に合わせて入力欄の下端と高さを補正し、破棄時は監視を外す", () => {
+  const viewport = Object.assign(new Events(), { height: 400, offsetTop: 0 });
+  Object.assign(win, { visualViewport: viewport, innerHeight: 800 });
+  const f = fixture();
+  f.render();
+  assert.equal(f.cssVariables.get("--editor-keyboard-offset"), "400px");
+  assert.equal(f.cssVariables.get("--editor-visible-height"), "384px");
+  viewport.height = 300; viewport.offsetTop = 50;
+  viewport.emit("resize");
+  assert.equal(f.cssVariables.get("--editor-keyboard-offset"), "450px");
+  assert.equal(f.cssVariables.get("--editor-visible-height"), "284px");
+  assert.equal(f.commits.length, 0);
+  cleanups.forEach((cleanup) => cleanup()); cleanups = [];
+  assert.equal(viewport.listeners.get("resize")?.size, 0);
+  assert.equal(viewport.listeners.get("scroll")?.size, 0);
+});
 
 test("ページ上のtextareaで入力し、外へフォーカスを移すと1回だけ確定する", () => {
   const f = fixture();

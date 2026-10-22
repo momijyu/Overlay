@@ -113,6 +113,20 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
     if (!finish()) textarea.current?.focus();
   }
 
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const update = () => {
+      const style = root.current?.parentElement?.style;
+      style?.setProperty("--editor-keyboard-offset", `${Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)}px`);
+      style?.setProperty("--editor-visible-height", `${Math.max(0, viewport.height - 16)}px`);
+    };
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    return () => { viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update); };
+  }, []);
+
   let fitted: TextNote = { ...note, ...colors, fontSize, ...(fitToText ? { autoSize: true } : {}) };
   try { fitted = fitTextNote({ ...fitted, text: normalizeNoteText(text) }, pageWidth, pageHeight, font); }
   catch { /* 不正な入力も捨てず、直せるよう入力欄に残す。 */ }
@@ -121,11 +135,11 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
   catch { layout = textNoteLayout({ ...fitted, text: "" }, pageWidth, font, pageHeight); }
   const leading = layout.lineHeight - (font.ascent - font.descent) / font.unitsPerEm * fitted.fontSize;
 
-  return <div className="absolute left-0 top-0 pointer-events-none" style={{ width: pageWidth, height: pageHeight,
+  return <div className="text-editor-surface absolute left-0 top-0 pointer-events-none" style={{ width: pageWidth, height: pageHeight,
     transform: `scale(${pageScale})`, transformOrigin: "top left" }}>
-    <div ref={root} className="absolute pointer-events-auto" style={{ left: fitted.x * pageWidth, top: fitted.y * pageHeight,
+    <div ref={root} data-text-editor className="text-editor-panel absolute pointer-events-auto" style={{ left: fitted.x * pageWidth, top: fitted.y * pageHeight,
       width: layout.width, height: layout.height }} onPointerDown={(event) => event.stopPropagation()}>
-      <textarea ref={textarea} aria-label={note.kind === "sticky" ? "付箋" : "テキストボックス"} className="textarea block rounded-none"
+      <textarea ref={textarea} data-note-kind={note.kind} aria-label={note.kind === "sticky" ? "付箋" : "テキストボックス"} className="textarea block rounded-none"
         autoFocus value={text} maxLength={MAX_NOTE_TEXT_LENGTH} spellCheck={false} wrap="soft"
         style={{ width: "100%", height: "100%", minHeight: 0, resize: "none", overflow: "auto", boxSizing: "border-box",
           padding: `${TEXT_PADDING - leading / 2}px ${TEXT_PADDING}px`, border: "none", outline: "1px solid #666666", outlineOffset: -1,
@@ -152,7 +166,7 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
           if (event.key === "Escape") { event.preventDefault(); cancel(); }
           else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); finish(); }
         }} />
-      <div className="absolute left-0 w-max max-w-none space-y-1 bg-base-100 p-1"
+      <div className="text-editor-options absolute left-0 w-max max-w-none space-y-1 bg-base-100 p-1"
         style={fitted.y * pageHeight * pageScale < 90 ? { top: "100%", transform: `scale(${1 / pageScale})`, transformOrigin: "top left" }
           : { bottom: "100%", transform: `scale(${1 / pageScale})`, transformOrigin: "bottom left" }}>
         <TextSizeControl value={fontSize} onChange={changeSize} />
@@ -175,7 +189,7 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
           }}>削除</button>}
         </div>
       </div>
-      {error && <p className="absolute left-0 top-full bg-base-100 p-1 text-sm text-error" role="alert">{error}</p>}
+      {error && <p className="text-editor-error absolute left-0 top-full bg-base-100 p-1 text-sm text-error" role="alert">{error}</p>}
     </div>
   </div>;
 }

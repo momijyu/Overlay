@@ -6,8 +6,9 @@ import { readTextNotes } from "../textData";
 import type { EditorTool, TextNote } from "../types";
 import { TextBoxEditor } from "./TextBoxEditor";
 import { PEN_COLOR } from "../penStyle";
+import type { PageInteraction } from "../pageGestures";
 
-export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, disabled = false, controlsContainer = null, onChange }: {
+export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, disabled = false, controlsContainer = null, interaction, onChange }: {
   notes: TextNote[];
   tool: EditorTool;
   pageWidth: number;
@@ -15,6 +16,7 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
   pageScale?: number;
   disabled?: boolean;
   controlsContainer?: HTMLDivElement | null;
+  interaction?: PageInteraction;
   onChange: (notes: TextNote[]) => void;
 }) {
   const [font, setFont] = useState<NoteFont | null>(loadedNoteFont);
@@ -28,13 +30,20 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
   } | null>(null);
   const drag = useRef<{ id: number; note: TextNote; x: number; y: number; moved: boolean } | null>(null);
   const committed = useRef<TextNote | null>(null);
+  const placement = useRef<{ id: number; x: number; y: number; clientX: number; clientY: number; moved: boolean } | null>(null);
+  const [touchSelection, setTouchSelection] = useState(false);
   const active = !disabled && (tool === "text" || tool === "sticky");
   const preview = previewState?.notes === notes && !disabled
     && (previewState.editing || (previewState.tool === tool && previewState.scale === pageScale)) ? previewState.note : null;
   function setPreview(note: TextNote | null, editing = false) {
     updatePreview(note ? { note, notes, tool, scale: pageScale, editing } : null);
   }
-  useEffect(() => () => { drag.current = null; }, [tool, pageScale, disabled]);
+  useEffect(() => () => { drag.current = null; placement.current = null; }, [tool, pageScale, disabled]);
+  useEffect(() => {
+    const cancel = () => { drag.current = null; placement.current = null; updatePreview(null); };
+    interaction?.cancellations.add(cancel);
+    return () => { interaction?.cancellations.delete(cancel); };
+  }, [interaction]);
   useEffect(() => {
     const current = drag.current;
     // 同じpointerdownで文章確定→枠ドラッグを始めた場合は維持し、Undo等で対象が変われば中断する。
@@ -75,13 +84,15 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
   }
 
   function pointerDown(event: PointerEvent<SVGSVGElement>) {
-    if (!active || !font || drag.current || (event.pointerType === "mouse" && event.button !== 0)) return;
+    if (!active || !font || interaction?.blocked || drag.current || (event.pointerType === "mouse" && event.button !== 0)) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return;
     const x = (event.clientX - bounds.left) / bounds.width;
     const y = (event.clientY - bounds.top) / bounds.height;
     const id = (event.target as Element).closest?.("[data-note-id]")?.getAttribute("data-note-id");
     const action = (event.target as Element).closest?.("[data-note-action]")?.getAttribute("data-note-action");
+    const touch = event.pointerType === "touch";
+    setTouchSelection(touch);
     // 入力欄の外側の枠なら、captureで確定した最新文章をそのまま移動する。
     if (editing && (!action || committed.current?.id !== editing.id)) return;
     const note = editing ? committed.current : notes.find((item) => item.id === id);
@@ -89,17 +100,27 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
       setSelected(note.id);
       try { fitTextNote(note, pageWidth, pageHeight, font.font); }
       catch { event.preventDefault(); setOpenedByPointer(true); setEditing(note); return; } // 未対応の文字を含むデータも修正できる。
-      if (!action) { event.preventDefault(); setOpenedByPointer(true); setEditing(note); return; }
+      // 指では本文を移動に使う。入力は上部の「文章編集」から開始する。
+      if (!action && !touch) { event.preventDefault(); setOpenedByPointer(true); setEditing(note); return; }
       drag.current = { id: event.pointerId, note, x, y, moved: false };
       event.currentTarget.setPointerCapture(event.pointerId);
     } else {
       // pointerdownの既定フォーカス移動で、新規textareaが直後にblurして消えるのを防ぐ。
       event.preventDefault();
+      if (touch) {
+        // 二本目の指が来る可能性があるため、タップを離すまでは新規入力を作らない。
+        placement.current = { id: event.pointerId, x, y, clientX: event.clientX, clientY: event.clientY, moved: false };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        return;
+      }
       createNote(x, y, tool as "text" | "sticky", true);
     }
   }
 
   function move(event: PointerEvent<SVGSVGElement>) {
+    if (interaction?.blocked) return;
+    const pending = placement.current;
+    if (pending?.id === event.pointerId && Math.hypot(event.clientX - pending.clientX, event.clientY - pending.clientY) > 8) pending.moved = true;
     const current = drag.current;
     if (!current || current.id !== event.pointerId || !font) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -114,12 +135,21 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
   }
 
   function cancel(event: PointerEvent<SVGSVGElement>) {
+    if (placement.current?.id === event.pointerId) placement.current = null;
     if (drag.current?.id !== event.pointerId) return;
     drag.current = null;
     setPreview(null);
   }
 
   function up(event: PointerEvent<SVGSVGElement>) {
+    if (interaction?.blocked) { cancel(event); return; }
+    const pending = placement.current;
+    if (pending?.id === event.pointerId) {
+      move(event);
+      placement.current = null;
+      if (!pending.moved) createNote(pending.x, pending.y, tool as "text" | "sticky", true);
+      return;
+    }
     const current = drag.current;
     if (!current || current.id !== event.pointerId) return;
     const next = move(event);
@@ -145,7 +175,7 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
         const x = note.x * pageWidth;
         const y = note.y * pageHeight;
         const isEditing = editing?.id === note.id;
-        return <g key={note.id} data-note-id={note.id}>
+        return <g key={note.id} data-note-id={note.id} className={isEditing ? "editing-note-preview" : undefined}>
           <rect x={x} y={y} width={layout.width} height={layout.height}
             fill={note.kind === "sticky" ? note.backgroundColor ?? STICKY_BACKGROUND : "transparent"}
             stroke="none" visibility={isEditing ? "hidden" : "visible"} />
@@ -185,8 +215,10 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
         const x = note.x * pageWidth;
         const y = note.y * pageHeight;
         return <g key={note.id} data-note-id={note.id}>
-          <rect data-note-action="move" x={x} y={y} width={layout.width} height={layout.height}
-            fill="none" stroke="transparent" strokeWidth={10 / pageScale} style={{ pointerEvents: "stroke", cursor: "move" }} />
+          <rect data-note-action="move" x={x} y={y} width={Math.max(layout.width, touchSelection ? 44 / pageScale : 0)}
+            height={Math.max(layout.height, touchSelection ? 44 / pageScale : 0)}
+            fill={touchSelection ? "transparent" : "none"} stroke="transparent" strokeWidth={10 / pageScale}
+            style={{ pointerEvents: touchSelection ? "all" : "stroke", cursor: "move" }} />
           <rect x={x} y={y} width={layout.width} height={layout.height}
             fill="none" stroke="#666666" strokeWidth={2 / pageScale} style={{ pointerEvents: "none" }} />
         </g>;

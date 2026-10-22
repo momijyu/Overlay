@@ -35,6 +35,7 @@ const editorTools: { tool: EditorTool; label: string }[] = [
   { tool: "eraser", label: "消しゴム" },
   { tool: "text", label: "テキスト" },
   { tool: "sticky", label: "付箋" },
+  { tool: "hand", label: "移動・閲覧" },
 ];
 
 export function PdfWorkspace() {
@@ -66,6 +67,7 @@ export function PdfWorkspace() {
   const [markerWidth, setMarkerWidth] = useState(DEFAULT_MARKER_WIDTH);
   const [markerColor, setMarkerColor] = useState(MARKER_COLOR);
   const [textControlsContainer, setTextControlsContainer] = useState<HTMLDivElement | null>(null);
+  const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
   const mountedRef = useRef(false);
   const operationRef = useRef(false);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
@@ -294,8 +296,8 @@ export function PdfWorkspace() {
   </p>;
 
   return (
-    <div className="min-h-screen bg-base-200">
-      <AppHeader>
+    <div className="overlay-app min-h-screen bg-base-200" data-pdf-open={!!document && !!file}>
+      <AppHeader compact={!!document && !!file}>
         <button type="button" className="btn btn-sm btn-square" aria-label="ノート一覧を開く"
           title="ノート一覧" aria-haspopup="dialog" aria-controls="notebook-sidebar"
           aria-expanded={sidebarVisible} onClick={() => setSidebarVisible(true)}>
@@ -304,6 +306,22 @@ export function PdfWorkspace() {
             <path d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
+        {document && file && <>
+          <div className="min-w-0 flex-1 sm:hidden">
+            <p className="truncate text-sm" title={noteName || file.name}>{noteName}</p>
+            <p role="status" className={`text-xs ${saveError ? "text-error" : "text-base-content/60"}`}>{statusText}</p>
+          </div>
+          <button type="button" className="btn btn-square btn-ghost sm:hidden" aria-label="道具の設定"
+            title="道具の設定" aria-expanded={mobileSettingsOpen} aria-controls="editor-settings"
+            onClick={() => setMobileSettingsOpen((open) => !open)}><EditorIcon name="settings" /></button>
+          <details className="dropdown dropdown-end sm:hidden">
+            <summary className="btn btn-square btn-ghost" aria-label="書き出しメニュー" title="書き出しメニュー"><EditorIcon name="more" /></summary>
+            <div className="dropdown-content z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-sm">
+              <button type="button" className="btn w-full" disabled={isBusy} onClick={() => void handleDownload()}>PDFをダウンロード</button>
+              <div className="mt-3">{backupNotice}</div>
+            </div>
+          </details>
+        </>}
       </AppHeader>
       <NotebookDrawer open={sidebarVisible} busy={isOrganizing}
         onFileChange={handleFileChange} pdfOpenDisabled={isBusy} onClose={() => setSidebarVisible(false)}>
@@ -326,9 +344,9 @@ export function PdfWorkspace() {
             }}
           />
       </NotebookDrawer>
-      <main className="mx-auto w-full max-w-6xl p-4 sm:p-6">
-        <section className="card min-w-0 w-full border border-base-300 bg-base-100 shadow-sm">
-          <div className="card-body gap-5">
+      <main className="editor-main mx-auto w-full max-w-6xl p-4 sm:p-6">
+        <section className="workspace-card card min-w-0 w-full border border-base-300 bg-base-100 shadow-sm">
+          <div className="workspace-body card-body gap-5">
             <div hidden={!!document && !!file} data-pdf-upload>
               <label className="label" htmlFor="pdf-upload">
                 PDFファイル
@@ -360,8 +378,8 @@ export function PdfWorkspace() {
 
             {document && file && (
               <>
-                <div className="min-w-0 space-y-3">
-                  <div data-editor-row="title" className="flex h-6 min-w-0 items-center gap-3">
+                <div className="editor-toolbar min-w-0 space-y-3">
+                  <div data-editor-row="title" className="hidden h-6 min-w-0 items-center gap-3 sm:flex">
                     <p className="min-w-0 flex-1 truncate" title={noteName || file.name}>
                       {noteName}
                     </p>
@@ -372,12 +390,12 @@ export function PdfWorkspace() {
                   </div>
                   {/* 道具の列は設定やノート名と分け、切り替えても折り返さない。 */}
                   <div data-editor-row="tools" role="group" aria-label="編集操作"
-                    className="flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
+                    className="editor-tools flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
                     <div className="join" role="group" aria-label="編集ツール">
                       {editorTools.map(({ tool, label }) => <button key={tool} type="button"
                         className={`btn btn-square btn-ghost join-item ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
                         aria-label={label} title={label} aria-pressed={penTool === tool} disabled={isBusy}
-                        onClick={() => { if (!isBusy) setPenTool(tool); }}>
+                        onClick={() => { if (!isBusy) { setPenTool(tool); if (tool === "text" || tool === "sticky") setMobileSettingsOpen(true); } }}>
                         <EditorIcon name={tool} />
                       </button>)}
                     </div>
@@ -387,7 +405,8 @@ export function PdfWorkspace() {
                   </div>
                   {/* 高さは維持し、テキスト・付箋の操作もこの行へ表示する。 */}
                   <div data-editor-row="settings" role="group" aria-label="道具の設定"
-                    className="flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
+                    id="editor-settings" data-mobile-open={mobileSettingsOpen}
+                    className="editor-settings flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
                     {/* マーカーの表示の挙動めっちゃすき。 */}
                     {(penTool === "pen" || penTool === "marker") && <div className="flex items-center gap-2">
                       <label className="label" htmlFor="pen-color">{penTool === "marker" ? "マーカーの色" : "ペンの色"}</label>
@@ -409,10 +428,11 @@ export function PdfWorkspace() {
                     {(penTool === "text" || penTool === "sticky") && <div
                       ref={setTextControlsContainer} data-text-controls
                       className="flex items-center gap-2" />}
+                    <div className="mobile-zoom sm:hidden"><ZoomControl id="mobile-pdf-zoom" value={zoom} disabled={isBusy} onChange={setZoom} /></div>
                   </div>
                   <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
                     <button
-                      className="btn btn-primary"
+                      className="btn btn-primary hidden sm:inline-flex"
                       type="button"
                       disabled={isBusy}
                       onClick={() => void handleDownload()}
@@ -443,7 +463,7 @@ export function PdfWorkspace() {
                       </button>
                     </div>
                   </div>
-                  {backupNotice}
+                  <div className="hidden sm:block">{backupNotice}</div>
                 </div>
                 <PdfPage
                   key={`${documentVersion}-${pageNumber}`}

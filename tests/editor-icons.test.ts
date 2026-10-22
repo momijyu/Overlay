@@ -5,23 +5,26 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { EditorIcon, type EditorIconName } from "@/features/pdf-editor/components/EditorIcon";
 
-test("道具・Undo・Redo・ページ矢印の9種類を同じ線幅のSVGで描き、絵文字・画像・表示用テキストを使わない", () => {
-  const names: EditorIconName[] = ["pen", "marker", "eraser", "text", "sticky", "undo", "redo", "previous-page", "next-page"];
+test("道具・履歴・ページ・スマホ操作の12種類を同じ線幅のSVGで描き、絵文字や画像を使わない", () => {
+  const names: EditorIconName[] = ["pen", "marker", "eraser", "text", "sticky", "hand", "undo", "redo", "previous-page", "next-page", "settings", "more"];
   const drawings = names.map((name) => renderToStaticMarkup(EditorIcon({ name })));
-  assert.equal(new Set(drawings).size, 9);
+  assert.equal(new Set(drawings).size, 12);
   for (const html of drawings) {
     assert.match(html, /viewBox="0 0 24 24"/);
     assert.match(html, /stroke="currentColor" stroke-width="1.75"/);
     assert.match(html, /aria-hidden="true" focusable="false"/);
-    assert.match(html, /<path /);
+    assert.match(html, /<path |<circle /);
     assert.doesNotMatch(html, /<img|<image|<text|<script|\p{Extended_Pictographic}/u);
     assert.equal(html.replace(/<[^>]+>/g, ""), "");
   }
 });
 
-test("Lucide 1.59.0の9種類の図形を維持し、表示サイズと線幅は従来のままにする", () => {
+test("Lucide 1.59.0の12種類の図形を維持し、表示サイズと線幅は従来のままにする", () => {
   // 固定タグの公式SVGから取得したpath。取得元の対応はdocs/icon-sources.mdへ記録。
   const paths: Record<EditorIconName, string[]> = {
+    hand: ["M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2", "M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2", "M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8", "M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"],
+    settings: ["M14 17H5", "M19 7h-9"],
+    more: [],
     pen: ["M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z", "m15 5 4 4"],
     marker: ["m9 11-6 6v3h9l3-3", "m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"],
     eraser: ["M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21", "m5.082 11.09 8.828 8.828"],
@@ -39,6 +42,11 @@ test("Lucide 1.59.0の9種類の図形を維持し、表示サイズと線幅は
     assert.match(markup, /class="size-6 shrink-0"/);
     assert.match(markup, /stroke-width="1.75"/);
   }
+  const settings = renderToStaticMarkup(EditorIcon({ name: "settings" }));
+  assert.match(settings, /<circle cx="17" cy="17" r="3"/);
+  assert.match(settings, /<circle cx="7" cy="7" r="3"/);
+  const more = renderToStaticMarkup(EditorIcon({ name: "more" }));
+  assert.deepEqual([...more.matchAll(/<circle cx="(\d+)" cy="12" r="1"/g)].map((entry) => entry[1]), ["12", "19", "5"]);
 });
 
 test("配信するLucideライセンス全文が取得元と一致し、出典とバージョンの記録を保持する", () => {
@@ -48,7 +56,7 @@ test("配信するLucideライセンス全文が取得元と一致し、出典�
   const sources = readFileSync(new URL("../docs/icon-sources.md", import.meta.url), "utf8");
   assert.match(sources, /1\.59\.0/);
   assert.match(sources, /\/licenses\/lucide-LICENSE\.txt/);
-  for (const name of ["pencil", "highlighter", "eraser", "square-dashed-text", "sticky-note", "undo-2", "redo-2", "chevron-left", "chevron-right"]) {
+  for (const name of ["pencil", "highlighter", "eraser", "square-dashed-text", "sticky-note", "undo-2", "redo-2", "chevron-left", "chevron-right", "hand", "settings-2", "ellipsis"]) {
     assert.ok(sources.includes(`1.59.0/icons/${name}.svg`));
   }
 });

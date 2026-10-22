@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { EditorTool } from "../types";
 
-export type EditorIconName = EditorTool | "undo" | "redo" | "previous-page" | "next-page";
+export type EditorIconName = EditorTool | "undo" | "redo" | "previous-page" | "next-page" | "settings" | "more";
 
 // Lucide 1.59.0の公式SVGをインライン化。図形は変更せず、表示サイズと線幅は従来どおり。
 // Source: https://github.com/lucide-icons/lucide/tree/1.59.0/icons
@@ -10,6 +10,17 @@ export type EditorIconName = EditorTool | "undo" | "redo" | "previous-page" | "n
 // アイコンの対応・取得元・変更点: docs/icon-sources.md
 export function EditorIcon({ name }: { name: EditorIconName }) {
   const drawing = {
+    hand: <>
+      <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
+      <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
+      <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
+      <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+    </>,
+    settings: <>
+      <path d="M14 17H5" /><path d="M19 7h-9" />
+      <circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" />
+    </>,
+    more: <><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></>,
     pen: <>
       <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
       <path d="m15 5 4 4" />

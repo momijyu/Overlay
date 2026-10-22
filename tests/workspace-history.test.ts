@@ -135,19 +135,19 @@ function assertStableToolRows() {
 
 test("道具切替で編集操作の並びを変えず、テキスト・付箋も同じ高さの設定欄を使う", () => {
   const { calls } = setup();
-  for (const label of ["ペン", "マーカー", "消しゴム", "テキスト", "付箋"]) {
+  for (const label of ["ペン", "マーカー", "消しゴム", "テキスト", "付箋", "移動・閲覧"]) {
     (button(label)!.props as { onClick: () => void }).onClick();
     assertStableToolRows();
     if (label === "テキスト" || label === "付箋") {
       const children = React.Children.toArray(editorRow("settings").props.children) as React.ReactElement<React.ComponentProps<"div">>[];
-      assert.equal(children.length, 1);
+      assert.equal(children.length, 2); // 操作ボタンの表示先とスマホ用の倍率。
       assert.equal(children[0].props["data-text-controls" as keyof React.ComponentProps<"div">], true);
       const container = {} as HTMLDivElement;
       (children[0].props.ref as (element: HTMLDivElement | null) => void)(container);
       assert.equal(props(PdfPage).textControlsContainer, container);
     }
     if (label === "消しゴム") {
-      assert.equal(React.Children.toArray(editorRow("settings").props.children).length, 1); // サイズ操作だけ残す。
+      assert.equal(React.Children.toArray(editorRow("settings").props.children).length, 2); // サイズ操作とスマホ用の倍率。
       assert.equal(find(render(), (element) => element.type === "p"
         && String((element.props as { children?: unknown }).children).includes("書き込みの触れた部分を消します")), undefined);
       assert.equal(props(PdfPage).tool, "eraser");
@@ -155,6 +155,35 @@ test("道具切替で編集操作の並びを変えず、テキスト・付箋�
   }
   assert.equal(calls.length, 0);
   assert.equal(props(HistoryControls).canUndo, false);
+});
+
+test("スマホ設定は初期状態で閉じ、必要時に開ける。移動・閲覧や倍率変更では保存・履歴を増やさない", () => {
+  const { calls } = setup();
+  assert.equal(editorRow("settings").props["data-mobile-open" as keyof React.ComponentProps<"div">], false);
+  const settings = button("道具の設定")!.props as React.ComponentProps<"button">;
+  assert.equal(settings["aria-expanded"], false);
+  settings.onClick!({} as React.MouseEvent<HTMLButtonElement>);
+  assert.equal(editorRow("settings").props["data-mobile-open" as keyof React.ComponentProps<"div">], true);
+  (button("移動・閲覧")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).tool, "hand");
+  props(PdfPage).onZoomChange(1.5);
+  assert.equal(props(PdfPage).zoom, 1.5);
+  assert.equal(calls.length, 0);
+  assert.equal(props(HistoryControls).canUndo, false);
+  assert.equal(props(AppHeader).compact, true);
+});
+
+test("スマホの書き出しメニューにPDFダウンロードと保管案内をまとめ、PCの出力欄も残す", () => {
+  setup();
+  const header = find(render(), (element) => element.type === AppHeader)!;
+  const menu = find(header, (element) => element.type === "details")!;
+  const summary = find(menu, (element) => element.type === "summary")!.props as React.ComponentProps<"summary">;
+  assert.equal(summary["aria-label"], "書き出しメニュー");
+  assert.match((menu.props as React.ComponentProps<"details">).className!, /sm:hidden/);
+  assert.ok(find(menu, (element) => element.type === "button" && (element.props as { children?: string }).children === "PDFをダウンロード"));
+  assert.ok(find(menu, (element) => "data-pdf-backup-notice" in (element.props as Record<string, unknown>)));
+  const desktop = find(editorRow("actions"), (element) => element.type === "button" && (element.props as { children?: string }).children === "PDFをダウンロード")!;
+  assert.match((desktop.props as React.ComponentProps<"button">).className!, /hidden sm:inline-flex/);
 });
 
 test("長いノート名・保存中・保存完了でも道具の行は移動させず、状態は名前横の同じ欄に表示する", async () => {
@@ -352,7 +381,8 @@ test("編集中はファイル選択枠を隠し、保管案内を出力付近�
     && React.Children.toArray((element.props as { children?: React.ReactNode }).children).some((child) =>
       React.isValidElement<{ "data-editor-row"?: string }>(child) && child.props["data-editor-row"] === "actions"))!;
   const rows = React.Children.toArray((actionsContainer.props as { children: React.ReactNode }).children);
-  assert.equal((rows.at(-1) as React.ReactElement<Record<string, unknown>>).props["data-pdf-backup-notice"], true);
+  assert.equal((rows.at(-1) as React.ReactElement<Record<string, unknown>>).props.className, "hidden sm:block");
+  assert.ok(find(rows.at(-1), (element) => "data-pdf-backup-notice" in (element.props as Record<string, unknown>)));
   await props(NotebookSidebar).onDelete("existing");
   assert.equal((uploadArea().props as { hidden: boolean }).hidden, false);
   assert.ok(find(render(), (element) => element.type === "p"

@@ -4,12 +4,14 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MARKER_OPACITY, PEN_COLOR, PEN_WIDTH_OPTIONS } from "@/features/pdf-editor/penStyle";
 import type { PenStroke, PenTool } from "@/features/pdf-editor/types";
+import { createPageInteraction, type PageInteraction } from "@/features/pdf-editor/pageGestures";
 
 // 状態の保持だけを置き換えてポインターハンドラーを検証する。
 // DOMのレイアウト・実機のPointer Capture・Reactの再描画を再現するテストではない。
 let states: { value: unknown }[] = [];
 mock.module("react", { exports: {
   ...React,
+  useEffect: (effect: () => void) => effect(),
   useRef: (value: unknown) => ({ current: value }),
   useState: <T,>(initial: T | (() => T)) => {
     const slot = { value: typeof initial === "function" ? (initial as () => T)() : initial };
@@ -24,12 +26,12 @@ beforeEach(() => { states = []; });
 
 const line: PenStroke = { width: 2, color: "#ff0000", points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
 
-function layer(tool: PenTool, strokes: PenStroke[] = [line], eraserWidth = 16, penWidth = 5) {
+function layer(tool: PenTool, strokes: PenStroke[] = [line], eraserWidth = 16, penWidth = 5, interaction?: PageInteraction) {
   const completed: PenStroke[] = [];
   const changes: PenStroke[][] = [];
   const captures: number[] = [];
   const element = PenLayer({
-    tool, strokes, penWidth, penColor: "#1234ab", eraserWidth, pageScale: 1,
+    tool, strokes, penWidth, penColor: "#1234ab", eraserWidth, pageScale: 1, pageWidth: 100, pageHeight: 100, interaction,
     onStrokeComplete: (stroke) => completed.push(stroke), onStrokesChange: (next) => changes.push(next),
   });
   const handlers = element.props as Record<"onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel" | "onLostPointerCapture", (event: unknown) => void>;
@@ -82,7 +84,7 @@ test("マーカーの中断では保存しない", () => {
 test("テキスト選択中のペン表示は入力を受けず、二重描画しない", () => {
   let completed = 0;
   const element = PenLayer({ tool: "pen", strokes: [], penWidth: 2, penColor: "#111827", eraserWidth: 16,
-    pageScale: 1, interactive: false, onStrokeComplete: () => { completed++; }, onStrokesChange: () => {} });
+    pageScale: 1, pageWidth: 100, pageHeight: 100, interactive: false, onStrokeComplete: () => { completed++; }, onStrokesChange: () => {} });
   const handlers = element.props as Record<string, (event: unknown) => void>;
   handlers.onPointerDown({});
   handlers.onPointerUp({});
@@ -169,4 +171,32 @@ test("色なしの旧線は従来の黒、色付き線は記録した色で描�
   const html = renderToStaticMarkup(layer("pen", [{ width: 2, points: line.points }, line]).element);
   assert.match(html, new RegExp(`stroke="${PEN_COLOR}"`));
   assert.match(html, /stroke="#ff0000"/);
+});
+
+test("PDF座標で線と点を描き、線幅を拡大補正するvector-effectに依存しない", () => {
+  const html = renderToStaticMarkup(layer("pen", [line, { width: 3, points: [{ x: 0.2, y: 0.3 }] }]).element);
+  assert.match(html, /viewBox="0 0 100 100"/);
+  assert.match(html, /d="M 10 50 L 90 50"/);
+  assert.match(html, /d="M 20 30 l 0.001 0"/);
+  assert.match(html, /stroke-width="2"/);
+  assert.doesNotMatch(html, /vector-effect/);
+});
+
+test("二本指へ切り替えると描画・消去の途中結果を破棄し、残った指でも確定しない", () => {
+  for (const tool of ["pen", "marker", "eraser"] as const) {
+    const interaction = createPageInteraction();
+    const f = layer(tool, [line], 16, 5, interaction);
+    f.handlers.onPointerDown(f.event(50, 0));
+    f.handlers.onPointerMove(f.event(50, 100));
+    interaction.blocked = true;
+    interaction.cancellations.forEach((cancel) => cancel());
+    f.handlers.onPointerUp(f.event(50, 100));
+    f.handlers.onPointerDown(f.event(10, 10));
+    assert.equal(f.completed.length, 0);
+    assert.equal(f.changes.length, 0);
+    assert.equal(states.at(-3)?.value ?? null, null);
+    interaction.blocked = false;
+    f.handlers.onPointerUp(f.event(50, 100));
+    assert.equal(f.completed.length, 0);
+  }
 });

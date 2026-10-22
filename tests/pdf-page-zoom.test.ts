@@ -23,7 +23,7 @@ mock.module("react", { exports: {
   ...React,
   useState: (initial: unknown) => {
     const index = stateIndex++;
-    const slot = states[index] ??= { value: index === 0 ? 400 : initial };
+    const slot = states[index] ??= { value: index === 0 ? 400 : typeof initial === "function" ? initial() : initial };
     return [slot.value, (value: unknown) => { slot.value = value; }];
   },
   useRef: (initial: unknown) => refs[refIndex++] ??= { current: initial },
