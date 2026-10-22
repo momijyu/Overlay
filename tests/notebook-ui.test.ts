@@ -7,6 +7,9 @@ import { NotebookActionDialog, type NotebookAction } from "@/features/pdf-editor
 import { NotebookTree, type NotebookTreeProps } from "@/features/pdf-editor/components/NotebookTree";
 import { PdfWorkspace } from "@/features/pdf-editor/components/PdfWorkspace";
 import { NotebookSidebar } from "@/features/pdf-editor/components/NotebookSidebar";
+import { NotebookMoveDialog } from "@/features/pdf-editor/components/NotebookMoveDialog";
+import { NotebookDeleteDialog } from "@/features/pdf-editor/components/NotebookDeleteDialog";
+import { libraryItems } from "@/features/pdf-editor/noteDrag";
 import { buildNoteTree, folderChoices } from "@/features/pdf-editor/noteTree";
 import type { NoteLibrary } from "@/features/pdf-editor/types";
 import { canMoveItem } from "@/features/pdf-editor/noteDrag";
@@ -50,7 +53,7 @@ test("未選択・読み込み中・他操作中も操作メニュー自体は�
   for (const disabled of [false, true]) {
     const html = renderToStaticMarkup(createElement(NotebookSidebar, {
       refreshVersion: 0, currentNoteId: null, disabled,
-      onOpen: () => {}, onRenamed: () => {}, onDelete: async () => {}, onMutationChange: () => {},
+      onOpen: () => {}, onRenamed: () => {}, onDelete: async () => {}, onDeleteItems: async () => {}, onMutationChange: () => {},
     }));
     const summary = html.match(/<summary[^>]*>操作<\/summary>/)?.[0];
     assert.ok(summary);
@@ -71,6 +74,35 @@ function dialog(action: NotebookAction, busy = false, error: string | null = nul
     action, library: dialogLibrary, busy, error, onClose: () => {}, onSubmit: async () => {},
   }));
 }
+
+test("一括削除の確認は子を含む件数・名前・階層と取消不可を表示し、キャンセルを残す", () => {
+  const html = renderToStaticMarkup(createElement(NotebookDeleteDialog, {
+    items: libraryItems(library), library, busy: false, error: null, onClose: () => {}, onSubmit: async () => {},
+  }));
+  assert.match(html, /ノート1件・フォルダ3件を削除します/);
+  assert.match(html, /ノート：2026 \/ 情報 \/ ノート1/);
+  assert.match(html, /フォルダ：2026 \/ 情報/);
+  assert.match(html, /aria-label="削除する項目"[^>]*border-base-content\/25/);
+  assert.match(html, /class="text-xs leading-relaxed text-red-600 dark:text-red-400" data-bulk-delete-warning="true">※ 表示したノート/);
+  assert.match(html, /元に戻せません/);
+  assert.match(html, /未保存の変更も失われます/);
+  assert.match(html, /キャンセル/);
+  assert.match(html, /type="submit" class="btn btn-error">削除/);
+  assert.match(html, /modal-box max-w-md rounded-box/);
+});
+
+test("未選択の子を含むフォルダは確認でも削除を拒否し、処理中・失敗の表示に対応する", () => {
+  const props = { items: [{ kind: "folder" as const, id: "year" }], library, busy: false,
+    error: null, onClose: () => {}, onSubmit: async () => {} };
+  const invalid = renderToStaticMarkup(createElement(NotebookDeleteDialog, props));
+  assert.match(invalid, /中身が選択内容と異なります/);
+  assert.match(invalid, /type="submit"[^>]*disabled=""/);
+  const busy = renderToStaticMarkup(createElement(NotebookDeleteDialog, { ...props, items: libraryItems(library), busy: true }));
+  assert.match(busy, /削除中…/);
+  assert.match(busy, /type="button"[^>]*disabled=""/);
+  const failed = renderToStaticMarkup(createElement(NotebookDeleteDialog, { ...props, items: libraryItems(library), error: "削除失敗" }));
+  assert.match(failed, /role="alert"[^>]*>削除失敗/);
+});
 
 test("ノート・フォルダの管理画面はサイドメニューの片側角丸を使わず、四隅を統一する", () => {
   const actions: NotebookAction[] = [
@@ -242,6 +274,49 @@ function treeProps(overrides: Partial<NotebookTreeProps> = {}): NotebookTreeProp
     ...overrides,
   };
 }
+
+test("選択モードはPC・スマホ共通のチェック欄を出し、ノート名を押しても開かない", () => {
+  const checked: unknown[] = [];
+  const entries = elements(NotebookTree(treeProps({ selectionMode: true,
+    checkedItems: new Set(["note:note"]), onCheck: (item) => checked.push(item),
+    onOpen: () => assert.fail("選択中にノートを開いてはいけない"), onSelect: () => assert.fail() })));
+  const note = entries.find((entry) => entry.type === "button" && entry.props.title === "ノート1")!;
+  assert.equal(note.props.draggable, false);
+  assert.equal(note.props["data-notebook-item"], undefined);
+  (note.props.onClick as () => void)();
+  const folder = entries.find((entry) => entry.type === "input" && entry.props["aria-label"] === "フォルダ「情報」を選択")!;
+  (folder.props.onChange as () => void)();
+  const checkbox = entries.find((entry) => entry.type === "input" && entry.props["aria-label"] === "ノート「ノート1」を選択")!;
+  assert.equal(checkbox.props.checked, true);
+  assert.deepEqual(checked, [{ kind: "note", id: "note" }, { kind: "folder", id: "subject" }]);
+  const summary = entries.find((entry) => entry.type === "summary" && entry.props.title === "情報")!;
+  (summary.props.onClick as () => void)();
+  assert.equal(checked.length, 2); // フォルダ名は開閉、チェック欄は選択に分離。
+});
+
+test("通常モードは長押し対象と子要素ドロップ用IDを持ち、PCドラッグも維持する", () => {
+  const entries = elements(NotebookTree(treeProps()));
+  const row = entries.find((entry) => entry.type === "button" && entry.props.title === "ノート1")!;
+  assert.deepEqual(JSON.parse(row.props["data-notebook-item"] as string), { kind: "note", id: "note" });
+  assert.equal(row.props.draggable, true);
+  assert.ok(entries.some((entry) => entry.type === "li" && entry.props["data-notebook-drop"] === "subject"));
+});
+
+test("一括移動画面は移動先の指定を要求し、自己・子孫・同名衝突を無効化する", () => {
+  const html = renderToStaticMarkup(createElement(NotebookMoveDialog, {
+    items: [{ kind: "folder", id: "year" }], library, busy: false, error: "保存失敗",
+    onClose: () => {}, onSubmit: async () => {},
+  }));
+  assert.match(html, /選択した項目を移動/);
+  assert.match(html, /value="" disabled="" selected="">移動先を選択/);
+  assert.match(html, /option value="year" disabled=""/);
+  assert.match(html, /option value="subject" disabled=""/);
+  assert.match(html, /option value="other">2027/);
+  assert.match(html, /type="submit"[^>]*disabled=""/);
+  assert.match(html, /キャンセル/);
+  assert.match(html, /role="alert"[^>]*>保存失敗/);
+  assert.match(html, /modal-box max-w-md rounded-box/);
+});
 
 test("一覧は名前を直接操作でき、選択・移動先を強調する", () => {
   const html = renderToStaticMarkup(createElement(NotebookTree, treeProps({

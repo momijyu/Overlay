@@ -2,7 +2,7 @@
 
 import type { DragEvent } from "react";
 
-import type { NoteDragItem } from "../noteDrag";
+import { noteItemKey, type NoteDragItem } from "../noteDrag";
 import type { NoteTree } from "../noteTree";
 import type { SavedNoteSummary } from "../types";
 
@@ -23,29 +23,37 @@ export type NotebookTreeProps = {
   onDragOver: (event: DragEvent<HTMLElement>, folderId: string | null) => void;
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
   onDrop: (event: DragEvent<HTMLElement>, folderId: string | null) => void;
+  selectionMode?: boolean;
+  checkedItems?: Set<string>;
+  onCheck?: (item: NoteDragItem) => void;
 };
 
 export function NotebookTree(props: NotebookTreeProps) {
   return (
     <>
       {props.tree.folders.map((folder) => (
-        <li key={folder.id}
+        <li key={folder.id} data-notebook-drop={folder.id}
           className={props.dropTarget === folder.id ? "notebook-drop-target" : undefined}
           // フォルダ全体で受け取り、子フォルダが処理したイベントは親へ渡さない。
           onDragOver={(event) => { event.stopPropagation(); props.onDragOver(event, folder.id); }}
           onDragLeave={(event) => { event.stopPropagation(); props.onDragLeave(event); }}
           onDrop={(event) => { event.stopPropagation(); props.onDrop(event, folder.id); }}>
+          {props.selectionMode && <input type="checkbox" className="checkbox checkbox-sm notebook-check"
+            aria-label={`フォルダ「${folder.name}」を選択`}
+            checked={props.checkedItems?.has(noteItemKey({ kind: "folder", id: folder.id })) ?? false}
+            disabled={props.disabled} onChange={() => props.onCheck?.({ kind: "folder", id: folder.id })} />}
           <details open={props.expanded.has(folder.id)}
             onToggle={(event) => props.onToggle(folder.id, event.currentTarget.open)}>
             <summary
               className={`notebook-row notebook-folder ${props.selected?.kind === "folder" && props.selected.id === folder.id ? "bg-base-200" : ""} ${props.dropTarget === folder.id ? "outline-2 outline-primary bg-base-200" : ""} ${props.dragging?.kind === "folder" && props.dragging.id === folder.id ? "opacity-50" : ""}`}
               title={folder.name}
               aria-disabled={props.disabled}
+              data-notebook-item={!props.selectionMode ? JSON.stringify({ kind: "folder", id: folder.id }) : undefined}
               onClick={(event) => {
                 if (props.disabled) event.preventDefault();
-                else props.onSelect({ kind: "folder", id: folder.id });
+                else if (!props.selectionMode) props.onSelect({ kind: "folder", id: folder.id });
               }}
-              draggable={props.dragEnabled && !props.disabled}
+              draggable={props.dragEnabled && !props.disabled && !props.selectionMode}
               onDragStart={(event) => props.onDragStart(event, { kind: "folder", id: folder.id })}
               onDragEnd={props.onDragEnd}
             ><span className="notebook-label">{folder.name}</span></summary>
@@ -59,15 +67,21 @@ export function NotebookTree(props: NotebookTreeProps) {
       ))}
       {props.tree.notes.map((note) => (
         <li key={note.id}>
+          {props.selectionMode && <input type="checkbox" className="checkbox checkbox-sm notebook-check"
+            aria-label={`ノート「${note.title}」を選択`}
+            checked={props.checkedItems?.has(noteItemKey({ kind: "note", id: note.id })) ?? false}
+            disabled={props.disabled} onChange={() => props.onCheck?.({ kind: "note", id: note.id })} />}
           <button type="button"
             className={`notebook-row ${note.id === props.currentNoteId ? "menu-active" : ""} ${props.selected?.kind === "note" && props.selected.id === note.id ? "outline-1 outline-base-300" : ""} ${props.dragging?.kind === "note" && props.dragging.id === note.id ? "opacity-50" : ""}`}
             title={note.title}
             aria-current={note.id === props.currentNoteId ? "page" : undefined}
-            disabled={props.disabled} draggable={props.dragEnabled && !props.disabled}
+            data-notebook-item={!props.selectionMode ? JSON.stringify({ kind: "note", id: note.id }) : undefined}
+            disabled={props.disabled} draggable={props.dragEnabled && !props.disabled && !props.selectionMode}
             onDragStart={(event) => props.onDragStart(event, { kind: "note", id: note.id })}
             onDragEnd={props.onDragEnd}
             onClick={() => {
               if (props.disabled) return;
+              if (props.selectionMode) { props.onCheck?.({ kind: "note", id: note.id }); return; }
               props.onSelect({ kind: "note", id: note.id });
               if (note.id !== props.currentNoteId) props.onOpen(note);
             }}><span className="notebook-label">{note.title}</span></button>

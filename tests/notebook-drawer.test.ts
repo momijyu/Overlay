@@ -49,6 +49,7 @@ test("初期状態は閉じた左端のダイアログで、開くボタンは�
   assert.match(html, /max-w-\[calc\(100vw-2rem\)\]/);
   assert.match(html, /motion-reduce:transition-none/);
   assert.match(html, /modal-box[^\"]*rounded-none/);
+  assert.match(html, /class="flex items-center justify-between gap-2 px-4 pt-3 pb-3"/);
 });
 
 test("開閉状態をnative dialogへ同期し、開いているdialogを二重に開かない", () => {

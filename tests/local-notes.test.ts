@@ -3,14 +3,16 @@ import test, { afterEach, beforeEach, mock } from "node:test";
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 
 import {
-  createNoteFolder, deleteEmptyNoteFolder, deleteSavedNote, loadLocalNote, loadNoteLibrary,
-  moveNoteFolder, moveSavedNote, organizeNote, renameNoteFolder, saveLocalNote,
+  createNoteFolder, deleteEmptyNoteFolder, deleteSavedNote, deleteSavedItems, loadLocalNote, loadNoteLibrary,
+  moveNoteFolder, moveSavedNote, moveSavedItems, organizeNote, renameNoteFolder, saveLocalNote,
 } from "@/features/pdf-editor/localNotes";
 import { readRequest, withLocalTransaction } from "@/features/pdf-editor/localDatabase";
 import type { PenStroke, TextNote } from "@/features/pdf-editor/types";
 import { createLocalAutosave } from "@/features/pdf-editor/localAutosave";
 import { eraseStrokes } from "@/features/pdf-editor/eraseStrokes";
 import { createStrokeHistory, recordStrokeEdit, recordTextEdit, undoStrokeEdit, redoStrokeEdit } from "@/features/pdf-editor/strokeHistory";
+import { libraryItems, noteItemKey } from "@/features/pdf-editor/noteDrag";
+import { toggleNotebookSelection } from "@/features/pdf-editor/noteSelection";
 
 const file = new File(["%PDF-1.7\nlocal-test"], "授業.pdf", { type: "application/pdf" });
 const strokes: Record<number, PenStroke[]> = {
@@ -25,11 +27,155 @@ beforeEach(() => {
 });
 afterEach(() => mock.restoreAll());
 
+test("一括移動は親子の選択をまとめ、中の所属・PDF・線・文章・更新番号を維持する", async () => {
+  const parent = await createNoteFolder("講義", null);
+  const child = await createNoteFolder("情報", parent);
+  const target = await createNoteFolder("2026", null);
+  const inside = await saveLocalNote({ file, noteId: null, strokesByPage: strokes, textsByPage: { 1: [textNote] } });
+  const outside = await saveLocalNote({ file, noteId: null, strokesByPage: {} });
+  await moveSavedNote(inside, child);
+  const original = await loadLocalNote(inside);
+  await moveSavedItems([{ kind: "folder", id: parent }, { kind: "folder", id: child },
+    { kind: "note", id: inside }, { kind: "note", id: outside }], target);
+  const library = await loadNoteLibrary();
+  assert.equal(library.folders.find((item) => item.id === parent)?.parentId, target);
+  assert.equal(library.folders.find((item) => item.id === child)?.parentId, parent);
+  assert.equal(library.notes.find((item) => item.id === inside)?.folderId, child);
+  assert.equal(library.notes.find((item) => item.id === outside)?.folderId, target);
+  const loaded = await loadLocalNote(inside);
+  assert.deepEqual(loaded.strokesByPage, original.strokesByPage);
+  assert.deepEqual(loaded.textsByPage, original.textsByPage);
+  assert.equal(loaded.revision, original.revision);
+  assert.equal(await loaded.file.text(), await original.file.text());
+  assert.deepEqual(await counts(), [2, 2, 3]);
+});
+
+test("一括移動は移動不要の項目を残し、残りだけを同じ移動先へ保存する", async () => {
+  const target = await createNoteFolder("移動先", null);
+  const first = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  const second = await saveLocalNote({ file, noteId: null, strokesByPage: {} });
+  await moveSavedNote(first, target);
+  await moveSavedItems([{ kind: "note", id: first }, { kind: "note", id: second }], target);
+  assert.ok((await loadNoteLibrary()).notes.every((note) => note.folderId === target));
+});
+
+test("別タブで消えた対象・移動先や同名衝突がある場合、一括移動は全件拒否する", async () => {
+  const target = await createNoteFolder("移動先", null);
+  const parent = await createNoteFolder("別", null);
+  const first = await createNoteFolder("Docs", null);
+  const second = await createNoteFolder("docs", parent);
+  const note = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  const before = await loadNoteLibrary();
+  for (const items of [
+    [{ kind: "note" as const, id: note }, { kind: "folder" as const, id: "missing" }],
+    [{ kind: "folder" as const, id: first }, { kind: "folder" as const, id: second }],
+  ]) await assert.rejects(moveSavedItems(items, target), /移動できません/);
+  await assert.rejects(moveSavedItems([{ kind: "note", id: note }], "missing"), /移動できません/);
+  assert.deepEqual(await loadNoteLibrary(), before);
+});
+
+test("一括移動の途中で書き込みが失敗したら、先に移動したノートも取り消す", async () => {
+  const target = await createNoteFolder("移動先", null);
+  const first = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  const second = await saveLocalNote({ file, noteId: null, strokesByPage: {} });
+  const before = await loadNoteLibrary();
+  const put = IDBObjectStore.prototype.put;
+  let writes = 0;
+  const mocked = mock.method(IDBObjectStore.prototype, "put", function (this: IDBObjectStore, ...args: Parameters<typeof put>) {
+    if (this.name === "notes" && ++writes === 2) throw new DOMException("test quota", "QuotaExceededError");
+    return put.apply(this, args);
+  });
+  await assert.rejects(moveSavedItems([{ kind: "note", id: first }, { kind: "note", id: second }], target));
+  mocked.mock.restore();
+  assert.equal(writes, 2);
+  assert.deepEqual(await loadNoteLibrary(), before);
+  assert.deepEqual(await counts(), [2, 2, 1]);
+});
+
 async function counts() {
   return withLocalTransaction(["notes", "pdfs", "folders"], "readonly", async (transaction) => Promise.all(
     ["notes", "pdfs", "folders"].map((name) => readRequest(transaction.objectStore(name).count())),
   ));
 }
+
+test("一括削除は選択した親子・ノート・PDFだけを削除し、他のデータを保持する", async () => {
+  const parent = await createNoteFolder("親", null);
+  const child = await createNoteFolder("子", parent);
+  const outside = await createNoteFolder("残す", null);
+  const inside = await saveLocalNote({ file, noteId: null, strokesByPage: strokes, textsByPage: { 1: [textNote] } });
+  const other = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  await moveSavedNote(inside, child);
+  await moveSavedNote(other, outside);
+  const library = await loadNoteLibrary();
+  const checked = toggleNotebookSelection(new Set(), { kind: "folder", id: parent }, library);
+  await deleteSavedItems(libraryItems(library).filter((item) => checked.has(noteItemKey(item))));
+  assert.deepEqual(await counts(), [1, 1, 1]);
+  assert.equal((await loadNoteLibrary()).notes[0].id, other);
+  assert.deepEqual((await loadLocalNote(other)).strokesByPage, strokes);
+  assert.equal(await (await loadLocalNote(other)).file.text(), await file.text());
+  await assert.rejects(loadLocalNote(inside), /元PDFが見つかりません/);
+});
+
+test("子を除外した選択は親フォルダを消さず、チェックした兄弟だけを削除する", async () => {
+  const parent = await createNoteFolder("親", null);
+  const child = await createNoteFolder("子", parent);
+  const keep = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  const remove = await saveLocalNote({ file, noteId: null, strokesByPage: {} });
+  await moveSavedNote(keep, child);
+  await moveSavedNote(remove, parent);
+  const library = await loadNoteLibrary();
+  let checked = toggleNotebookSelection(new Set(), { kind: "folder", id: parent }, library);
+  checked = toggleNotebookSelection(checked, { kind: "note", id: keep }, library);
+  await deleteSavedItems(libraryItems(library).filter((item) => checked.has(noteItemKey(item))));
+  assert.deepEqual(await counts(), [1, 1, 2]);
+  assert.equal((await loadNoteLibrary()).notes[0].id, keep);
+});
+
+test("確認後に増えた子を暗黙に削除せず、全件拒否して既存ノートと階層を残す", async () => {
+  const parent = await createNoteFolder("親", null);
+  const inside = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  await moveSavedNote(inside, parent);
+  const confirmed = libraryItems(await loadNoteLibrary());
+  await createNoteFolder("確認後に追加", parent);
+  const before = await loadNoteLibrary();
+  await assert.rejects(deleteSavedItems(confirmed), /中身が選択内容と異なります/);
+  assert.deepEqual(await loadNoteLibrary(), before);
+  assert.deepEqual(await counts(), [1, 1, 2]);
+});
+
+test("一括削除でPDFの削除に失敗したら、先に削除したフォルダ・ノートも全て復元する", async () => {
+  const parent = await createNoteFolder("親", null);
+  const note = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  await moveSavedNote(note, parent);
+  const before = await loadNoteLibrary();
+  const original = IDBObjectStore.prototype.delete;
+  const calls: string[] = [];
+  const mocked = mock.method(IDBObjectStore.prototype, "delete", function (this: IDBObjectStore, ...args: Parameters<typeof original>) {
+    calls.push(this.name);
+    if (this.name === "pdfs") throw new Error("PDF削除失敗");
+    return original.apply(this, args);
+  });
+  await assert.rejects(deleteSavedItems(libraryItems(before)), /PDF削除失敗/);
+  mocked.mock.restore();
+  assert.deepEqual(calls, ["folders", "notes", "pdfs"]);
+  assert.deepEqual(await loadNoteLibrary(), before);
+  assert.deepEqual(await counts(), [1, 1, 1]);
+  assert.deepEqual((await loadLocalNote(note)).strokesByPage, strokes);
+});
+
+test("空・消えた対象・子が不足する削除は全件拒否し、PDF欠損のノートは片付けられる", async () => {
+  const parent = await createNoteFolder("親", null);
+  const note = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  await moveSavedNote(note, parent);
+  const before = await loadNoteLibrary();
+  await assert.rejects(deleteSavedItems([]), /削除対象が変更/);
+  await assert.rejects(deleteSavedItems([{ kind: "note", id: note }, { kind: "note", id: "missing" }]), /削除対象が変更/);
+  await assert.rejects(deleteSavedItems([{ kind: "folder", id: parent }]), /中身が選択内容と異なります/);
+  assert.deepEqual(await loadNoteLibrary(), before);
+  await withLocalTransaction(["pdfs"], "readwrite", async (tx) => { await readRequest(tx.objectStore("pdfs").delete(note)); });
+  await deleteSavedItems(libraryItems(before));
+  assert.deepEqual(await counts(), [0, 0, 0]);
+});
 
 test("接続情報・認証・通信なしで空の一覧を開ける", async () => {
   assert.deepEqual(await loadNoteLibrary(), { notes: [], folders: [], foldersEnabled: true });

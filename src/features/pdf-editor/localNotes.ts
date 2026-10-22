@@ -1,5 +1,6 @@
 import { readRequest, withLocalTransaction } from "./localDatabase";
-import { canMoveItem } from "./noteDrag";
+import { canMoveItem, canMoveItems, selectedMoveRoots, type NoteDragItem } from "./noteDrag";
+import { checkedDeletion } from "./noteSelection";
 import { canDeleteEmptyFolder, hasFolderNameConflict } from "./noteTree";
 import { readStrokes } from "./strokeData";
 import { readTextNotes } from "./textData";
@@ -109,6 +110,23 @@ export async function deleteSavedNote(noteId: string): Promise<void> {
   });
 }
 
+export async function deleteSavedItems(items: NoteDragItem[]): Promise<void> {
+  // 呼び出し後に配列が変わっても、確認時の対象を増減させない。
+  const confirmed = items.map((item) => ({ ...item }));
+  await withLocalTransaction(["notes", "pdfs", "folders"], "readwrite", async (transaction) => {
+    const targets = checkedDeletion(confirmed, await readLibrary(transaction));
+    for (const item of targets) {
+      if (item.kind === "note") {
+        await readRequest(transaction.objectStore("notes").delete(item.id));
+        await readRequest(transaction.objectStore("pdfs").delete(item.id));
+      } else {
+        await readRequest(transaction.objectStore("folders").delete(item.id));
+      }
+    }
+    // 1件でも失敗したらnotes・pdfs・foldersを全てロールバックする。
+  });
+}
+
 export async function createNoteFolder(name: string, parentId: string | null): Promise<string> {
   const trimmedName = checkedName(name, 100);
   return withLocalTransaction(["notes", "folders"], "readwrite", async (transaction) => {
@@ -151,6 +169,28 @@ export async function moveNoteFolder(folderId: string, parentId: string | null):
     }
     const folder = library.folders.find((folder) => folder.id === folderId)!;
     await readRequest(transaction.objectStore("folders").put({ ...folder, parentId }));
+  });
+}
+
+export async function moveSavedItems(items: NoteDragItem[], parentId: string | null): Promise<void> {
+  await withLocalTransaction(["notes", "folders"], "readwrite", async (transaction) => {
+    const library = await readLibrary(transaction);
+    if (!canMoveItems(items, parentId, library)) {
+      throw new Error("移動できません。項目の存在・現在の場所・自己や子孫・同名フォルダを確認してください。");
+    }
+    // 一部だけ移動して失敗しないよう、全件を同じトランザクションへ含める。
+    for (const item of selectedMoveRoots(items, library)) {
+      if (item.kind === "folder") {
+        const folder = library.folders.find((entry) => entry.id === item.id)!;
+        if (folder.parentId !== parentId) await readRequest(transaction.objectStore("folders").put({ ...folder, parentId }));
+      } else {
+        const notes = transaction.objectStore("notes");
+        const note = await readRequest<LocalNote>(notes.get(item.id));
+        if (note.folderId !== parentId) {
+          await readRequest(notes.put({ ...note, folderId: parentId, updatedAt: new Date().toISOString() }));
+        }
+      }
+    }
   });
 }
 

@@ -7,7 +7,8 @@ import { AppHeader } from "@/components/layout/AppHeader";
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { pdfDownloadName } from "../pdfDownloadName";
 import { DEFAULT_ERASER_WIDTH, DEFAULT_MARKER_WIDTH, DEFAULT_PEN_WIDTH, isPenColor, MARKER_COLOR, PEN_COLOR } from "../penStyle";
-import { deleteSavedNote, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
+import { deleteSavedNote, deleteSavedItems, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
+import type { NoteDragItem } from "../noteDrag";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
 import type { PenStroke, EditorTool, TextNote, TextNotesByPage } from "../types";
 import { PdfPage } from "./PdfPage";
@@ -53,9 +54,6 @@ export function PdfWorkspace() {
   const [noteName, setNoteName] = useState("");
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [isOrganizing, setIsOrganizing] = useState(false);
-  const [savedStrokes, setSavedStrokes] = useState<Record<number, PenStroke[]> | null>(
-    null,
-  );
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -63,7 +61,6 @@ export function PdfWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [documentVersion, setDocumentVersion] = useState(0);
-  const [savedTexts, setSavedTexts] = useState<TextNotesByPage | null>(null);
   const [markerWidth, setMarkerWidth] = useState(DEFAULT_MARKER_WIDTH);
   const [markerColor, setMarkerColor] = useState(MARKER_COLOR);
   const [textControlsContainer, setTextControlsContainer] = useState<HTMLDivElement | null>(null);
@@ -76,7 +73,6 @@ export function PdfWorkspace() {
   // 自動保存中も描画・ページ切り替え・PDF出力を止めない。
   // ノートを開き直すときだけ、openPdfで保存完了を待つ。
   const isBusy = isLoading || isExporting || isOrganizing;
-  const hasUnsavedChanges = file !== null && (savedStrokes !== strokesByPage || savedTexts !== history.textsByPage);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -138,8 +134,6 @@ export function PdfWorkspace() {
       setFile(input.file);
       setDocument(loadedDocument);
       setHistory(nextHistory);
-      setSavedStrokes(input.strokesByPage);
-      setSavedTexts(nextHistory.textsByPage);
       setNoteId(input.id);
       setNoteName(input.name ?? (input.file.name.replace(/\.pdf$/i, "") || input.file.name));
       setPageNumber(1);
@@ -155,8 +149,6 @@ export function PdfWorkspace() {
           // 古いノートの保存結果が、新しく開いた画面に混ざらないようにする。
           if (!mountedRef.current || autosaveRef.current !== autosave) return;
           setNoteId(state.noteId);
-          setSavedStrokes(state.savedStrokes);
-          setSavedTexts(state.savedTexts);
           setIsSaving(state.status === "saving");
           setSaveError(state.error);
           if (state.status === "saved") setRefreshVersion((value) => value + 1);
@@ -232,13 +224,22 @@ export function PdfWorkspace() {
   }
 
   async function handleDelete(noteToDelete: string) {
+    await completeDeletion([noteToDelete], () => deleteSavedNote(noteToDelete));
+  }
+
+  async function handleDeleteItems(items: NoteDragItem[]) {
+    await completeDeletion(items.filter((item) => item.kind === "note").map((item) => item.id), () => deleteSavedItems(items));
+  }
+
+  async function completeDeletion(noteIds: string[], remove: () => Promise<void>) {
     const autosave = autosaveRef.current;
-    const deletingCurrent = autosave?.getState().noteId === noteToDelete;
+    const currentId = autosave?.getState().noteId;
+    const deletingCurrent = !!currentId && noteIds.includes(currentId);
     // サイドバーが編集をロックしている間に、開始済みの保存を完了させる。
     // 保存失敗時も削除は可能だが、削除自体の失敗時は画面と保存係を残す。
-    if (deletingCurrent) await autosave.flush();
-    await deleteSavedNote(noteToDelete);
-    if (!deletingCurrent) return;
+    if (deletingCurrent && autosave) await autosave.flush();
+    await remove();
+    if (!deletingCurrent || !autosave) return;
     autosave.dispose();
     autosaveRef.current = null;
     if (!mountedRef.current) return;
@@ -247,8 +248,6 @@ export function PdfWorkspace() {
     setFile(null);
     setDocument(null);
     setHistory(nextHistory);
-    setSavedStrokes(null);
-    setSavedTexts(null);
     setNoteId(null);
     setNoteName("");
     setPageNumber(1);
@@ -289,8 +288,7 @@ export function PdfWorkspace() {
     }
   }
 
-  const statusText = isExporting ? "出力中…" : saveError ? "保存失敗" : isSaving ? "保存中…"
-    : hasUnsavedChanges ? "未保存" : noteId ? "保存済み" : "未編集";
+  const statusText = isExporting ? "出力中…" : saveError ? "保存失敗" : isSaving ? "保存中…" : "";
   const backupNotice = <p className="text-sm text-red-400" data-pdf-backup-notice>
     ※ 重要なノートは定期的に『PDFをダウンロード』して保管してください。
   </p>;
@@ -309,7 +307,7 @@ export function PdfWorkspace() {
         {document && file && <>
           <div className="min-w-0 flex-1 sm:hidden">
             <p className="truncate text-sm" title={noteName || file.name}>{noteName}</p>
-            <p role="status" className={`text-xs ${saveError ? "text-error" : "text-base-content/60"}`}>{statusText}</p>
+            <p data-editor-mobile-status role="status" className={`min-h-4 text-xs ${saveError ? "text-error" : "text-base-content/60"}`}>{statusText}</p>
           </div>
           <button type="button" className="btn btn-square btn-ghost sm:hidden" aria-label="道具の設定"
             title="道具の設定" aria-expanded={mobileSettingsOpen} aria-controls="editor-settings"
@@ -338,6 +336,7 @@ export function PdfWorkspace() {
               if (id === noteId) setNoteName(title);
             }}
             onDelete={handleDelete}
+            onDeleteItems={handleDeleteItems}
             onMutationChange={(busy) => {
               operationRef.current = busy;
               setIsOrganizing(busy);

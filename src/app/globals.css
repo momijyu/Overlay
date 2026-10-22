@@ -70,6 +70,24 @@ body {
   --menu-active-fg: var(--color-base-content);
 }
 
+/* 長押しは一覧専用。通常の指スクロールは止めず、文字選択だけを防ぐ。 */
+.notebook-tree [data-notebook-item] {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+.notebook-tree[data-selecting="true"] li { position: relative; }
+.notebook-tree[data-selecting="true"] .notebook-row { padding-inline-start: 2.25rem; }
+.notebook-tree .notebook-check {
+  position: absolute;
+  z-index: 1;
+  inset-inline-start: 0.5rem;
+  top: 0.3125rem;
+}
+@media (pointer: coarse) {
+  .notebook-tree .notebook-row { min-height: 2.75rem; }
+  .notebook-tree .notebook-check { top: 0.75rem; }
+}
+
 .notebook-tree .notebook-row {
   display: grid;
   grid-template-columns: 0.75rem minmax(0, 1fr);

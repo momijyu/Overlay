@@ -34,7 +34,7 @@ export function NotebookDrawer({ open, busy, onFileChange, pdfOpenDisabled, onCl
         }}
         onClose={(event) => { if (event.target === event.currentTarget) onClose(); }}>
         <div className="modal-box h-dvh w-80 max-w-[calc(100vw-2rem)] rounded-none p-0 motion-reduce:transition-none">
-          <div className="flex items-center justify-between gap-2 px-4 pt-3">
+          <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-3">
             {/* モーダル内の選択欄を使い、編集中のPDFは選択に成功するまで維持する。 */}
             <button type="button" className="btn btn-sm" disabled={pdfOpenDisabled}
               onClick={() => { if (!pdfOpenDisabled) fileInputRef.current?.click(); }}>PDFを追加</button>
