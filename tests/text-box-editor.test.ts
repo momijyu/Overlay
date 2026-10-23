@@ -109,6 +109,25 @@ test("スマホのキーボード表示に合わせて入力欄の下端と高�
   cleanups.forEach((cleanup) => cleanup()); cleanups = [];
   assert.equal(viewport.listeners.get("resize")?.size, 0);
   assert.equal(viewport.listeners.get("scroll")?.size, 0);
+  assert.equal(win.listeners.get("resize")?.size, 0);
+});
+
+test("横向きへの回転・キーボード開閉でも文章の草稿を失わず、表示範囲だけ更新する", () => {
+  const viewport = Object.assign(new Events(), { height: 600, offsetTop: 0 });
+  Object.assign(win, { visualViewport: viewport, innerHeight: 800 });
+  const f = fixture();
+  f.change("回転中の草稿");
+  Object.assign(win, { innerHeight: 390 });
+  viewport.height = 170;
+  win.emit("resize");
+  assert.equal(f.cssVariables.get("--editor-keyboard-offset"), "220px");
+  assert.equal(f.cssVariables.get("--editor-visible-height"), "154px");
+  assert.equal(f.input().value, "回転中の草稿");
+  assert.equal(f.commits.length, 0);
+  viewport.height = 390;
+  viewport.emit("resize");
+  assert.equal(f.cssVariables.get("--editor-keyboard-offset"), "0px");
+  assert.equal(f.getCancelled(), 0);
 });
 
 test("ページ上のtextareaで入力し、外へフォーカスを移すと1回だけ確定する", () => {

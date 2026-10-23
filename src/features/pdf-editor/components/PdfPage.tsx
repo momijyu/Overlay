@@ -6,7 +6,7 @@ import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { PenStroke, EditorTool, TextNote } from "../types";
 import { PenLayer } from "./PenLayer";
 import { TextLayer } from "./TextLayer";
-import { bindPageZoomWheel, capturePageZoomAnchor, restorePageZoomAnchor, type PageZoomAnchor } from "../pageZoom";
+import { bindPageZoomWheel, capturePageZoomAnchor, capturePageResizeAnchor, restorePageZoomAnchor, type PageZoomAnchor } from "../pageZoom";
 import { bindPageGestures, createPageInteraction } from "../pageGestures";
 
 type PdfPageProps = {
@@ -52,6 +52,7 @@ export function PdfPage({
   const zoomRef = useRef(zoom);
   const anchorRef = useRef<PageZoomAnchor | null>(null);
   const displaySizeRef = useRef<string | null>(null);
+  const previousViewportRef = useRef<{ width: number; height: number; anchor: PageZoomAnchor | null } | null>(null);
   const [availableWidth, setAvailableWidth] = useState(0);
   const [renderedPage, setRenderedPage] = useState<{
     width: number;
@@ -76,6 +77,8 @@ export function PdfPage({
     if (anchor) restorePageZoomAnchor(viewport, surface, anchor);
     anchorRef.current = null;
     displaySizeRef.current = size;
+    previousViewportRef.current = { width: viewport.clientWidth, height: viewport.clientHeight,
+      anchor: capturePageZoomAnchor(viewport, surface) };
   }, [zoom, displayScale, renderedPage]);
 
   useEffect(() => {
@@ -118,16 +121,31 @@ export function PdfPage({
     if (!container) return;
 
     const observer = new ResizeObserver(() => {
+      const previous = previousViewportRef.current;
+      if (previous && previous.width !== container.clientWidth) {
+        anchorRef.current = capturePageResizeAnchor(container, previous.anchor);
+      }
+      previousViewportRef.current = { width: container.clientWidth, height: container.clientHeight,
+        anchor: surfaceRef.current ? capturePageZoomAnchor(container, surfaceRef.current) : null };
       const style = getComputedStyle(container);
       setAvailableWidth(
-        container.clientWidth -
+        Math.max(0, container.clientWidth -
           parseFloat(style.paddingLeft) -
-          parseFloat(style.paddingRight),
+          parseFloat(style.paddingRight)),
       );
     });
     observer.observe(container);
 
-    return () => observer.disconnect();
+    const rememberPosition = () => {
+      const previous = previousViewportRef.current;
+      // リサイズ後・Observer通知前のスクロールで、回転前の記録を上書きしない。
+      if (previous?.width === container.clientWidth && previous.height === container.clientHeight && surfaceRef.current) {
+        previous.anchor = capturePageZoomAnchor(container, surfaceRef.current);
+      }
+    };
+    container.addEventListener("scroll", rememberPosition, { passive: true });
+
+    return () => { observer.disconnect(); container.removeEventListener("scroll", rememberPosition); };
   }, []);
 
   useEffect(() => {

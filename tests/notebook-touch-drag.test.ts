@@ -76,9 +76,9 @@ test("native listenerは長押し後だけスクロールとクリックを抑�
     if (oldElement) Object.defineProperty(globalThis, "Element", oldElement); else Reflect.deleteProperty(globalThis, "Element");
   });
   const row = new TouchRow();
-  let started = 0, dropped = 0, moved = 0;
+  let started = 0, dropped = 0, moved = 0, cancelled = 0;
   const dispose = attachNotebookTouchDrag(row as unknown as HTMLElement, {
-    onStart: () => started++, onMove: () => moved++, onDrop: () => dropped++, onCancel: () => {},
+    onStart: () => started++, onMove: () => moved++, onDrop: () => dropped++, onCancel: () => cancelled++,
   });
   const touch = (type: string, touches = [{ identifier: 1, clientX: 10, clientY: 10 }]) => {
     const event = new Event(type, { cancelable: true });
@@ -100,10 +100,16 @@ test("native listenerは長押し後だけスクロールとクリックを抑�
   const click = new Event("click", { cancelable: true });
   row.dispatchEvent(click);
   assert.equal(click.defaultPrevented, true);
+  touch("touchstart");
+  t.mock.timers.tick(NOTE_LONG_PRESS_MS);
+  surface.dispatchEvent(new Event("resize"));
+  assert.equal(cancelled, 1);
+  touch("touchend", []);
+  assert.equal(dropped, 1);
   dispose();
   touch("touchstart");
   t.mock.timers.tick(NOTE_LONG_PRESS_MS);
-  assert.equal(started, 1);
+  assert.equal(started, 2);
   assert.equal(touch("touchmove").defaultPrevented, false);
 });
 

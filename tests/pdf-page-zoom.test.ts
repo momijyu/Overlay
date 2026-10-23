@@ -13,6 +13,7 @@ type Effect = { deps?: unknown[]; cleanup?: () => void };
 let effects: Effect[];
 let pendingLayouts: (() => void)[];
 let pendingEffects: (() => void)[];
+let resized: () => void;
 function effect(queue: (() => void)[], callback: () => (() => void) | void, deps: unknown[]) {
   const entry = effects[effectIndex++] ??= {};
   if (entry.deps && deps.every((value, index) => Object.is(value, entry.deps![index]))) return;
@@ -38,7 +39,8 @@ beforeEach(() => {
   states = []; refs = []; effects = []; pendingLayouts = []; pendingEffects = [];
   stateIndex = 0; refIndex = 0; effectIndex = 0;
   Object.assign(globalThis, {
-    ResizeObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { constructor(callback: () => void) { resized = callback; } observe() {} disconnect() {} },
+    getComputedStyle: () => ({ paddingLeft: "0", paddingRight: "0" }),
     window: { devicePixelRatio: 2 },
   });
 });
@@ -91,6 +93,7 @@ function fixture() {
     return event;
   }
   return { render, tasks, canvas, viewport, draws, wheel, textControlsContainer, setZoom: changeZoom,
+    resize: (width: number, height: number) => { viewport.clientWidth = width; viewport.clientHeight = height; resized(); },
     disable: () => { disabled = true; }, zoom: () => zoom,
     cleanup: () => effects.forEach((entry) => entry.cleanup?.()),
   };
@@ -183,5 +186,27 @@ test("古い描画を取り消し、遅れて完了・失敗しても最新画�
   f.tasks[3].resolve(); await flush(); f.render();
   assert.equal(f.draws.length, 2);
   assert.equal(f.canvas.width, 1280);
+  f.cleanup();
+});
+
+test("回転相当の幅変更でもページ・倍率・文章入力の要素を維持し、前の中心を復元する", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  f.setZoom(1.5);
+  f.render(); await flush(); f.tasks[0].resolve(); await flush();
+  const before = f.render();
+  f.viewport.scrollLeft = 100; f.viewport.scrollTop = 200;
+  f.viewport.dispatchEvent(new Event("scroll"));
+  f.resize(400, 300);
+  const x = (f.viewport.scrollLeft + 200) / parseFloat(f.canvas.style.width);
+  const y = (f.viewport.scrollTop + 150) / parseFloat(f.canvas.style.height);
+  f.resize(800, 200);
+  const after = f.render();
+  assert.equal(f.zoom(), 1.5);
+  assert.equal(f.canvas.style.width, "900px");
+  assert.equal(childElement(before, TextLayer).key, childElement(after, TextLayer).key);
+  assert.equal(childProps(after, TextLayer).controlsContainer, f.textControlsContainer);
+  assert.ok(Math.abs((f.viewport.scrollLeft + 400) / 900 - x) < 0.001);
+  assert.ok(Math.abs((f.viewport.scrollTop + 100) / 1200 - y) < 0.001);
   f.cleanup();
 });

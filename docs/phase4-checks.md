@@ -1,5 +1,17 @@
 # 第4回の確認記録
 
+## 最新：スマホの縦横対応（2026年10月23日）
+
+幅640px未満またはタッチ中心（hover:noneかつpointer:coarse）で共通のコンパクトUIを使う。CSSとJSXの表示条件をそろえ、横向きでも設定・書き出しの入口と道具の順序を維持する。ツールバーは上部のまま、横幅に余裕があればページ操作を同じ行の右へ置く。設定は独立スクロール可能な重ね表示へ変更し、画面高に収めた編集領域の残りをPDFへ割り当てる。安全領域と低い画面でのメニュー・入力欄の高さも調整した。
+
+`globals.css`・`PdfWorkspace.tsx`・`AppHeader.tsx`が配置と表示先、`pageGestures.ts`・`notebookTouchDrag.ts`が回転やサイズ変更中の未確定操作の取消、`PdfPage.tsx`・`pageZoom.ts`が変更前のPDF中央の記録・復元を担当する。`TextBoxEditor.tsx`はキーボードと回転による表示位置の再計算を担当し、草稿の確定条件は変更しない。通常のPC配置と保存先・形式・自動保存・Undo / Redo・PDF出力は維持する。
+
+`tests/mobile-layout.test.ts`・`tests/workspace-history.test.ts`で共通の表示条件と配置指定、`tests/page-gestures.test.ts`・`tests/notebook-touch-drag.test.ts`で中断と監視解除、`tests/page-zoom.test.ts`・`tests/pdf-page-zoom.test.ts`で表示位置と倍率・文章入力要素の維持、`tests/text-box-editor.test.ts`でキーボード・回転相当のサイズ変更と草稿保持を確認する。
+
+`npm test`は310件成功。`npm run lint`・`npx tsc --noEmit`・`npx next build --webpack`・`git diff --check`も成功。利用者の保存データには触れていない。
+
+自動テストはDOM・Hooks・寸法を代用し、CSS指定も検証する。実際のレイアウト、ソフトキーボード、OSの回転イベントや指操作の快適さを確認したものではない。今回の実機・公開確認は未完了で、[スマホ・タッチ操作](./mobile-operations.md)の縦横切り替え・入力・中断の項目で再確認する。ページ全体の自動フィットや左端の縦ツールバーは追加していない。Safari対応完了・第4回全体の完成とは扱わず、commit・pushはしていない。
+
 ## 最新：スマホの長押し短縮（2026年10月23日）
 
 利用者の実機報告を受け、`notebookTouchDrag.ts`のドラッグ開始待ちを600msから400msへ短縮した。PC操作・10px超のスクロール判定・短いタップ・二本指や中断時の取消・移動先フォルダの600ms展開待ちは変更していない。`tests/notebook-touch-drag.test.ts`では399msで開始せず400msで開始すること、399msで離すとタップとして扱うこと、スクロール・中断・native listenerの接続を確認する。短縮後の実機操作感は未確認。commit・pushはしていない。

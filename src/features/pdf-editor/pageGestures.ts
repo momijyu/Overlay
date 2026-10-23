@@ -21,6 +21,7 @@ export function bindPageGestures(viewport: HTMLElement, options: {
   const touches = new Map<number, Point>();
   let mouse: number | null = null;
   let gesture: Gesture | null = null;
+  let interrupted = false;
   const { interaction } = options;
   function stop(event: PointerEvent) { event.preventDefault(); event.stopPropagation(); }
   function cancelEditing() {
@@ -49,6 +50,7 @@ export function bindPageGestures(viewport: HTMLElement, options: {
     if (!options.isEnabled() || (event.target as Element | null)?.closest?.("textarea,input,button,select,[contenteditable],[data-text-editor]")) return;
     if (event.pointerType === "touch") {
       touches.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+      if (interrupted) { stop(event); return; }
       if (touches.size >= 2 || options.isHand()) {
         const point = midpoint();
         if (point) begin(point);
@@ -80,8 +82,9 @@ export function bindPageGestures(viewport: HTMLElement, options: {
     if (interaction.blocked) stop(event);
     if (touches.size === 0 && mouse === null) {
       gesture = null;
+      interrupted = false;
       interaction.blocked = false;
-    } else if (touches.size >= 2) {
+    } else if (touches.size >= 2 && !interrupted) {
       const point = midpoint();
       if (point) begin(point);
     }
@@ -97,18 +100,29 @@ export function bindPageGestures(viewport: HTMLElement, options: {
     for (const id of [...touches.keys(), ...(mouse === null ? [] : [mouse])]) {
       try { if (viewport.hasPointerCapture(id)) viewport.releasePointerCapture(id); } catch { /* 切断済み */ }
     }
-    touches.clear(); mouse = null; gesture = null; interaction.blocked = false;
+    touches.clear(); mouse = null; gesture = null; interrupted = false; interaction.blocked = false;
+  }
+  function resized() {
+    // 回転中の座標変化を描画・消去・ドラッグへ確定しない。文章の草稿は維持する。
+    cancelEditing();
+    gesture = null;
+    interrupted = touches.size > 0 || mouse !== null;
+    interaction.blocked = interrupted;
   }
   const events = { pointerdown: down, pointermove: move, pointerup: up, pointercancel: up, lostpointercapture: lost };
   for (const [name, listener] of Object.entries(events)) viewport.addEventListener(name, listener as EventListener, { capture: true, passive: false });
   const ownerWindow = viewport.ownerDocument?.defaultView;
   ownerWindow?.addEventListener("blur", reset);
+  ownerWindow?.addEventListener("resize", resized);
+  ownerWindow?.addEventListener("orientationchange", resized);
   // captureが途中で失われてPDF外で指を離した場合も、追跡を残さない。
   ownerWindow?.addEventListener("pointerup", up, true);
   ownerWindow?.addEventListener("pointercancel", up, true);
   return () => {
     for (const [name, listener] of Object.entries(events)) viewport.removeEventListener(name, listener as EventListener, true);
     ownerWindow?.removeEventListener("blur", reset);
+    ownerWindow?.removeEventListener("resize", resized);
+    ownerWindow?.removeEventListener("orientationchange", resized);
     ownerWindow?.removeEventListener("pointerup", up, true);
     ownerWindow?.removeEventListener("pointercancel", up, true);
     reset();

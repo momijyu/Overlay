@@ -305,14 +305,14 @@ export function PdfWorkspace() {
           </svg>
         </button>
         {document && file && <>
-          <div className="min-w-0 flex-1 sm:hidden">
+          <div className="mobile-only min-w-0 flex-1">
             <p className="truncate text-sm" title={noteName || file.name}>{noteName}</p>
             <p data-editor-mobile-status role="status" className={`min-h-4 text-xs ${saveError ? "text-error" : "text-base-content/60"}`}>{statusText}</p>
           </div>
-          <button type="button" className="btn btn-square btn-ghost sm:hidden" aria-label="道具の設定"
+          <button type="button" className="btn btn-square btn-ghost mobile-only" aria-label="道具の設定"
             title="道具の設定" aria-expanded={mobileSettingsOpen} aria-controls="editor-settings"
             onClick={() => setMobileSettingsOpen((open) => !open)}><EditorIcon name="settings" /></button>
-          <details className="dropdown dropdown-end sm:hidden">
+          <details className="dropdown dropdown-end mobile-only">
             <summary className="btn btn-square btn-ghost" aria-label="書き出しメニュー" title="書き出しメニュー"><EditorIcon name="more" /></summary>
             <div className="dropdown-content z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-sm">
               <button type="button" className="btn w-full" disabled={isBusy} onClick={() => void handleDownload()}>PDFをダウンロード</button>
@@ -378,7 +378,7 @@ export function PdfWorkspace() {
             {document && file && (
               <>
                 <div className="editor-toolbar min-w-0 space-y-3">
-                  <div data-editor-row="title" className="hidden h-6 min-w-0 items-center gap-3 sm:flex">
+                  <div data-editor-row="title" className="desktop-only flex h-6 min-w-0 items-center gap-3">
                     <p className="min-w-0 flex-1 truncate" title={noteName || file.name}>
                       {noteName}
                     </p>
@@ -427,11 +427,11 @@ export function PdfWorkspace() {
                     {(penTool === "text" || penTool === "sticky") && <div
                       ref={setTextControlsContainer} data-text-controls
                       className="flex items-center gap-2" />}
-                    <div className="mobile-zoom sm:hidden"><ZoomControl id="mobile-pdf-zoom" value={zoom} disabled={isBusy} onChange={setZoom} /></div>
+                    <div className="mobile-zoom mobile-only"><ZoomControl id="mobile-pdf-zoom" value={zoom} disabled={isBusy} onChange={setZoom} /></div>
                   </div>
                   <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
                     <button
-                      className="btn btn-primary hidden sm:inline-flex"
+                      className="btn btn-primary desktop-only"
                       type="button"
                       disabled={isBusy}
                       onClick={() => void handleDownload()}
@@ -462,7 +462,7 @@ export function PdfWorkspace() {
                       </button>
                     </div>
                   </div>
-                  <div className="hidden sm:block">{backupNotice}</div>
+                  <div className="desktop-only">{backupNotice}</div>
                 </div>
                 <PdfPage
                   key={`${documentVersion}-${pageNumber}`}

@@ -124,7 +124,11 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
     update();
     viewport.addEventListener("resize", update);
     viewport.addEventListener("scroll", update);
-    return () => { viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update); };
+    window.addEventListener("resize", update);
+    return () => {
+      viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
   }, []);
 
   let fitted: TextNote = { ...note, ...colors, fontSize, ...(fitToText ? { autoSize: true } : {}) };
@@ -181,7 +185,7 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
               onChange={(event) => changeColor("backgroundColor", event.target.value)} />
           </label>}
         </div>
-        <div className="flex gap-1" onPointerDown={(event) => event.preventDefault()}>
+        <div className="text-editor-actions flex gap-1" onPointerDown={(event) => event.preventDefault()}>
           <button type="button" className="btn btn-xs" onClick={() => finish()}>完了</button>
           <button type="button" className="btn btn-xs" onClick={cancel}>キャンセル</button>
           {onDelete && <button type="button" className="btn btn-xs" onClick={() => {

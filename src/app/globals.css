@@ -15,34 +15,65 @@ body {
   margin: 0;
 }
 
-/* 狭い画面は資料を主役にし、PCの道具配置・テーマは変更しない。 */
-@media (width < 640px) {
+/* 同じ条件でCSS・操作の表示先を切り替える。高さはキーボードでも変わるので判定に使わない。 */
+.mobile-only { display: none; }
+@media (width < 640px), (hover: none) and (pointer: coarse) {
+  .desktop-only { display: none; }
+  .mobile-only { display: block; }
+  .btn.mobile-only { display: inline-flex; }
   .overlay-app[data-pdf-open="true"] {
     height: 100dvh;
     min-height: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
-  .app-header { min-height: 3.25rem; padding: 0.25rem 0.5rem; flex-shrink: 0; }
+  .app-header {
+    min-height: 3.25rem; padding-block: 0.25rem; flex-shrink: 0;
+    padding-left: max(0.5rem, env(safe-area-inset-left));
+    padding-right: max(0.5rem, env(safe-area-inset-right));
+  }
   .app-header > div { gap: 0.25rem; }
   .app-header .btn { width: 2.5rem; height: 2.5rem; min-height: 2.5rem; }
+  .app-header .dropdown-content { max-height: calc(100dvh - 4rem); overflow: auto; overscroll-behavior: contain; }
   .app-header .dropdown-content .btn { width: 100%; }
   .overlay-app[data-pdf-open="true"] .editor-main { flex: 1; min-height: 0; padding: 0; display: flex; }
-  .overlay-app[data-pdf-open="true"] .workspace-card { border: 0; border-radius: 0; box-shadow: none; }
-  .overlay-app[data-pdf-open="true"] .workspace-body { min-height: 0; gap: 0.375rem; padding: 0.375rem; }
-  .editor-toolbar { display: flex; flex-direction: column; gap: 0.25rem; }
+  .overlay-app[data-pdf-open="true"] .workspace-card { flex: 1; min-height: 0; border: 0; border-radius: 0; box-shadow: none; }
+  .overlay-app[data-pdf-open="true"] .workspace-body {
+    min-height: 0; gap: 0.375rem; padding: 0.375rem; overflow: hidden;
+    padding-left: max(0.375rem, env(safe-area-inset-left));
+    padding-right: max(0.375rem, env(safe-area-inset-right));
+    padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
+  }
+  .editor-toolbar { position: relative; z-index: 10; flex-shrink: 0; display: flex; flex-direction: column; gap: 0.25rem; }
   .editor-toolbar > :not(:last-child) { margin-block: 0; }
   .editor-tools { height: 2.75rem; gap: 0.25rem; justify-content: space-between; }
   .editor-tools .btn { width: 2.25rem; height: 2.75rem; min-height: 2.75rem; padding: 0; }
   .editor-tools svg { width: 1.25rem; height: 1.25rem; }
   .editor-tools > .zoom-control { display: none; }
   .editor-settings { display: none; }
-  .editor-settings[data-mobile-open="true"] { display: flex; height: auto; min-height: 2.75rem; flex-wrap: wrap; gap: 0.5rem; overflow-x: auto; padding: 0.25rem; }
+  .editor-settings[data-mobile-open="true"] {
+    position: absolute; inset: calc(100% + 0.375rem) 0 auto; z-index: 20;
+    display: flex; height: auto; min-height: 2.75rem;
+    max-height: min(45dvh, 16rem, max(2.75rem, calc(100dvh - 9rem - env(safe-area-inset-bottom))));
+    flex-wrap: wrap; gap: 0.5rem; overflow: auto; overscroll-behavior: contain; padding: 0.5rem;
+    background: var(--color-base-100); border: 1px solid var(--color-base-300); border-radius: var(--radius-box);
+    box-shadow: 0 0.25rem 1rem #0002;
+  }
   .editor-settings .btn { min-height: 2.75rem; height: 2.75rem; }
   .mobile-zoom { width: 100%; }
   .editor-toolbar [data-editor-row="actions"] { justify-content: flex-end; }
   .editor-toolbar [data-editor-row="actions"] .btn { min-height: 2rem; height: 2rem; }
-  .pdf-viewport { flex: 1; min-height: 0; max-height: none; padding: 0.25rem; }
+  .pdf-viewport { flex: 1; min-height: 0; max-height: none; padding: 0.25rem; overscroll-behavior: contain; }
+  .overlay-app .alert { flex-shrink: 0; max-height: 30dvh; overflow: auto; }
+
+  /* 横に余裕があるタッチ画面では、道具の順序は変えずページ操作を同じ行の右へ置く。 */
+  @media (width >= 640px) {
+    .editor-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; }
+    .editor-tools { grid-column: 1; grid-row: 1; justify-content: flex-start; }
+    .editor-toolbar [data-editor-row="actions"] { grid-column: 2; grid-row: 1; }
+    .editor-toolbar [data-editor-row="actions"] .btn { min-height: 2.75rem; height: 2.75rem; }
+  }
 
   /* 文字入力だけはPDFの縮尺から離し、指とキーボードで扱える大きさにする。 */
   .text-editor-surface {
@@ -51,7 +82,7 @@ body {
   }
   .text-editor-panel {
     position: relative; left: auto !important; top: auto !important; width: 100% !important; height: auto !important;
-    max-height: min(65dvh, var(--editor-visible-height, 65dvh)); overflow: auto; padding: 0.75rem;
+    max-height: min(65dvh, var(--editor-visible-height, 65dvh)); overflow: auto; overscroll-behavior: contain; padding: 0.75rem;
     padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
     background: var(--color-base-100); border-top: 1px solid var(--color-base-300);
   }
@@ -62,6 +93,13 @@ body {
   .text-editor-options .btn { min-height: 2.75rem; height: 2.75rem; padding-inline: 0.75rem; }
   .text-editor-error { position: static; }
   .editing-note-preview [visibility="hidden"] { visibility: visible; }
+  .text-editor-actions { position: sticky; bottom: 0; z-index: 1; background: var(--color-base-100); padding-block: 0.25rem; flex-wrap: wrap; }
+  @media (width >= 640px) {
+    .text-editor-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 0.5rem; padding: 0.5rem; }
+    .text-editor-panel textarea { min-height: 3rem !important; height: clamp(3rem, 24dvh, 8rem) !important; }
+    .text-editor-options { margin-top: 0; padding: 0; }
+    .text-editor-error { grid-column: 1 / -1; }
+  }
 }
 
 /* ノート一覧だけに適用し、操作メニューなど他のdaisyUIのmenuは変更しない。 */
@@ -83,10 +121,6 @@ body {
   inset-inline-start: 0.5rem;
   top: 0.3125rem;
 }
-@media (pointer: coarse) {
-  .notebook-tree .notebook-row { min-height: 2.75rem; }
-  .notebook-tree .notebook-check { top: 0.75rem; }
-}
 
 .notebook-tree .notebook-row {
   display: grid;
@@ -96,6 +130,11 @@ body {
   min-height: 1.875rem;
   padding-inline: 0.5rem;
   font-size: 0.875rem;
+}
+
+@media (pointer: coarse) {
+  .notebook-tree .notebook-row { min-height: 2.75rem; }
+  .notebook-tree .notebook-check { top: 0.75rem; }
 }
 
 .notebook-tree .notebook-label {

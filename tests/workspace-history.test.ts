@@ -185,11 +185,11 @@ test("スマホの書き出しメニューにPDFダウンロードと保管案�
   const menu = find(header, (element) => element.type === "details")!;
   const summary = find(menu, (element) => element.type === "summary")!.props as React.ComponentProps<"summary">;
   assert.equal(summary["aria-label"], "書き出しメニュー");
-  assert.match((menu.props as React.ComponentProps<"details">).className!, /sm:hidden/);
+  assert.match((menu.props as React.ComponentProps<"details">).className!, /mobile-only/);
   assert.ok(find(menu, (element) => element.type === "button" && (element.props as { children?: string }).children === "PDFをダウンロード"));
   assert.ok(find(menu, (element) => "data-pdf-backup-notice" in (element.props as Record<string, unknown>)));
   const desktop = find(editorRow("actions"), (element) => element.type === "button" && (element.props as { children?: string }).children === "PDFをダウンロード")!;
-  assert.match((desktop.props as React.ComponentProps<"button">).className!, /hidden sm:inline-flex/);
+  assert.match((desktop.props as React.ComponentProps<"button">).className!, /desktop-only/);
 });
 
 test("長いノート名・保存中・保存完了でも道具の行は移動させず、状態は名前横の同じ欄に表示する", async () => {
@@ -395,7 +395,7 @@ test("編集中はファイル選択枠を隠し、保管案内を出力付近�
     && React.Children.toArray((element.props as { children?: React.ReactNode }).children).some((child) =>
       React.isValidElement<{ "data-editor-row"?: string }>(child) && child.props["data-editor-row"] === "actions"))!;
   const rows = React.Children.toArray((actionsContainer.props as { children: React.ReactNode }).children);
-  assert.equal((rows.at(-1) as React.ReactElement<Record<string, unknown>>).props.className, "hidden sm:block");
+  assert.equal((rows.at(-1) as React.ReactElement<Record<string, unknown>>).props.className, "desktop-only");
   assert.ok(find(rows.at(-1), (element) => "data-pdf-backup-notice" in (element.props as Record<string, unknown>)));
   await props(NotebookSidebar).onDelete("existing");
   assert.equal((uploadArea().props as { hidden: boolean }).hidden, false);

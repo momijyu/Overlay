@@ -39,6 +39,16 @@ export function restorePageZoomAnchor(viewport: ZoomViewport, surface: ZoomSurfa
   viewport.scrollTop += bounds.top + bounds.height * anchor.y - anchor.clientY;
 }
 
+export function capturePageResizeAnchor(viewport: ZoomViewport, previous: PageZoomAnchor | null): PageZoomAnchor | null {
+  if (!previous) return null;
+  const outer = viewport.getBoundingClientRect();
+  // 回転後はブラウザによる中央寄せ・スクロールの丸めが済んでいるため、変更前に記録したPDF座標を使う。
+  return { ...previous,
+    clientX: outer.left + viewport.clientLeft + viewport.clientWidth / 2,
+    clientY: outer.top + viewport.clientTop + viewport.clientHeight / 2,
+  };
+}
+
 // PDF領域の修飾キー付きホイールだけを扱う。Chromeのトラックパッドの
 // ピンチもctrlKey付きのwheelとして届く。通常のスクロールには触れない。
 export function bindPageZoomWheel(viewport: HTMLElement, options: {

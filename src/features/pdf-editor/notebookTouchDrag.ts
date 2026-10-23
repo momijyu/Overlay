@@ -103,6 +103,8 @@ export function attachNotebookTouchDrag(root: HTMLElement, callbacks: TouchDragC
   window.addEventListener("touchcancel", gesture.cancel);
   window.addEventListener("touchstart", additionalTouch, { passive: true });
   window.addEventListener("blur", gesture.cancel);
+  window.addEventListener("resize", gesture.cancel);
+  window.addEventListener("orientationchange", gesture.cancel);
   root.addEventListener("click", click, true);
   root.addEventListener("contextmenu", context);
   root.addEventListener("dragstart", nativeDrag);
@@ -115,6 +117,8 @@ export function attachNotebookTouchDrag(root: HTMLElement, callbacks: TouchDragC
     window.removeEventListener("touchcancel", gesture.cancel);
     window.removeEventListener("touchstart", additionalTouch);
     window.removeEventListener("blur", gesture.cancel);
+    window.removeEventListener("resize", gesture.cancel);
+    window.removeEventListener("orientationchange", gesture.cancel);
     root.removeEventListener("click", click, true);
     root.removeEventListener("contextmenu", context);
     root.removeEventListener("dragstart", nativeDrag);

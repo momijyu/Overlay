@@ -149,3 +149,28 @@ test("操作不可・文章入力欄はジェスチャーへ奪わない", () =>
   assert.equal(editor.cancelled(), 0);
   editor.cleanup();
 });
+
+test("回転・リサイズでは途中編集を中断し、残った指を全て離すまで再開しない", () => {
+  for (const name of ["resize", "orientationchange"]) {
+    const f = fixture();
+    f.emit("pointerdown", 1);
+    f.emit("pointerdown", 2, 200);
+    const before = f.transformed();
+    f.win.dispatchEvent(new Event(name));
+    assert.equal(f.cancelled(), 2);
+    assert.equal(f.interaction.blocked, true);
+    f.emit("pointermove", 1, 20);
+    f.emit("pointerdown", 3, 300);
+    f.emit("pointerup", 1);
+    f.emit("pointermove", 3, 350);
+    assert.equal(f.transformed(), before);
+    f.emit("pointerup", 2);
+    assert.equal(f.interaction.blocked, true);
+    f.emit("pointerup", 3);
+    assert.equal(f.interaction.blocked, false);
+    f.cleanup();
+    const cancelled = f.cancelled();
+    f.win.dispatchEvent(new Event(name));
+    assert.equal(f.cancelled(), cancelled);
+  }
+});

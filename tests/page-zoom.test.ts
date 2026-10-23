@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  bindPageZoomWheel, capturePageZoomAnchor, clampPageZoom, restorePageZoomAnchor, wheelPageZoom,
+  bindPageZoomWheel, capturePageZoomAnchor, capturePageResizeAnchor, clampPageZoom, restorePageZoomAnchor, wheelPageZoom,
 } from "@/features/pdf-editor/pageZoom";
 
 test("倍率を50〜200%に制限し、小さいピンチ入力も反映する", () => {
@@ -53,6 +53,21 @@ test("スライダーは表示領域の中心を基準にし、余白や未表�
   assert.equal(capturePageZoomAnchor(viewport, surface, { clientX: -100, clientY: 2000 })!.y, 1);
   resize({ left: 0, top: 0, width: 0, height: 0 });
   assert.equal(capturePageZoomAnchor(viewport, surface), null);
+});
+
+test("回転では変更前の中心のPDF座標を、変更後の表示領域の中心へ合わせる", () => {
+  const { viewport, surface, resize } = geometry();
+  const before = capturePageZoomAnchor(viewport, surface)!;
+  viewport.clientWidth = 800; viewport.clientHeight = 200;
+  // 中央寄せやスクロールの丸めで既に位置が変わっても、変更前の記録を使用する。
+  resize({ left: 110, top: 20, width: 600, height: 800 });
+  viewport.scrollLeft = 0; viewport.scrollTop = 0;
+  const after = capturePageResizeAnchor(viewport, before)!;
+  assert.equal(after.x, before.x);
+  assert.equal(after.y, before.y);
+  assert.equal(after.clientX, 410);
+  assert.equal(after.clientY, 120);
+  assert.equal(capturePageResizeAnchor(viewport, null), null);
 });
 
 test("PDF領域のCtrl・Command・ピンチだけを処理し、通常スクロール・無効時と解除後は触らない", () => {
