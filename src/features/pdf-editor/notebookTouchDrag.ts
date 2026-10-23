@@ -1,6 +1,6 @@
 import { readNoteDrag, type NoteDragItem } from "./noteDrag";
 
-export const NOTE_LONG_PRESS_MS = 600;
+export const NOTE_LONG_PRESS_MS = 400;
 const SCROLL_SLOP = 10;
 type Point = { x: number; y: number };
 type TouchDragCallbacks = {
