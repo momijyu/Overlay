@@ -5,6 +5,7 @@ import { createLocalAutosave, type LocalSaveInput } from "@/features/pdf-editor/
 import * as localNotes from "@/features/pdf-editor/localNotes";
 import type { PenStroke, SavedNoteSummary, TextNotesByPage } from "@/features/pdf-editor/types";
 import type { NoteDragItem } from "@/features/pdf-editor/noteDrag";
+import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
 
 // Hooksの保持だけを代用し、Workspace内のイベント・状態・保存の接続を検証する。
 // DOM・実際のReact再描画・ブラウザ操作を再現するテストではない。
@@ -26,6 +27,13 @@ const savedInputs: LocalSaveInput[] = [];
 const deletedItems: NoteDragItem[][] = [];
 let openedTexts: TextNotesByPage | undefined;
 const openedStrokes = { 2: [{ width: 5, points: [{ x: 0.2, y: 0.3 }] }] };
+const backups: NoteBackup[] = [];
+const capturedSelections: NoteDragItem[][] = [];
+let restoreCalls = 0;
+let restoreFails = false;
+let decodeFails = false;
+const importedBackup: NoteBackup = { schemaVersion: 1, kind: "note", name: "復元用", folders: [],
+  notes: [{ id: "backup", title: "復元用", fileName: file.name, folderId: null, pdf: file, strokesByPage: {}, textsByPage: {} }] };
 
 mock.module("react", { exports: {
   ...React,
@@ -44,6 +52,16 @@ mock.module("react", { exports: {
 } });
 mock.module("@/features/pdf-editor/localNotes", { exports: {
   ...localNotes,
+  restoreNoteBackup: async () => {
+    restoreCalls++;
+    if (restoreFails) throw new Error("復元容量不足");
+    return { notes: 1, folders: 0 };
+  },
+  captureNoteBackup: async () => importedBackup,
+  captureSelectedNoteBackup: async (items: NoteDragItem[]) => {
+    capturedSelections.push(items);
+    return { ...importedBackup, schemaVersion: 2, kind: "selection", name: "Overlay-選択項目" };
+  },
   saveLocalNote: async (input: LocalSaveInput) => {
     savedInputs.push(input);
     if (persistFails) throw new Error("容量不足");
@@ -59,6 +77,10 @@ mock.module("@/features/pdf-editor/localNotes", { exports: {
     if (openFails) throw new Error("読込失敗");
     return { file, id: "other", strokesByPage: openedStrokes, textsByPage: openedTexts, revision: 1 };
   },
+} });
+mock.module("@/features/pdf-editor/noteBackupFile", { exports: {
+  encodeNoteBackup: async (backup: NoteBackup) => { backups.push(backup); return new Blob(["backup"]); },
+  decodeNoteBackup: async () => { if (decodeFails) throw new Error("バックアップ破損"); return importedBackup; },
 } });
 mock.module("pdfjs-dist/legacy/build/pdf.mjs", { exports: {
   GlobalWorkerOptions: {},
@@ -82,8 +104,10 @@ const { NotebookDrawer } = await import("@/features/pdf-editor/components/Notebo
 const { PenWidthControl } = await import("@/features/pdf-editor/components/PenWidthControl");
 const { EditorIcon } = await import("@/features/pdf-editor/components/EditorIcon");
 const { AppHeader } = await import("@/components/layout/AppHeader");
+const { NotebookRestoreDialog } = await import("@/features/pdf-editor/components/NotebookRestoreDialog");
 
 beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; deletedItems.length = 0; openedTexts = undefined; });
+beforeEach(() => { backups.length = 0; capturedSelections.length = 0; restoreCalls = 0; restoreFails = false; decodeFails = false; });
 
 function render() {
   stateCursor = 0;
@@ -117,6 +141,137 @@ function setup() {
 }
 
 const red: PenStroke = { width: 2.5, color: "#ff0000", points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
+
+test("ノートのバックアップは保存失敗中も最新の確定済み内容を渡し、元の履歴を変えない", async () => {
+  setup();
+  await openOther();
+  props(NotebookSidebar).onRenamed("other", "試験用");
+  persistFails = true;
+  props(PdfPage).onStrokeComplete(red);
+  const text = { id: "sticky", kind: "sticky" as const, text: "覚える", x: 0.1, y: 0.1, width: 0.4, fontSize: 16 };
+  props(PdfPage).onTextsChange([text]);
+  await new Promise(setImmediate);
+  const history = props(HistoryControls).canUndo;
+  const downloads: string[] = [];
+  const anchor = { href: "", download: "", click: () => { downloads.push(anchor.download); }, remove: () => {} };
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    document: { createElement: () => anchor, body: { appendChild: () => {} } },
+    setTimeout: (callback: () => void) => { callback(); return 0; },
+  } });
+  try {
+    (button("ノートのバックアップ")!.props as { onClick: () => void }).onClick();
+    for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+    assert.deepEqual(downloads, ["試験用.overlay"]);
+    assert.deepEqual(backups[0].notes[0].strokesByPage[1], [red]);
+    assert.deepEqual(backups[0].notes[0].textsByPage[1], [text]);
+    assert.equal(props(HistoryControls).canUndo, history);
+  } finally {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
+async function importForConfirmation() {
+  const target = { files: [new File(["backup"], "note.overlay")], value: "note.overlay" };
+  props(NotebookDrawer).onBackupFileChange!({ target } as unknown as React.ChangeEvent<HTMLInputElement>);
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.equal(target.value, ""); // 同じファイルの再選択が可能。
+}
+
+test("読み込みは確認だけでは復元せず、キャンセル・解析失敗で編集中の内容を維持する", async () => {
+  setup();
+  props(PdfPage).onStrokeComplete(red);
+  const current = props(PdfPage).strokes;
+  await importForConfirmation();
+  assert.equal(restoreCalls, 0);
+  assert.ok(find(render(), (entry) => entry.type === NotebookRestoreDialog));
+  props(NotebookRestoreDialog).onClose();
+  assert.equal(find(render(), (entry) => entry.type === NotebookRestoreDialog), undefined);
+  assert.deepEqual(props(PdfPage).strokes, current);
+  decodeFails = true;
+  await importForConfirmation();
+  assert.equal(find(render(), (entry) => entry.type === NotebookRestoreDialog), undefined);
+  assert.equal(restoreCalls, 0);
+  assert.deepEqual(props(PdfPage).strokes, current);
+});
+
+test("復元失敗は確認と内容を残し、成功後だけ一覧を更新して編集履歴は維持する", async () => {
+  setup();
+  props(PdfPage).onStrokeComplete(red);
+  await importForConfirmation();
+  restoreFails = true;
+  props(NotebookRestoreDialog).onRestore();
+  await new Promise(setImmediate);
+  assert.equal(props(NotebookRestoreDialog).error, "復元容量不足");
+  assert.equal(props(HistoryControls).canUndo, true);
+  const refresh = props(NotebookSidebar).refreshVersion;
+  restoreFails = false;
+  props(NotebookRestoreDialog).onRestore();
+  await new Promise(setImmediate);
+  assert.equal(restoreCalls, 2);
+  assert.equal(find(render(), (entry) => entry.type === NotebookRestoreDialog), undefined);
+  assert.equal(props(NotebookSidebar).refreshVersion, refresh + 1);
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+  assert.equal(props(HistoryControls).canUndo, true);
+});
+
+test("フォルダ書き出しは開始済みの保存を待ち、待機中の編集・ページ切り替えを止める", async () => {
+  setup();
+  await openOther();
+  let finish!: () => void;
+  persistWait = new Promise<void>((resolve) => { finish = resolve; });
+  props(PdfPage).onStrokeComplete(red);
+  props(NotebookSidebar).onBackup!({ kind: "folder", id: "folder" });
+  assert.equal(props(PdfPage).disabled, true);
+  assert.equal(backups.length, 0);
+  (button("次のページ")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).pageNumber, 1);
+  props(PdfPage).onStrokeComplete({ ...red, color: "#000000" });
+  finish();
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.equal(backups.length, 1);
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+  assert.equal(props(PdfPage).disabled, false);
+});
+
+test("フォルダ出力は保存失敗時に古いデータを出力せず、編集内容を残す", async () => {
+  setup();
+  await openOther();
+  persistFails = true;
+  props(PdfPage).onStrokeComplete(red);
+  await new Promise(setImmediate);
+  props(NotebookSidebar).onBackup!({ kind: "folder", id: "folder" });
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.equal(backups.length, 0);
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+  assert.equal(props(PdfPage).disabled, false);
+});
+
+test("一覧の選択項目をZIP名でダウンロードし、同じ読み込みと復元確認へ渡せる", async () => {
+  setup();
+  const downloads: string[] = [];
+  const anchor = { href: "", download: "", click: () => { downloads.push(anchor.download); }, remove: () => {} };
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    document: { createElement: () => anchor, body: { appendChild: () => {} } },
+    setTimeout: (callback: () => void) => { callback(); return 0; },
+  } });
+  try {
+    const selected: NoteDragItem[] = [{ kind: "note", id: "first" }, { kind: "folder", id: "second" }];
+    props(NotebookSidebar).onBackupItems!(selected);
+    for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+    assert.deepEqual(capturedSelections, [selected]);
+    assert.deepEqual(downloads, ["Overlay-選択項目.zip"]);
+    assert.equal(backups[0].kind, "selection");
+    await importForConfirmation();
+    assert.equal(restoreCalls, 0);
+    assert.ok(find(render(), (entry) => entry.type === NotebookRestoreDialog));
+  } finally {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});
 
 function editorRow(name: string) {
   return find(render(), (element) => (element.props as { "data-editor-row"?: string })["data-editor-row"] === name)! as React.ReactElement<React.ComponentProps<"div">>;

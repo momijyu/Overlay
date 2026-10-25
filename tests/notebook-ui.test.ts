@@ -14,6 +14,7 @@ import { buildNoteTree, folderChoices } from "@/features/pdf-editor/noteTree";
 import type { NoteLibrary } from "@/features/pdf-editor/types";
 import { canMoveItem } from "@/features/pdf-editor/noteDrag";
 import Home from "@/app/page";
+import { NotebookRestoreDialog } from "@/features/pdf-editor/components/NotebookRestoreDialog";
 
 const library: NoteLibrary = {
   foldersEnabled: true,
@@ -24,6 +25,21 @@ const library: NoteLibrary = {
   ],
   notes: [{ id: "note", title: "ノート1", fileName: "sample.pdf", updatedAt: "2026-10-12", folderId: "subject" }],
 };
+
+test("バックアップ復元の確認は件数・上書きしない旨・キャンセルを表示し、失敗時は再試行できる", () => {
+  const backup = { schemaVersion: 1 as const, kind: "folder" as const, name: "情報", folders: library.folders, notes: [] };
+  for (const busy of [false, true]) {
+    const html = renderToStaticMarkup(createElement(NotebookRestoreDialog, {
+      backup, busy, error: "容量不足", onClose: () => {}, onRestore: () => {},
+    }));
+    assert.match(html, /ノート0件・フォルダ3件/);
+    assert.match(html, /既存のノートは上書きしません/);
+    assert.match(html, /キャンセル/);
+    assert.match(html, /容量不足/);
+    assert.equal(/type="submit"[^>]*disabled/.test(html), busy);
+    assert.match(html, /rounded-box/);
+  }
+});
 
 test("編集画面はサーバー描画でIndexedDBを開かず、定期的なPDF保管だけを案内する", () => {
   const html = renderToStaticMarkup(createElement(PdfWorkspace));

@@ -113,3 +113,23 @@ test("Escapeで閉じるが、整理処理中は閉じず、子ダイアログ�
     assert.equal(backdrop.props.disabled, busy);
   }
 });
+
+test("バックアップ読み込みはPDFと別の選択欄へ接続し、キャンセル・処理中にノートを閉じない", () => {
+  for (const disabled of [false, true]) {
+    let changed = 0, closed = 0;
+    const node = NotebookDrawer({ open: true, busy: disabled, pdfOpenDisabled: disabled,
+      onFileChange: () => {}, onBackupFileChange: () => { changed++; }, onClose: () => { closed++; }, children: null });
+    const entries = elements(node);
+    const button = entries.find((item) => item.type === "button" && item.props.children === "バックアップを読み込む")!;
+    const input = entries.find((item) => item.props["aria-label"] === "読み込むOverlayバックアップ")!;
+    const before = dialog.pickerCount;
+    (button.props.onClick as () => void)();
+    assert.equal(dialog.pickerCount - before, disabled ? 0 : 1);
+    assert.equal(button.props.disabled, disabled);
+    assert.equal(input.props.disabled, disabled);
+    assert.equal(input.props.accept, ".overlay,.zip");
+    (input.props.onChange as () => void)();
+    assert.equal(changed, 1);
+    assert.equal(closed, 0);
+  }
+});

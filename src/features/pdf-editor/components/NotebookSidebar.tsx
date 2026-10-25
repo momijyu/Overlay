@@ -22,6 +22,8 @@ type SidebarProps = {
   onDelete: (id: string) => Promise<void>;
   onDeleteItems: (items: NoteDragItem[]) => Promise<void>;
   onMutationChange: (busy: boolean) => void;
+  onBackup?: (item: NoteDragItem) => void;
+  onBackupItems?: (items: NoteDragItem[]) => void;
 };
 
 const emptyLibrary: NoteLibrary = { notes: [], folders: [], foldersEnabled: true };
@@ -452,6 +454,13 @@ export function NotebookSidebar(props: SidebarProps) {
               {!selectedNote && !selectedFolder && <li><button type="button" disabled>
                 ノートまたはフォルダを選択してください
               </button></li>}
+              {props.onBackup && (selectedNote || selectedFolder) && <li><button type="button" disabled={unavailable}
+                onClick={() => {
+                  if (unavailable || !selected) return;
+                  if (menuRef.current) menuRef.current.open = false;
+                  endDrag();
+                  props.onBackup?.(selected);
+                }}>{selectedFolder ? "フォルダのバックアップ" : "ノートのバックアップ"}</button></li>}
               {selectedNote && <li><button type="button" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "edit-note", note: selectedNote })}>名前・フォルダ</button></li>}
               {selectedNote && <li><button type="button" className="text-error" disabled={!canOrganize}
@@ -483,6 +492,12 @@ export function NotebookSidebar(props: SidebarProps) {
             onClick={() => setCheckedItems(new Set())}>選択解除</button>
           <button type="button" className="btn btn-sm" disabled={unavailable || !checked.length}
             onClick={() => { setMoveError(null); setBulkMoving(true); }}>移動</button>
+          {props.onBackupItems && <button type="button" className="btn btn-sm" disabled={unavailable || !checked.length}
+            onClick={() => {
+              if (unavailable || !checked.length) return;
+              endDrag();
+              props.onBackupItems?.(checked.map((item) => ({ ...item })));
+            }}>ZIPで保存</button>}
           <button type="button" className="btn btn-sm text-error" disabled={unavailable || !checked.length}
             onClick={() => {
               setMoveError(null); setMoveMessage(null);

@@ -144,11 +144,44 @@ test("確認した一括削除だけを実行し、成功後に一覧を更新�
   assert.deepEqual(after, [0, 0]);
 });
 
-function render() {
+function render(overrides: Partial<React.ComponentProps<typeof NotebookSidebar>> = {}) {
   stateIndex = 0;
   return NotebookSidebar({ refreshVersion: 0, currentNoteId: "note", disabled: false,
-    onOpen: () => {}, onRenamed: () => {}, onDelete: async () => {}, onDeleteItems: deleteSavedItems, onMutationChange: () => {} });
+    onOpen: () => {}, onRenamed: () => {}, onDelete: async () => {}, onDeleteItems: deleteSavedItems, onMutationChange: () => {}, ...overrides });
 }
+
+test("バックアップ操作は選択した単体ノート・フォルダを渡し、未選択や処理中に出力しない", () => {
+  const calls: unknown[] = [];
+  const overrides = { onBackup: (item: unknown) => { calls.push(item); } };
+  clickText(render(overrides), "ノートのバックアップ");
+  const tree = find(render(overrides), (element) => element.type === NotebookTree)!;
+  (tree.props.onSelect as (item: unknown) => void)({ kind: "folder", id: "subject" });
+  clickText(render(overrides), "フォルダのバックアップ");
+  const busy = find(render({ ...overrides, disabled: true }), (entry) => entry.type === "button" && entry.props.children === "フォルダのバックアップ")!;
+  assert.equal(busy.props.disabled, true);
+  (busy.props.onClick as () => void)();
+  const root = find(render(overrides), (entry) => entry.props["aria-label"] === "一番上")!;
+  (root.props.onClick as () => void)();
+  assert.equal(find(render(overrides), (entry) => entry.type === "button" && String(entry.props.children).endsWith("のバックアップ")), undefined);
+  assert.deepEqual(calls, [{ kind: "note", id: "note" }, { kind: "folder", id: "subject" }]);
+});
+
+test("選択モードのZIPで保存はチェックした項目だけを渡し、ゼロ件・処理中は実行しない", () => {
+  const calls: unknown[] = [];
+  const overrides = { onBackupItems: (items: unknown) => { calls.push(items); } };
+  clickText(render(overrides), "選択");
+  const empty = find(render(overrides), (entry) => entry.type === "button" && entry.props.children === "ZIPで保存")!;
+  assert.equal(empty.props.disabled, true);
+  (empty.props.onClick as () => void)();
+  clickText(render(overrides), "全選択");
+  clickText(render(overrides), "ZIPで保存");
+  assert.deepEqual(calls, [[{ kind: "folder", id: "subject" }, { kind: "note", id: "note" }]]);
+  const busy = find(render({ ...overrides, disabled: true }), (entry) => entry.type === "button" && entry.props.children === "ZIPで保存")!;
+  assert.equal(busy.props.disabled, true);
+  (busy.props.onClick as () => void)();
+  assert.equal(calls.length, 1);
+  assert.equal((find(render(overrides), (entry) => entry.type === NotebookTree)!.props.checkedItems as Set<string>).size, 2);
+});
 
 function find(node: React.ReactNode, match: (element: React.ReactElement<Record<string, unknown>>) => boolean): React.ReactElement<Record<string, unknown>> | undefined {
   for (const child of React.Children.toArray(node)) {

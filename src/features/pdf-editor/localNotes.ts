@@ -1,13 +1,102 @@
 import { readRequest, withLocalTransaction } from "./localDatabase";
-import { canMoveItem, canMoveItems, selectedMoveRoots, type NoteDragItem } from "./noteDrag";
+import { canMoveItem, canMoveItems, libraryItems, noteItemKey, selectedMoveRoots, type NoteDragItem } from "./noteDrag";
 import { checkedDeletion } from "./noteSelection";
 import { canDeleteEmptyFolder, hasFolderNameConflict } from "./noteTree";
 import { readStrokes } from "./strokeData";
 import { readTextNotes } from "./textData";
 import type { LoadedNote, NoteFolder, NoteLibrary, PenStroke, SavedNoteSummary, TextNotesByPage } from "./types";
+import { readNoteBackup, type NoteBackup } from "./noteBackupData";
 
 type LocalNote = SavedNoteSummary & { strokesByPage: Record<number, PenStroke[]>; textsByPage?: TextNotesByPage; revision?: number };
 type LocalPdf = { id: string; blob: Blob };
+
+// 同じreadonlyトランザクションで階層・ノート・元PDFを取得する。
+// 読み取り中に別タブが移動・削除しても、途中の階層を混ぜない。
+export async function captureNoteBackup(item: NoteDragItem): Promise<NoteBackup> {
+  return captureBackup([item], false);
+}
+
+export async function captureSelectedNoteBackup(items: NoteDragItem[]): Promise<NoteBackup> {
+  return captureBackup(items, true);
+}
+
+async function captureBackup(items: NoteDragItem[], selection: boolean): Promise<NoteBackup> {
+  const snapshot = await withLocalTransaction(["notes", "pdfs", "folders"], "readonly", async (transaction) => {
+    const library = await readLibrary(transaction);
+    const keys = new Set(items.map(noteItemKey));
+    const existing = new Set(libraryItems(library).map(noteItemKey));
+    if (!items.length || [...keys].some((key) => !existing.has(key))) {
+      throw new Error("対象が見つかりません。一覧を更新してください。");
+    }
+    const item = items[0];
+    const selected = item.kind === "note" ? library.notes.find((note) => note.id === item.id)
+      : library.folders.find((folder) => folder.id === item.id);
+    if (!selected) throw new Error("対象が見つかりません。一覧を更新してください。");
+    const included = new Set<string>(items.filter((item) => item.kind === "folder").map((item) => item.id));
+    if (selection) {
+      // チェック後に増えた子を勝手に含めず、最新一覧での選び直しを求める。
+      if (library.folders.some((folder) => folder.parentId && included.has(folder.parentId) && !included.has(folder.id))
+        || library.notes.some((note) => note.folderId && included.has(note.folderId) && !keys.has(`note:${note.id}`))) {
+        throw new Error("選択したフォルダの中身が変わりました。一覧を更新して選び直してください。");
+      }
+    } else {
+      for (let size = -1; size !== included.size;) {
+        size = included.size;
+        for (const folder of library.folders) if (folder.parentId && included.has(folder.parentId)) included.add(folder.id);
+      }
+    }
+    const folders = library.folders.filter((folder) => included.has(folder.id))
+      .map((folder) => ({ ...folder, parentId: folder.parentId && included.has(folder.parentId) ? folder.parentId : null }));
+    const selectedNotes = library.notes.filter((note) => selection ? keys.has(`note:${note.id}`)
+      : item.kind === "note" ? note.id === item.id : !!note.folderId && included.has(note.folderId));
+    const notes = await Promise.all(selectedNotes.map(async (summary) => {
+      const [note, pdf] = await Promise.all([
+        readRequest<LocalNote | undefined>(transaction.objectStore("notes").get(summary.id)),
+        readRequest<LocalPdf | undefined>(transaction.objectStore("pdfs").get(summary.id)),
+      ]);
+      if (!note || !pdf) throw new Error("バックアップに必要な元PDFが見つかりません。");
+      return { id: note.id, title: note.title, fileName: note.fileName,
+        folderId: note.folderId && included.has(note.folderId) ? note.folderId : null,
+        strokesByPage: note.strokesByPage, textsByPage: note.textsByPage ?? {}, pdf: pdf.blob };
+    }));
+    return { schemaVersion: selection ? 2 : 1, kind: selection ? "selection" : item.kind,
+      name: selection ? "Overlay-選択項目" : "title" in selected ? selected.title : selected.name, folders, notes };
+  });
+  return readNoteBackup(snapshot);
+}
+
+// 解析済みバックアップを新しいIDで追加する。途中の失敗では全件ロールバックする。
+export async function restoreNoteBackup(input: NoteBackup): Promise<{ notes: number; folders: number }> {
+  const backup = readNoteBackup(input);
+  const folderIds = new Map(backup.folders.map((folder) => [folder.id, crypto.randomUUID()]));
+  const notes = backup.notes.map((note) => ({ ...note, id: crypto.randomUUID() }));
+  await withLocalTransaction(["notes", "pdfs", "folders"], "readwrite", async (transaction) => {
+    const library = await readLibrary(transaction);
+    for (const folder of backup.folders) {
+      let name = folder.name;
+      if (folder.parentId === null) {
+        let suffix = 1;
+        while (hasFolderNameConflict(name, null, library)) {
+          const ending = `（復元${suffix++}）`;
+          name = [...folder.name].slice(0, 80 - [...ending].length).join("") + ending;
+        }
+      }
+      const restoredFolder = { id: folderIds.get(folder.id)!, name,
+        parentId: folder.parentId === null ? null : folderIds.get(folder.parentId)! };
+      await readRequest(transaction.objectStore("folders").add(restoredFolder));
+      // 今回のZIP内の別の根とも衝突させない。
+      library.folders.push(restoredFolder);
+    }
+    const updatedAt = new Date().toISOString();
+    for (const note of notes) {
+      await readRequest(transaction.objectStore("pdfs").add({ id: note.id, blob: note.pdf }));
+      await readRequest(transaction.objectStore("notes").add({ id: note.id, title: note.title, fileName: note.fileName,
+        folderId: note.folderId === null ? null : folderIds.get(note.folderId)!, updatedAt, revision: 1,
+        strokesByPage: note.strokesByPage, textsByPage: note.textsByPage } satisfies LocalNote));
+    }
+  });
+  return { notes: notes.length, folders: backup.folders.length };
+}
 
 function readRevision(note: LocalNote): number {
   const revision = note.revision ?? 0;

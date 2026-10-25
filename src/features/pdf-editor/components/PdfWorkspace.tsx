@@ -7,7 +7,9 @@ import { AppHeader } from "@/components/layout/AppHeader";
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { pdfDownloadName } from "../pdfDownloadName";
 import { DEFAULT_ERASER_WIDTH, DEFAULT_MARKER_WIDTH, DEFAULT_PEN_WIDTH, isPenColor, MARKER_COLOR, PEN_COLOR } from "../penStyle";
-import { deleteSavedNote, deleteSavedItems, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
+import { captureNoteBackup, captureSelectedNoteBackup, restoreNoteBackup, deleteSavedNote, deleteSavedItems, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
+import { backupDownloadName, readNoteBackup, type NoteBackup } from "../noteBackupData";
+import { NotebookRestoreDialog } from "./NotebookRestoreDialog";
 import type { NoteDragItem } from "../noteDrag";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
 import type { PenStroke, EditorTool, TextNote, TextNotesByPage } from "../types";
@@ -65,6 +67,10 @@ export function PdfWorkspace() {
   const [markerColor, setMarkerColor] = useState(MARKER_COLOR);
   const [textControlsContainer, setTextControlsContainer] = useState<HTMLDivElement | null>(null);
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
+  const [isBackupWorking, setIsBackupWorking] = useState(false);
+  const [pendingBackup, setPendingBackup] = useState<NoteBackup | null>(null);
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const mountedRef = useRef(false);
   const operationRef = useRef(false);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
@@ -72,7 +78,7 @@ export function PdfWorkspace() {
   const historyRef = useRef(history);
   // 自動保存中も描画・ページ切り替え・PDF出力を止めない。
   // ノートを開き直すときだけ、openPdfで保存完了を待つ。
-  const isBusy = isLoading || isExporting || isOrganizing;
+  const isBusy = isLoading || isExporting || isOrganizing || isBackupWorking || pendingBackup !== null;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -288,7 +294,88 @@ export function PdfWorkspace() {
     }
   }
 
-  const statusText = isExporting ? "出力中…" : saveError ? "保存失敗" : isSaving ? "保存中…" : "";
+  async function handleBackup(item?: NoteDragItem | NoteDragItem[]) {
+    if (operationRef.current || pendingBackup) return;
+    operationRef.current = true;
+    setIsBackupWorking(true);
+    setError(null);
+    setBackupMessage(null);
+    try {
+      let backup: NoteBackup;
+      const currentId = autosaveRef.current?.getState().noteId;
+      if (!item || (!Array.isArray(item) && item.kind === "note" && item.id === currentId)) {
+        if (!file || !document) throw new Error("ノートを開いてください。");
+        // 保存容量不足でも、画面で確定済みの最新内容を持ち出せる。
+        backup = readNoteBackup({ schemaVersion: 1, kind: "note", name: noteName, folders: [], notes: [{
+          id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
+          strokesByPage: historyRef.current.strokesByPage, textsByPage: historyRef.current.textsByPage,
+        }] });
+      } else {
+        if ((Array.isArray(item) || item.kind === "folder") && autosaveRef.current && !await autosaveRef.current.flush()) {
+          throw new Error("自動保存が完了していません。開いているノートは単体でバックアップできます。");
+        }
+        backup = Array.isArray(item) ? await captureSelectedNoteBackup(item) : await captureNoteBackup(item);
+      }
+      const { encodeNoteBackup } = await import("../noteBackupFile");
+      const blob = await encodeNoteBackup(backup);
+      if (!mountedRef.current) return;
+      downloadBackup(blob, backupDownloadName(backup.name, Array.isArray(item) ? "zip" : "overlay"));
+    } catch (error) {
+      if (mountedRef.current) setError(error instanceof Error ? error.message : "バックアップを書き出せませんでした。");
+    } finally {
+      operationRef.current = false;
+      if (mountedRef.current) setIsBackupWorking(false);
+    }
+  }
+
+  function downloadBackup(blob: Blob, name: string) {
+    const url = URL.createObjectURL(blob);
+    const link = window.document.createElement("a");
+    link.href = url;
+    link.download = name;
+    window.document.body.appendChild(link);
+    link.click(); link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  async function handleBackupFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const selectedFile = event.target.files?.[0];
+    event.target.value = "";
+    if (!selectedFile || operationRef.current || pendingBackup) return;
+    operationRef.current = true;
+    setIsBackupWorking(true);
+    setError(null); setBackupError(null); setBackupMessage(null);
+    try {
+      const { decodeNoteBackup } = await import("../noteBackupFile");
+      const backup = await decodeNoteBackup(selectedFile);
+      if (mountedRef.current) setPendingBackup(backup);
+    } catch (error) {
+      if (mountedRef.current) setError(error instanceof Error ? error.message : "バックアップを読み込めませんでした。");
+    } finally {
+      operationRef.current = false;
+      if (mountedRef.current) setIsBackupWorking(false);
+    }
+  }
+
+  async function handleRestoreBackup() {
+    if (!pendingBackup || operationRef.current) return;
+    operationRef.current = true;
+    setIsBackupWorking(true); setBackupError(null);
+    try {
+      const restored = await restoreNoteBackup(pendingBackup);
+      if (!mountedRef.current) return;
+      setPendingBackup(null);
+      setRefreshVersion((value) => value + 1);
+      setBackupMessage(`ノート${restored.notes}件・フォルダ${restored.folders}件を復元しました。`);
+    } catch (error) {
+      if (mountedRef.current) setBackupError(error instanceof Error ? error.message : "復元できませんでした。");
+    } finally {
+      operationRef.current = false;
+      if (mountedRef.current) setIsBackupWorking(false);
+    }
+  }
+
+  const statusText = isBackupWorking ? "処理中…" : isExporting ? "出力中…" : saveError ? "保存失敗" : isSaving ? "保存中…" : "";
   const backupNotice = <p className="text-sm text-red-400" data-pdf-backup-notice>
     ※ 重要なノートは定期的に『PDFをダウンロード』して保管してください。
   </p>;
@@ -316,14 +403,17 @@ export function PdfWorkspace() {
             <summary className="btn btn-square btn-ghost" aria-label="書き出しメニュー" title="書き出しメニュー"><EditorIcon name="more" /></summary>
             <div className="dropdown-content z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-sm">
               <button type="button" className="btn w-full" disabled={isBusy} onClick={() => void handleDownload()}>PDFをダウンロード</button>
+              <button type="button" className="btn mt-2 w-full" disabled={isBusy} onClick={() => void handleBackup()}>ノートのバックアップ</button>
               <div className="mt-3">{backupNotice}</div>
             </div>
           </details>
         </>}
       </AppHeader>
-      <NotebookDrawer open={sidebarVisible} busy={isOrganizing}
-        onFileChange={handleFileChange} pdfOpenDisabled={isBusy} onClose={() => setSidebarVisible(false)}>
+      <NotebookDrawer open={sidebarVisible} busy={isOrganizing || isBackupWorking || !!pendingBackup}
+        onFileChange={handleFileChange} onBackupFileChange={handleBackupFileChange} pdfOpenDisabled={isBusy} onClose={() => setSidebarVisible(false)}>
           {error && <p role="alert" className="px-4 pt-3 text-error">{error}</p>}
+          {isBackupWorking && <p role="status" className="px-4 pt-3 text-sm">バックアップ処理中…</p>}
+          {backupMessage && <p role="status" className="px-4 pt-3 text-sm">{backupMessage}</p>}
           {isLoading && <p role="status" className="px-4 pt-3">PDFを読み込んでいます…</p>}
           <NotebookSidebar
             refreshVersion={refreshVersion}
@@ -337,11 +427,16 @@ export function PdfWorkspace() {
             }}
             onDelete={handleDelete}
             onDeleteItems={handleDeleteItems}
+            onBackup={(item) => { void handleBackup(item); }}
+            onBackupItems={(items) => { void handleBackup(items); }}
             onMutationChange={(busy) => {
               operationRef.current = busy;
               setIsOrganizing(busy);
             }}
           />
+          {pendingBackup && <NotebookRestoreDialog backup={pendingBackup} busy={isBackupWorking} error={backupError}
+            onRestore={() => void handleRestoreBackup()}
+            onClose={() => { if (!operationRef.current) { setPendingBackup(null); setBackupError(null); } }} />}
       </NotebookDrawer>
       <main className="editor-main mx-auto w-full max-w-6xl p-4 sm:p-6">
         <section className="workspace-card card min-w-0 w-full border border-base-300 bg-base-100 shadow-sm">
@@ -434,7 +529,7 @@ export function PdfWorkspace() {
                     <div className="mobile-zoom mobile-only"><ZoomControl id="mobile-pdf-zoom" value={zoom} disabled={isBusy} onChange={setZoom} /></div>
                   </div>
                   <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-                    <button
+                    <div className="desktop-only flex flex-wrap gap-2"><button
                       className="btn btn-primary desktop-only"
                       type="button"
                       disabled={isBusy}
@@ -442,13 +537,14 @@ export function PdfWorkspace() {
                     >
                       PDFをダウンロード
                     </button>
+                    <button type="button" className="btn" disabled={isBusy} onClick={() => void handleBackup()}>ノートのバックアップ</button></div>
                     <div className="join shrink-0" role="group" aria-label="ページ切り替え">
                       <button
                         className="btn btn-square join-item"
                         type="button"
                         aria-label="前のページ" title="前のページ"
-                        disabled={isLoading || pageNumber === 1}
-                        onClick={() => { if (!isLoading && pageNumber > 1) setPageNumber((page) => page - 1); }}
+                        disabled={isBusy || pageNumber === 1}
+                        onClick={() => { if (!isBusy && pageNumber > 1) setPageNumber((page) => page - 1); }}
                       >
                         <EditorIcon name="previous-page" />
                       </button>
@@ -459,8 +555,8 @@ export function PdfWorkspace() {
                         className="btn btn-square join-item"
                         type="button"
                         aria-label="次のページ" title="次のページ"
-                        disabled={isLoading || pageNumber === document.numPages}
-                        onClick={() => { if (!isLoading && pageNumber < document.numPages) setPageNumber((page) => page + 1); }}
+                        disabled={isBusy || pageNumber === document.numPages}
+                        onClick={() => { if (!isBusy && pageNumber < document.numPages) setPageNumber((page) => page + 1); }}
                       >
                         <EditorIcon name="next-page" />
                       </button>

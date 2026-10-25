@@ -6,14 +6,16 @@ type NotebookDrawerProps = {
   open: boolean;
   busy: boolean;
   onFileChange: ChangeEventHandler<HTMLInputElement>;
+  onBackupFileChange?: ChangeEventHandler<HTMLInputElement>;
   pdfOpenDisabled: boolean;
   onClose: () => void;
   children: ReactNode;
 };
 
-export function NotebookDrawer({ open, busy, onFileChange, pdfOpenDisabled, onClose, children }: NotebookDrawerProps) {
+export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, pdfOpenDisabled, onClose, children }: NotebookDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const backupInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -48,6 +50,12 @@ export function NotebookDrawer({ open, busy, onFileChange, pdfOpenDisabled, onCl
               </svg>
             </button>
           </div>
+          {onBackupFileChange && <div className="px-4 pb-3">
+            <button type="button" className="btn btn-sm" disabled={pdfOpenDisabled}
+              onClick={() => { if (!pdfOpenDisabled) backupInputRef.current?.click(); }}>バックアップを読み込む</button>
+            <input ref={backupInputRef} type="file" accept=".overlay,.zip" hidden
+              aria-label="読み込むOverlayバックアップ" disabled={pdfOpenDisabled} onChange={onBackupFileChange} />
+          </div>}
           {children}
         </div>
         <div className="modal-backdrop">
