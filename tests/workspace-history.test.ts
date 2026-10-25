@@ -131,7 +131,8 @@ function assertStableToolRows() {
   const children = React.Children.toArray(row.props.children) as React.ReactElement<React.ComponentProps<"div">>[];
   assert.equal(children.length, 3);
   assert.equal(children[0].props["aria-label"], "編集ツール");
-  assert.equal(children[1].type, HistoryControls);
+  assert.match(children[1].props.className!, /editor-history/);
+  assert.equal((React.Children.toArray(children[1].props.children)[0] as React.ReactElement).type, HistoryControls);
   assert.equal(children[2].type, ZoomControl);
   assert.equal(find(row, (element) => element.type === PenWidthControl), undefined);
   assert.match(editorRow("settings").props.className!, /h-14/);
@@ -177,6 +178,22 @@ test("スマホ設定は初期状態で閉じ、必要時に開ける。移動�
   assert.equal(calls.length, 0);
   assert.equal(props(HistoryControls).canUndo, false);
   assert.equal(props(AppHeader).compact, true);
+});
+
+test("横向き用の配置先を持ち、道具・履歴・ページ・設定を二重に作らない", () => {
+  const { calls } = setup();
+  const tools = find(render(), (element) => (element.props as { "aria-label"?: string })["aria-label"] === "編集ツール")!;
+  assert.match((tools.props as React.ComponentProps<"div">).className!, /editor-tool-buttons/);
+  const buttons = React.Children.toArray((tools.props as React.ComponentProps<"div">).children) as React.ReactElement<React.ComponentProps<"button">>[];
+  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), ["ペン", "マーカー", "消しゴム", "テキスト", "付箋", "移動・閲覧"]);
+  assert.equal(buttons.length, 6);
+  const header = find(render(), (element) => element.type === AppHeader)!;
+  const heading = find(header, (element) => String((element.props as { className?: string }).className).includes("editor-mobile-heading"))!;
+  assert.ok(find(heading, (element) => (element.props as { "data-editor-mobile-status"?: boolean })["data-editor-mobile-status"] !== undefined));
+  assert.equal(find(header, (element) => element.type === HistoryControls), undefined);
+  assert.equal(find(editorRow("settings"), (element) => element.type === PenWidthControl)?.type, PenWidthControl);
+  assert.equal(calls.length, 0);
+  assert.equal(props(HistoryControls).canUndo, false);
 });
 
 test("スマホの書き出しメニューにPDFダウンロードと保管案内をまとめ、PCの出力欄も残す", () => {

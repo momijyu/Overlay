@@ -296,7 +296,7 @@ export function PdfWorkspace() {
   return (
     <div className="overlay-app min-h-screen bg-base-200" data-pdf-open={!!document && !!file}>
       <AppHeader compact={!!document && !!file}>
-        <button type="button" className="btn btn-sm btn-square" aria-label="ノート一覧を開く"
+        <button type="button" className="notebook-toggle btn btn-sm btn-square" aria-label="ノート一覧を開く"
           title="ノート一覧" aria-haspopup="dialog" aria-controls="notebook-sidebar"
           aria-expanded={sidebarVisible} onClick={() => setSidebarVisible(true)}>
           <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5" fill="none"
@@ -305,14 +305,14 @@ export function PdfWorkspace() {
           </svg>
         </button>
         {document && file && <>
-          <div className="mobile-only min-w-0 flex-1">
+          <div className="editor-mobile-heading mobile-only min-w-0 flex-1">
             <p className="truncate text-sm" title={noteName || file.name}>{noteName}</p>
             <p data-editor-mobile-status role="status" className={`min-h-4 text-xs ${saveError ? "text-error" : "text-base-content/60"}`}>{statusText}</p>
           </div>
-          <button type="button" className="btn btn-square btn-ghost mobile-only" aria-label="道具の設定"
+          <button type="button" className="editor-settings-toggle btn btn-square btn-ghost mobile-only" aria-label="道具の設定"
             title="道具の設定" aria-expanded={mobileSettingsOpen} aria-controls="editor-settings"
             onClick={() => setMobileSettingsOpen((open) => !open)}><EditorIcon name="settings" /></button>
-          <details className="dropdown dropdown-end mobile-only">
+          <details className="editor-export dropdown dropdown-end mobile-only">
             <summary className="btn btn-square btn-ghost" aria-label="書き出しメニュー" title="書き出しメニュー"><EditorIcon name="more" /></summary>
             <div className="dropdown-content z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-sm">
               <button type="button" className="btn w-full" disabled={isBusy} onClick={() => void handleDownload()}>PDFをダウンロード</button>
@@ -362,18 +362,20 @@ export function PdfWorkspace() {
 
             {(!document || !file) && backupNotice}
 
-            {error && (
-              <div className="alert alert-error" role="alert">
-                {error}
-              </div>
-            )}
-            {saveError && <div className="alert alert-error" role="alert">
-              <span>自動保存に失敗しました。{saveError}</span>
-              <button className="btn btn-sm" type="button" disabled={isBusy || isSaving}
-                onClick={() => void handleRetrySave()}>保存を再試行</button>
-            </div>}
+            {(error || saveError || isLoading) && <div className="editor-notices flex flex-col gap-5">
+              {error && (
+                <div className="alert alert-error" role="alert">
+                  {error}
+                </div>
+              )}
+              {saveError && <div className="alert alert-error" role="alert">
+                <span>自動保存に失敗しました。{saveError}</span>
+                <button className="btn btn-sm" type="button" disabled={isBusy || isSaving}
+                  onClick={() => void handleRetrySave()}>保存を再試行</button>
+              </div>}
 
-            {isLoading && <p role="status">PDFを読み込んでいます…</p>}
+              {isLoading && <p role="status">PDFを読み込んでいます…</p>}
+            </div>}
 
             {document && file && (
               <>
@@ -390,7 +392,7 @@ export function PdfWorkspace() {
                   {/* 道具の列は設定やノート名と分け、切り替えても折り返さない。 */}
                   <div data-editor-row="tools" role="group" aria-label="編集操作"
                     className="editor-tools flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
-                    <div className="join" role="group" aria-label="編集ツール">
+                    <div className="editor-tool-buttons join" role="group" aria-label="編集ツール">
                       {editorTools.map(({ tool, label }) => <button key={tool} type="button"
                         className={`btn btn-square btn-ghost join-item ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
                         aria-label={label} title={label} aria-pressed={penTool === tool} disabled={isBusy}
@@ -398,8 +400,10 @@ export function PdfWorkspace() {
                         <EditorIcon name={tool} />
                       </button>)}
                     </div>
-                    <HistoryControls canUndo={history.past.length > 0} canRedo={history.future.length > 0}
-                      disabled={isBusy} onUndo={handleUndo} onRedo={handleRedo} />
+                    <div className="editor-history flex">
+                      <HistoryControls canUndo={history.past.length > 0} canRedo={history.future.length > 0}
+                        disabled={isBusy} onUndo={handleUndo} onRedo={handleRedo} />
+                    </div>
                     <ZoomControl value={zoom} disabled={isBusy} onChange={setZoom} />
                   </div>
                   {/* 高さは維持し、テキスト・付箋の操作もこの行へ表示する。 */}

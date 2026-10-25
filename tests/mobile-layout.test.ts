@@ -43,3 +43,21 @@ test("設定・書き出し・ノート名の表示は幅だけのsm指定へ依
   assert.match(workspace, /desktop-only/);
   assert.match(header, /compact \? "desktop-only"/);
 });
+
+test("タッチ向け横向き編集は上1行・左の道具・残りのPDFへ分け、名前の行を作らない", () => {
+  const css = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
+  const start = css.indexOf("@media (width >= 640px) and (orientation: landscape)");
+  assert.ok(start > css.indexOf("@media (width < 640px), (hover: none) and (pointer: coarse)"));
+  const landscape = css.slice(start, css.indexOf("/* ノート一覧だけに適用"));
+  assert.match(landscape, /\.overlay-app\[data-pdf-open="true"\]\s*\{/);
+  assert.match(landscape, /grid-template-rows: 2\.75rem minmax\(0, 1fr\)/);
+  assert.match(landscape, /\.editor-mobile-heading > p:first-child, \.editor-settings-toggle \{ display: none/);
+  assert.match(landscape, /\.editor-tool-buttons\s*\{[^}]*grid-column: 1; grid-row: 2;[^}]*flex-direction: column;[^}]*overflow-y: auto/);
+  assert.match(landscape, /\.editor-tool-buttons \.btn\s*\{[^}]*flex-shrink: 0;[^}]*min-height: 2\.75rem/);
+  assert.match(landscape, /\.editor-history \{ grid-column: 2; grid-row: 1/);
+  assert.match(landscape, /\.editor-settings, \.editor-settings\[data-mobile-open="true"\]\s*\{[^}]*grid-column: 3; grid-row: 1;[^}]*display: flex/);
+  assert.match(landscape, /\.editor-settings label\s*\{[^}]*clip-path: inset\(50%\)/);
+  assert.match(landscape, /\.pdf-viewport\s*\{[^}]*grid-column: 2 \/ -1; grid-row: 2;[^}]*border: 1px solid/);
+  assert.match(landscape, /\[data-editor-mobile-status\]:empty \{ display: none/);
+  assert.match(landscape, /\.editor-notices\s*\{[^}]*max-height: 35dvh; overflow: auto/);
+});
