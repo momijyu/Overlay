@@ -32,6 +32,11 @@ export type TextNote = {
 };
 export type TextNotesByPage = Record<number, TextNote[]>;
 
+// idは書き込みのキー。配列の位置（表示順）とは独立させる。
+export type NotePage =
+  | { id: number; kind: "pdf"; pageNumber: number }
+  | { id: number; kind: "blank"; width: number; height: number };
+
 export type SavedNoteSummary = {
   id: string;
   fileName: string;
@@ -57,6 +62,7 @@ export type LoadedNote = {
   file: File;
   strokesByPage: Record<number, PenStroke[]>;
   textsByPage?: TextNotesByPage;
+  pages?: NotePage[];
   // ローカル保存の更新番号。番号のない旧データは0として読み込む。
   revision?: number;
 };

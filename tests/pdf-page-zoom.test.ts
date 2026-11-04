@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { beforeEach, mock } from "node:test";
 import * as React from "react";
+import type { NotePage } from "@/features/pdf-editor/types";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
 // DOM配置・PDF.js自体は代用し、倍率変更と描画の非同期接続を検証する。
@@ -45,10 +46,12 @@ beforeEach(() => {
   });
 });
 
-function fixture() {
+function fixture(notePage?: NotePage) {
+  const requestedPages: number[] = [];
+  const fills: unknown[] = [];
   const draws: unknown[] = [];
   const canvas = { width: 300, height: 150, style: { width: "", height: "" },
-    ownerDocument: { createElement: () => ({ width: 0, height: 0 }) },
+    ownerDocument: { createElement: () => ({ width: 0, height: 0, getContext: () => ({ fillStyle: "", fillRect: (...values: number[]) => fills.push(values) }) }) },
     getContext: () => ({ drawImage: (image: unknown) => { draws.push(image); } }),
   };
   const viewport = Object.assign(new EventTarget(), {
@@ -58,7 +61,7 @@ function fixture() {
   const surface = { getBoundingClientRect: () => ({ left: -viewport.scrollLeft, top: -viewport.scrollTop,
     width: parseFloat(canvas.style.width) || 300, height: parseFloat(canvas.style.height) || 150 }) };
   const tasks: { canvas: unknown; scale: number; resolve: () => void; reject: () => void; cancelled: boolean }[] = [];
-  const document = { getPage: async () => ({
+  const document = { getPage: async (number: number) => { requestedPages.push(number); return ({
     getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale, scale }),
     render: ({ canvas: buffer, viewport: page }: { canvas: unknown; viewport: { scale: number } }) => {
       let resolve!: () => void;
@@ -68,13 +71,13 @@ function fixture() {
       tasks.push(task);
       return { promise, cancel: () => { task.cancelled = true; } } as unknown as RenderTask;
     },
-  }) } as unknown as PDFDocumentProxy;
+  }); } } as unknown as PDFDocumentProxy;
   let zoom = 1;
   let disabled = false;
   const textControlsContainer = {} as HTMLDivElement;
   function render() {
     stateIndex = 0; refIndex = 0; effectIndex = 0;
-    const element = PdfPage({ document, pageNumber: 1, strokes: [], texts: [], editVersion: 0,
+    const element = PdfPage({ document, pageNumber: 1, notePage, strokes: [], texts: [], editVersion: 0,
       penWidth: 2.5, penColor: "#000000", tool: "text", eraserWidth: 16,
       zoom, disabled, textControlsContainer, onZoomChange: changeZoom, onStrokeComplete: () => {}, onStrokesChange: () => {}, onTextsChange: () => {},
     });
@@ -92,7 +95,7 @@ function fixture() {
     viewport.dispatchEvent(event);
     return event;
   }
-  return { render, tasks, canvas, viewport, draws, wheel, textControlsContainer, setZoom: changeZoom,
+  return { requestedPages, fills, render, tasks, canvas, viewport, draws, wheel, textControlsContainer, setZoom: changeZoom,
     resize: (width: number, height: number) => { viewport.clientWidth = width; viewport.clientHeight = height; resized(); },
     disable: () => { disabled = true; }, zoom: () => zoom,
     cleanup: () => effects.forEach((entry) => entry.cleanup?.()),
@@ -209,4 +212,27 @@ test("回転相当の幅変更でもページ・倍率・文章入力の要素�
   assert.ok(Math.abs((f.viewport.scrollLeft + 400) / 900 - x) < 0.001);
   assert.ok(Math.abs((f.viewport.scrollTop + 100) / 1200 - y) < 0.001);
   f.cleanup();
+});
+
+
+test("白紙ではPDF.jsのページを読まず、同じ寸法・倍率で白背景と編集レイヤーを表示する", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture({ id: 4, kind: "blank", width: 800, height: 600 });
+  f.render(); await flush();
+  const first = f.render();
+  assert.deepEqual(f.requestedPages, []); assert.equal(f.tasks.length, 0);
+  assert.deepEqual(f.fills[0], [0, 0, 800, 600]);
+  assert.equal(childProps(first, PenLayer).pageWidth, 800);
+  assert.equal(childProps(first, TextLayer).pageHeight, 600);
+  assert.equal(f.canvas.style.width, "400px"); assert.equal(f.canvas.style.height, "300px");
+  f.setZoom(1.5); const zoomed = f.render();
+  assert.equal(f.canvas.style.width, "600px"); assert.equal(childProps(zoomed, TextLayer).pageScale, 0.75);
+  t.mock.timers.tick(100); await flush(); f.render();
+  assert.equal(f.canvas.width, 1200); assert.deepEqual(f.requestedPages, []); f.cleanup();
+});
+
+test("表示番号と元PDF番号が異なるときは元PDF番号を描画する", async () => {
+  const f = fixture({ id: 2, kind: "pdf", pageNumber: 2 });
+  f.render(); await flush(); assert.deepEqual(f.requestedPages, [2]);
+  f.tasks[0].resolve(); await flush(); f.render(); f.cleanup();
 });

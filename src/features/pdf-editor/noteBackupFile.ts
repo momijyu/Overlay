@@ -1,3 +1,4 @@
+import { checkPageBindings } from "./notePages";
 import { strFromU8, strToU8, unzipSync, zip } from "fflate";
 import { BACKUP_LIMITS, readNoteBackup, type NoteBackup, type BackupNote } from "./noteBackupData";
 
@@ -18,8 +19,7 @@ async function checkPdf(bytes: Uint8Array, note: BackupNote) {
     const { PDFDocument } = await import("pdf-lib");
     const pdf = await PDFDocument.load(bytes, { updateMetadata: false, throwOnInvalidObject: true });
     const pages = pdf.getPageCount();
-    if (pages < 1 || pages > 10_000 || [...Object.keys(note.strokesByPage), ...Object.keys(note.textsByPage)]
-      .some((page) => Number(page) > pages)) throw new Error("ページ数不一致");
+    checkPageBindings(note.pages, [note.strokesByPage, note.textsByPage], pages);
   } catch {
     throw new Error(`「${note.title}」の元PDFまたは書き込みのページ数を確認できません。暗号化PDFには対応していません。`);
   }
@@ -34,7 +34,7 @@ export async function encodeNoteBackup(input: NoteBackup): Promise<Blob> {
     await checkPdf(bytes, note);
     entries[`pdfs/${index}.pdf`] = bytes;
     notes.push({ id: note.id, title: note.title, fileName: note.fileName, folderId: note.folderId,
-      strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, pdfChecksum: checksum(bytes) });
+      strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, ...(note.pages ? { pages: note.pages } : {}), pdfChecksum: checksum(bytes) });
     // 複数PDFの解析の間に、進捗表示の描画をブラウザへ返す。
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -76,7 +76,7 @@ export async function decodeNoteBackup(file: Blob): Promise<NoteBackup> {
     if (!manifest || !crc || checksum(manifest) !== strFromU8(crc)) throw new Error("バックアップが破損しています。");
     const data = JSON.parse(strFromU8(manifest));
     if (!data || data.app !== "Overlay") throw new Error("Overlayのバックアップではありません。");
-    if (data.schemaVersion !== 1 && data.schemaVersion !== 2) throw new Error("このバックアップの形式バージョンには対応していません。");
+    if (data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3) throw new Error("このバックアップの形式バージョンには対応していません。");
     if (!Array.isArray(data.notes) || data.notes.length > BACKUP_LIMITS.notes
       || names.size !== data.notes.length + 2) throw new Error("バックアップの元PDFが不足または重複しています。");
     const backup = readNoteBackup({ ...data, notes: data.notes.map((note: unknown, index: number) => {

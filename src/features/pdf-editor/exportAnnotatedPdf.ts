@@ -1,8 +1,9 @@
+import { checkPageBindings, resolveNotePages } from "./notePages";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import { MARKER_OPACITY, PEN_COLOR } from "./penStyle";
 import { readStrokes } from "./strokeData";
-import type { PenPoint, PenStroke, TextNotesByPage } from "./types";
+import type { NotePage, PenPoint, PenStroke, TextNotesByPage } from "./types";
 import { readTextNotes } from "./textData";
 import { loadNoteFont } from "./noteFont";
 import { textNoteLayout, TEXT_PADDING, STICKY_BACKGROUND } from "./textLayout";
@@ -12,6 +13,7 @@ export async function exportAnnotatedPdf(
   displayedDocument: PDFDocumentProxy,
   strokesByPage: Record<number, PenStroke[]>,
   textsByPage?: TextNotesByPage,
+  pages?: NotePage[],
 ): Promise<Uint8Array> {
   const { PDFDocument, LineCapStyle, LineJoinStyle, BlendMode, pushGraphicsState, popGraphicsState, setLineJoin, rgb, degrees } = await import("pdf-lib");
   const toColor = (color: string) => rgb(parseInt(color.slice(1, 3), 16) / 255,
@@ -19,9 +21,9 @@ export async function exportAnnotatedPdf(
   const checkedStrokes = readStrokes(strokesByPage);
   const checkedTexts = readTextNotes(textsByPage);
   const pdf = await PDFDocument.load(await file.arrayBuffer());
-  if ([...Object.keys(checkedStrokes), ...Object.keys(checkedTexts)].some((page) => Number(page) > displayedDocument.numPages)) {
-    throw new Error("書き込み情報のページ数がPDFと一致しません。");
-  }
+  if (pdf.getPageCount() !== displayedDocument.numPages) throw new Error("元PDFのページ数が一致しません。");
+  checkPageBindings(pages, [checkedStrokes, checkedTexts], displayedDocument.numPages);
+  const layout = resolveNotePages(pages, displayedDocument.numPages);
   const fontData = Object.values(checkedTexts).some((notes) => notes.length > 0) ? await loadNoteFont() : null;
   const outputFont = fontData ? await (async () => {
     pdf.registerFontkit((await import("@pdf-lib/fontkit")).default);
@@ -29,14 +31,17 @@ export async function exportAnnotatedPdf(
     return pdf.embedFont(fontData.bytes, { subset: false, features: { liga: false, kern: false } });
   })() : null;
 
-  for (let pageNumber = 1; pageNumber <= displayedDocument.numPages; pageNumber++) {
-    const strokes = checkedStrokes[pageNumber] ?? [];
-    const texts = checkedTexts[pageNumber] ?? [];
+  for (const [index, entry] of layout.entries()) {
+    // 出力用のPDFにだけ白紙を挿入する。保存している元PDFは変更しない。
+    if (entry.kind === "blank") pdf.insertPage(index, [entry.width, entry.height]);
+    const strokes = checkedStrokes[entry.id] ?? [];
+    const texts = checkedTexts[entry.id] ?? [];
     if (strokes.length === 0 && texts.length === 0) continue;
 
-    const displayedPage = await displayedDocument.getPage(pageNumber);
-    const viewport = displayedPage.getViewport({ scale: 1 });
-    const outputPage = pdf.getPage(pageNumber - 1);
+    const viewport = entry.kind === "blank"
+      ? { width: entry.width, height: entry.height, convertToPdfPoint: (x: number, y: number) => [x, entry.height - y] }
+      : (await displayedDocument.getPage(entry.pageNumber)).getViewport({ scale: 1 });
+    const outputPage = pdf.getPage(index);
 
     function toPdfPoint(point: PenPoint) {
       // PDF.js の表示座標から元PDFの座標へ戻し、回転したページにも対応する。

@@ -1,10 +1,17 @@
-import type { PenStroke, TextNote, TextNotesByPage } from "./types";
+import type { NotePage, PenStroke, TextNote, TextNotesByPage } from "./types";
 
 type Strokes = Record<number, PenStroke[]>;
-type StrokeEdit = { before: Strokes; after: Strokes; beforeTexts: TextNotesByPage; afterTexts: TextNotesByPage; pageNumber: number };
+type StrokeEdit = {
+  before: Strokes; after: Strokes;
+  beforeTexts: TextNotesByPage; afterTexts: TextNotesByPage;
+  beforePages?: NotePage[]; afterPages?: NotePage[];
+  // 戻す／やり直す際に表示するページID。挿入時は前後で異なる。
+  beforePage: number; pageNumber: number;
+};
 export type StrokeHistory = {
   strokesByPage: Strokes;
   textsByPage: TextNotesByPage;
+  pages?: NotePage[];
   past: StrokeEdit[];
   future: StrokeEdit[];
   changedPage: number | null;
@@ -13,8 +20,8 @@ export type StrokeHistory = {
 
 export const STROKE_HISTORY_LIMIT = 100;
 
-export function createStrokeHistory(strokesByPage: Strokes, textsByPage: TextNotesByPage = {}): StrokeHistory {
-  return { strokesByPage, textsByPage, past: [], future: [], changedPage: null, version: 0 };
+export function createStrokeHistory(strokesByPage: Strokes, textsByPage: TextNotesByPage = {}, pages?: NotePage[]): StrokeHistory {
+  return { strokesByPage, textsByPage, pages, past: [], future: [], changedPage: null, version: 0 };
 }
 
 // 線の配列は描画・消去側も変更せず作り直すため、PDFや全座標を複製せず参照を保持できる。
@@ -33,11 +40,15 @@ export function recordTextEdit(history: StrokeHistory, pageNumber: number, texts
   return recordEdit(history, pageNumber, history.strokesByPage, { ...history.textsByPage, [pageNumber]: texts });
 }
 
-function recordEdit(history: StrokeHistory, pageNumber: number, strokesByPage: Strokes, textsByPage: TextNotesByPage): StrokeHistory {
+function recordEdit(history: StrokeHistory, pageNumber: number, strokesByPage: Strokes, textsByPage: TextNotesByPage,
+  insertion?: { before: NotePage[]; after: NotePage[]; previousId: number }): StrokeHistory {
+  const pages = insertion?.after ?? history.pages;
+  const beforePages = insertion?.before ?? history.pages;
+  const beforePage = insertion?.previousId ?? pageNumber;
   const edit = { before: history.strokesByPage, after: strokesByPage,
-    beforeTexts: history.textsByPage, afterTexts: textsByPage, pageNumber };
+    beforeTexts: history.textsByPage, afterTexts: textsByPage, pageNumber, beforePages, afterPages: pages, beforePage };
   return {
-    strokesByPage, textsByPage,
+    strokesByPage, textsByPage, pages,
     past: [...history.past, edit].slice(-STROKE_HISTORY_LIMIT),
     future: [],
     changedPage: pageNumber,
@@ -51,9 +62,10 @@ export function undoStrokeEdit(history: StrokeHistory): StrokeHistory {
   return {
     strokesByPage: edit.before,
     textsByPage: edit.beforeTexts,
+    pages: edit.beforePages,
     past: history.past.slice(0, -1),
     future: [...history.future, edit],
-    changedPage: edit.pageNumber,
+    changedPage: edit.beforePage,
     version: history.version + 1,
   };
 }
@@ -64,9 +76,14 @@ export function redoStrokeEdit(history: StrokeHistory): StrokeHistory {
   return {
     strokesByPage: edit.after,
     textsByPage: edit.afterTexts,
+    pages: edit.afterPages,
     past: [...history.past, edit],
     future: history.future.slice(0, -1),
     changedPage: edit.pageNumber,
     version: history.version + 1,
   };
+}
+
+export function recordPageInsertion(history: StrokeHistory, before: NotePage[], after: NotePage[], previousId: number, insertedId: number): StrokeHistory {
+  return recordEdit(history, insertedId, history.strokesByPage, history.textsByPage, { before, after, previousId });
 }

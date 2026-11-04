@@ -22,7 +22,7 @@
 
 ## 共通データとファイル形式
 
-`NoteBackup`は単体・フォルダ用の`schemaVersion:1`・`kind:note|folder`、選択ZIP用の`schemaVersion:2`・`kind:selection`を扱う。名前、フォルダ配列、ノート配列を持つ。各ノートには元PDFのBlob、名前、元ファイル名、所属、全ページの`strokesByPage`・`textsByPage`を保持する。ペン・マーカーの色と太さ、テキスト・付箋の文字サイズ・色・背景・旧ボックス寸法も維持する。旧ノートの文章未定義は空として扱い、以前の`.overlay`も引き続き読める。
+`NoteBackup`はページ構成を含む場合に`schemaVersion:3`（`kind:note|folder|selection`）を使い、各ノートの`pages`へ順序・ID・白紙寸法を含める。旧版も継続して読み込み、ページ構成のない出力は従来版を維持する。単体・フォルダ用の`schemaVersion:1`・`kind:note|folder`、選択ZIP用の`schemaVersion:2`・`kind:selection`を扱う。名前、フォルダ配列、ノート配列を持つ。各ノートには元PDFのBlob、名前、元ファイル名、所属、全ページの`strokesByPage`・`textsByPage`を保持する。ペン・マーカーの色と太さ、テキスト・付箋の文字サイズ・色・背景・旧ボックス寸法も維持する。旧ノートの文章未定義は空として扱い、以前の`.overlay`も引き続き読める。
 
 ファイルは無圧縮ZIPを`.overlay`拡張子で出力する。追加した[fflate](https://github.com/101arrowz/fflate) 0.8.3（MIT）は梱包・読み込みだけを担当し、バックアップ操作時に遅延ロードする。PDFを再圧縮せず、Base64にも変換しない。導入版の[ライセンス全文](../public/licenses/fflate-LICENSE.txt)を公開サイトの`/licenses/fflate-LICENSE.txt`にも同梱する。
 
@@ -66,3 +66,5 @@ pdfs/1.pdf          次の元PDF（フォルダバックアップの場合）
 - 破損ファイルを選んだ時に一覧・編集中の内容が維持されることを確認する。利用者の実データを削除する試験はしない。
 
 自動テストは`tests/note-backups.test.ts`、`tests/workspace-history.test.ts`、`tests/notebook-drawer.test.ts`、`tests/notebook-ui.test.ts`。fake-indexeddbと代用Hooksによる検証と、実機の保存ダイアログ・操作感は区別する。
+
+空白ページのあるバックアップも元PDFのバイト列を維持し、復元後に再編集できる。実PDFの元ページ数と構成・書き込みIDを照合する。対応前のアプリは版3を拒否するため、更新版で読み込む。[仕様と確認手順](./blank-pages.md)。

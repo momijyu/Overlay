@@ -107,7 +107,7 @@ body {
   @media (width >= 640px) and (orientation: landscape) {
     .overlay-app[data-pdf-open="true"] {
       position: relative; display: grid;
-      grid-template-columns: 2.75rem 5rem minmax(0, 1fr) 8rem 2.5rem;
+      grid-template-columns: 2.75rem 5rem minmax(0, 1fr) max-content 2.5rem;
       grid-template-rows: 2.75rem minmax(0, 1fr); gap: 0.25rem;
       padding: 0.25rem;
       padding-left: max(0.25rem, env(safe-area-inset-left));

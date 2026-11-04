@@ -1,14 +1,17 @@
+import { readNotePages } from "./notePages";
 import { readRequest, withLocalTransaction } from "./localDatabase";
 import type { BackupNote } from "./noteBackupData";
 import { readStrokes } from "./strokeData";
 import { readTextNotes } from "./textData";
 
-type StoredNote = { id: string; revision?: number; strokesByPage: unknown; textsByPage?: unknown };
+type StoredNote = { id: string; revision?: number; strokesByPage: unknown; textsByPage?: unknown; pages?: unknown };
 
-function editingKey(note: { strokesByPage: unknown; textsByPage?: unknown }): string {
-  // 検証済みの一定のプロパティ順で比較する。空ページの有無は編集の差にしない。
+function editingKey(note: { strokesByPage: unknown; textsByPage?: unknown; pages?: unknown }): string {
+  // 空の書き込み配列は差にしない。白紙の配置・寸法は編集内容として比較する。
   const nonempty = (pages: Record<number, unknown[]>) => Object.fromEntries(Object.entries(pages).filter(([, items]) => items.length));
-  return JSON.stringify([nonempty(readStrokes(note.strokesByPage)), nonempty(readTextNotes(note.textsByPage))]);
+  const pages = readNotePages(note.pages);
+  const layout = pages?.some((page) => page.kind === "blank") ? pages : undefined;
+  return JSON.stringify([layout, nonempty(readStrokes(note.strokesByPage)), nonempty(readTextNotes(note.textsByPage))]);
 }
 
 async function samePdf(first: Blob, second: Blob): Promise<boolean> {

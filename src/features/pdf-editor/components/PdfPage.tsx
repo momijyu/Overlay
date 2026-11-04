@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
-import type { PenStroke, EditorTool, TextNote } from "../types";
+import type { NotePage, PenStroke, EditorTool, TextNote } from "../types";
 import { PenLayer } from "./PenLayer";
 import { TextLayer } from "./TextLayer";
 import { bindPageZoomWheel, capturePageZoomAnchor, capturePageResizeAnchor, restorePageZoomAnchor, type PageZoomAnchor } from "../pageZoom";
@@ -12,6 +12,7 @@ import { bindPageGestures, createPageInteraction } from "../pageGestures";
 type PdfPageProps = {
   document: PDFDocumentProxy;
   pageNumber: number;
+  notePage?: NotePage;
   strokes: PenStroke[];
   editVersion: number;
   penWidth: number;
@@ -31,6 +32,7 @@ type PdfPageProps = {
 export function PdfPage({
   document,
   pageNumber,
+  notePage,
   strokes,
   editVersion,
   penWidth,
@@ -46,6 +48,9 @@ export function PdfPage({
   onStrokeComplete,
   onStrokesChange,
 }: PdfPageProps) {
+  const sourcePageNumber = notePage?.kind === "pdf" ? notePage.pageNumber : pageNumber;
+  const blankWidth = notePage?.kind === "blank" ? notePage.width : undefined;
+  const blankHeight = notePage?.kind === "blank" ? notePage.height : undefined;
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -156,16 +161,16 @@ export function PdfPage({
 
     async function renderPage() {
       try {
-        const page = await document.getPage(pageNumber);
+        const page = blankWidth !== undefined ? null : await document.getPage(sourcePageNumber);
         if (!active) return;
 
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const original = page.getViewport({ scale: 1 });
+        const original = blankWidth !== undefined && blankHeight !== undefined ? { width: blankWidth, height: blankHeight } : page!.getViewport({ scale: 1 });
         // 最初に収まる大きさを100%として、その大きさに表示倍率を掛ける。
         const scale = Math.min(1, availableWidth / original.width) * zoom;
-        const viewport = page.getViewport({ scale });
+        const viewport = page ? page.getViewport({ scale }) : { width: original.width * scale, height: original.height * scale };
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
 
         // 表示中のビットマップを消さず、別キャンバスで次の倍率を描画する。
@@ -173,12 +178,19 @@ export function PdfPage({
         buffer.width = Math.ceil(viewport.width * pixelRatio);
         buffer.height = Math.ceil(viewport.height * pixelRatio);
 
-        renderTask = page.render({
-          canvas: buffer,
-          viewport,
-          transform: [pixelRatio, 0, 0, pixelRatio, 0, 0],
-        });
-        await renderTask.promise;
+        if (page) {
+          renderTask = page.render({
+            canvas: buffer,
+            viewport: page.getViewport({ scale }),
+            transform: [pixelRatio, 0, 0, pixelRatio, 0, 0],
+          });
+          await renderTask.promise;
+        } else {
+          const context = buffer.getContext("2d");
+          if (!context) throw new Error("Canvas is unavailable");
+          context.fillStyle = "#ffffff";
+          context.fillRect(0, 0, buffer.width, buffer.height);
+        }
         if (active) {
           const context = canvas.getContext("2d");
           if (!context) throw new Error("Canvas is unavailable");
@@ -202,7 +214,7 @@ export function PdfPage({
       if (timer !== null) clearTimeout(timer);
       renderTask?.cancel();
     };
-  }, [document, pageNumber, availableWidth, zoom]);
+  }, [document, sourcePageNumber, blankWidth, blankHeight, availableWidth, zoom]);
 
   return (
     <div

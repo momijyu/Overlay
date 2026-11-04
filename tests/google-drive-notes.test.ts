@@ -4,6 +4,8 @@ import { createGoogleDriveClient } from "@/features/pdf-editor/googleDriveClient
 import { DRIVE_NOTE_SUFFIX } from "@/features/pdf-editor/googleDriveNoteData";
 import { listDriveNotes } from "@/features/pdf-editor/googleDriveNotes";
 import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
+import { PDFDocument } from "pdf-lib";
+import { resolveNotePages, insertBlankPage } from "@/features/pdf-editor/notePages";
 
 const root = { id: "root_A", name: "Overlay", mimeType: "application/vnd.google-apps.folder", ownedByMe: true, trashed: false,
   appProperties: { overlayApp: "overlay", overlayRole: "root", overlaySchema: "1" } };
@@ -109,6 +111,36 @@ function metadata(file: Stored) { const { data: _data, ...value } = file; void _
 async function verified() { const f = fixture(); await f.client.getAccount(); return f; }
 const save = (f: Awaited<ReturnType<typeof verified>>, value = backup) => f.client.saveNewNote("account_A", root.id, value);
 const list = (f: Awaited<ReturnType<typeof verified>>) => f.client.listNotes("account_A", root.id);
+
+test("白紙の位置・編集はDrive JSON版2へ保存し、同じ元PDFの上書きはPDFを再送せず読み戻せる", async () => {
+  const pdf = await PDFDocument.create(); pdf.addPage([600, 800]); pdf.addPage([600, 800]);
+  const data = new Blob([new Uint8Array(await pdf.save())], { type: "application/pdf" });
+  const pages = insertBlankPage(resolveNotePages(undefined, 2), 1, 600, 800);
+  const input: NoteBackup = { ...backup, schemaVersion: 3, notes: [{ ...backup.notes[0], pdf: data, pages,
+    strokesByPage: { 3: backup.notes[0].strokesByPage[2] }, textsByPage: { 3: backup.notes[0].textsByPage[2] } }] };
+  const f = await verified(); const saved = await save(f, input);
+  const stored = f.files.get(saved.id)!;
+  assert.equal(JSON.parse(await stored.data!.text()).schemaVersion, 2);
+  const restored = await f.client.loadNote("account_A", root.id, saved.id);
+  assert.equal(restored.schemaVersion, 3); assert.deepEqual(restored.notes[0].pages, pages);
+  assert.deepEqual(restored.notes[0].strokesByPage, input.notes[0].strokesByPage);
+  assert.deepEqual(restored.notes[0].textsByPage, input.notes[0].textsByPage);
+  assert.deepEqual(await restored.notes[0].pdf.arrayBuffer(), await data.arrayBuffer());
+  const target = await f.client.findSaveTarget("account_A", root.id, input);
+  assert.ok(target);
+  const morePages = insertBlankPage(pages, 2, 600, 800);
+  f.calls.length = 0;
+  await f.client.saveConfirmedNote("account_A", root.id, { ...input, notes: [{ ...input.notes[0], pages: morePages }] }, target);
+  assert.ok(!f.calls.some(({ init }) => init.method === "PUT" || init.method === "POST"));
+  assert.deepEqual((await f.client.loadNote("account_A", root.id, saved.id)).notes[0].pages, morePages);
+  const malformed = JSON.parse(await f.files.get(saved.id)!.data!.text());
+  malformed.pages[1].width = -1;
+  f.files.get(saved.id)!.data = new Blob([JSON.stringify(malformed)], { type: "application/json" });
+  f.files.get(saved.id)!.size = String(f.files.get(saved.id)!.data!.size);
+  f.calls.length = 0;
+  await assert.rejects(f.client.loadNote("account_A", root.id, saved.id));
+  assert.ok(!f.calls.some(({ url }) => url.searchParams.get("alt") === "media" && url.pathname.endsWith(malformed.pdfId)));
+});
 
 test("元PDFと編集JSONを別々に新規保存し、手書き・文章・色を含めて読み戻せる", async () => {
   const f = await verified();

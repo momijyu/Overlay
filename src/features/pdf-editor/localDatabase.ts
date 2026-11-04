@@ -1,7 +1,8 @@
 import { toLocalNoteSummary } from "./localNoteSummary";
 
 const DATABASE_NAME = "overlay-local-notes";
-const DATABASE_VERSION = 2;
+// 旧タブがページ構成を知らずに保存し直すことを防ぐ。ストアと既存本文は変更しない。
+const DATABASE_VERSION = 3;
 const STORES = ["notes", "pdfs", "folders", "noteSummaries"] as const;
 type StoreName = typeof STORES[number];
 type Connection = { factory: IDBFactory; database: IDBDatabase | null; opening: Promise<IDBDatabase> };
@@ -13,6 +14,9 @@ function releaseConnection(database: IDBDatabase) {
 }
 
 function storageError(error: unknown): Error {
+  if (error instanceof Error && error.name === "VersionError") {
+    return new Error("保存形式が更新されています。この画面を再読み込みしてください。未保存の内容は先に書き出してください。", { cause: error });
+  }
   if (error instanceof Error && error.name === "QuotaExceededError") {
     return new Error("このブラウザの保存容量が不足しています。未保存の内容はPDFをダウンロードして残してください。", { cause: error });
   }

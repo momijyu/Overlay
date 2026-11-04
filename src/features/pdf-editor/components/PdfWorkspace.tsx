@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import { AppHeader } from "@/components/layout/AppHeader";
 
+import { checkPageBindings, resolveNotePages, insertBlankPage, MAX_NOTE_PAGES } from "../notePages";
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { pdfDownloadName } from "../pdfDownloadName";
 import { DEFAULT_ERASER_WIDTH, DEFAULT_MARKER_WIDTH, DEFAULT_PEN_WIDTH, isPenColor, MARKER_COLOR, PEN_COLOR } from "../penStyle";
@@ -12,7 +13,7 @@ import { backupDownloadName, readNoteBackup, type NoteBackup } from "../noteBack
 import { NotebookRestoreDialog } from "./NotebookRestoreDialog";
 import type { NoteDragItem } from "../noteDrag";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
-import type { PenStroke, EditorTool, TextNote, TextNotesByPage, SavedNoteSummary } from "../types";
+import type { NotePage, PenStroke, EditorTool, TextNote, TextNotesByPage, SavedNoteSummary } from "../types";
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookDrawer } from "./NotebookDrawer";
@@ -22,7 +23,7 @@ import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
 import { ZoomControl } from "./ZoomControl";
 import { EditorIcon } from "./EditorIcon";
-import { createStrokeHistory, recordStrokeEdit, recordTextEdit, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
+import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordPageInsertion, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
 
 type PdfInput = {
   file: File;
@@ -30,6 +31,7 @@ type PdfInput = {
   name?: string;
   strokesByPage: Record<number, PenStroke[]>;
   textsByPage?: TextNotesByPage;
+  pages?: NotePage[];
   revision?: number;
 };
 
@@ -48,6 +50,9 @@ export function PdfWorkspace() {
   const [pageNumber, setPageNumber] = useState(1);
   const [history, setHistory] = useState(() => createStrokeHistory({}));
   const strokesByPage = history.strokesByPage;
+  const pages = document ? resolveNotePages(history.pages, document.numPages) : [];
+  const currentPage = pages[pageNumber - 1];
+  const pageId = currentPage?.id ?? pageNumber;
   const [penWidth, setPenWidth] = useState(DEFAULT_PEN_WIDTH);
   const [penColor, setPenColor] = useState(PEN_COLOR);
   const [penTool, setPenTool] = useState<EditorTool>("pen");
@@ -128,17 +133,11 @@ export function PdfWorkspace() {
       loadingTaskRef.current = loadingTask;
       const loadedDocument = await loadingTask.promise;
       if (!mountedRef.current) return;
-      if (
-        [...Object.keys(input.strokesByPage), ...Object.keys(input.textsByPage ?? {})].some(
-          (page) => Number(page) > loadedDocument.numPages,
-        )
-      ) {
-        throw new Error("書き込み情報のページ数がPDFと一致しません。");
-      }
+      checkPageBindings(input.pages, [input.strokesByPage, input.textsByPage ?? {}], loadedDocument.numPages);
 
       // PDFと線を両方読み込めてから切り替え、失敗時は編集中の内容を残す。
       previousAutosave?.dispose();
-      const nextHistory = createStrokeHistory(input.strokesByPage, input.textsByPage);
+      const nextHistory = createStrokeHistory(input.strokesByPage, input.textsByPage, input.pages);
       historyRef.current = nextHistory;
       setFile(input.file);
       setDocument(loadedDocument);
@@ -153,7 +152,7 @@ export function PdfWorkspace() {
       setDocumentVersion((value) => value + 1);
       const autosave = createLocalAutosave({
         file: input.file, noteId: input.id, strokesByPage: input.strokesByPage, textsByPage: nextHistory.textsByPage,
-        revision: input.revision, persist: saveNote,
+        pages: input.pages, revision: input.revision, persist: saveNote,
         onChange: (state) => {
           // 古いノートの保存結果が、新しく開いた画面に混ざらないようにする。
           if (!mountedRef.current || autosaveRef.current !== autosave) return;
@@ -205,21 +204,44 @@ export function PdfWorkspace() {
 
   function updatePageStrokes(strokes: PenStroke[]) {
     if (operationRef.current) return;
-    applyHistory(recordStrokeEdit(historyRef.current, pageNumber, strokes));
+    applyHistory(recordStrokeEdit(historyRef.current, pageId, strokes));
   }
 
   function updatePageTexts(notes: TextNote[]) {
     if (operationRef.current) return;
-    applyHistory(recordTextEdit(historyRef.current, pageNumber, notes));
+    applyHistory(recordTextEdit(historyRef.current, pageId, notes));
   }
 
   function applyHistory(next: StrokeHistory, revealPage = false) {
     if (next === historyRef.current) return;
     historyRef.current = next;
     setHistory(next);
-    if (revealPage && next.changedPage !== null) setPageNumber(next.changedPage);
+    if (revealPage && next.changedPage !== null && document) {
+      const index = resolveNotePages(next.pages, document.numPages).findIndex((page) => page.id === next.changedPage);
+      if (index >= 0) setPageNumber(index + 1);
+    }
     // Undo / Redoも通常の編集として保存係へ渡し、保存中の古い結果で上書きしない。
-    autosaveRef.current?.update(next.strokesByPage, next.textsByPage);
+    autosaveRef.current?.update(next.strokesByPage, next.textsByPage, next.pages);
+  }
+
+  async function handleInsertBlankPage() {
+    if (operationRef.current || !document || !currentPage) return;
+    operationRef.current = true;
+    setIsLoading(true); setError(null);
+    try {
+      const before = resolveNotePages(historyRef.current.pages, document.numPages);
+      const size = currentPage.kind === "blank" ? currentPage
+        : (await document.getPage(currentPage.pageNumber)).getViewport({ scale: 1 });
+      if (!mountedRef.current) return;
+      const after = insertBlankPage(before, currentPage.id, size.width, size.height);
+      const inserted = after[pageNumber];
+      applyHistory(recordPageInsertion(historyRef.current, before, after, currentPage.id, inserted.id), true);
+    } catch (error) {
+      if (mountedRef.current) setError(error instanceof Error ? error.message : "空白ページを追加できませんでした。");
+    } finally {
+      operationRef.current = false;
+      if (mountedRef.current) setIsLoading(false);
+    }
   }
 
   function handleUndo() {
@@ -274,7 +296,7 @@ export function PdfWorkspace() {
     setError(null);
 
     try {
-      const pdfBytes = await exportAnnotatedPdf(file, document, strokesByPage, history.textsByPage);
+      const pdfBytes = await exportAnnotatedPdf(file, document, strokesByPage, history.textsByPage, history.pages);
       if (!mountedRef.current) return;
       const blob = new Blob([new Uint8Array(pdfBytes)], {
         type: "application/pdf",
@@ -297,6 +319,16 @@ export function PdfWorkspace() {
     }
   }
 
+  // 単体バックアップとDrive（単体／一括）で同じ確定スナップショットを使う。
+  function captureCurrentNote(): NoteBackup {
+    if (!file || !document) throw new Error("ノートを開いてください。");
+    const content = historyRef.current;
+    return readNoteBackup({ schemaVersion: content.pages ? 3 : 1, kind: "note", name: noteName, folders: [], notes: [{
+      id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
+      strokesByPage: content.strokesByPage, textsByPage: content.textsByPage, pages: content.pages,
+    }] });
+  }
+
   async function handleBackup(item?: NoteDragItem | NoteDragItem[]) {
     if (operationRef.current || pendingBackup) return;
     operationRef.current = true;
@@ -309,10 +341,7 @@ export function PdfWorkspace() {
       if (!item || (!Array.isArray(item) && item.kind === "note" && item.id === currentId)) {
         if (!file || !document) throw new Error("ノートを開いてください。");
         // 保存容量不足でも、画面で確定済みの最新内容を持ち出せる。
-        backup = readNoteBackup({ schemaVersion: 1, kind: "note", name: noteName, folders: [], notes: [{
-          id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
-          strokesByPage: historyRef.current.strokesByPage, textsByPage: historyRef.current.textsByPage,
-        }] });
+        backup = captureCurrentNote();
       } else {
         if ((Array.isArray(item) || item.kind === "folder") && autosaveRef.current && !await autosaveRef.current.flush()) {
           throw new Error("自動保存が完了していません。開いているノートは単体でバックアップできます。");
@@ -348,10 +377,7 @@ export function PdfWorkspace() {
     try {
       const currentId = autosaveRef.current?.getState().noteId;
       const backup = id === currentId && file && document
-        ? readNoteBackup({ schemaVersion: 1, kind: "note", name: noteName, folders: [], notes: [{
-          id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
-          strokesByPage: historyRef.current.strokesByPage, textsByPage: historyRef.current.textsByPage,
-        }] }) : await captureNoteBackup({ kind: "note", id });
+        ? captureCurrentNote() : await captureNoteBackup({ kind: "note", id });
       if (mountedRef.current) setDriveSaveRequest({ id: crypto.randomUUID(), backup });
     } catch (error) {
       if (mountedRef.current) setError(error instanceof Error ? error.message : "保存するノートを読み込めませんでした。");
@@ -369,10 +395,7 @@ export function PdfWorkspace() {
       const currentId = autosaveRef.current?.getState().noteId;
       const sources = notes.map((selected) => {
         // 編集中の1件だけ確定内容を保持。他のPDFは各送信時に取得して解放する。
-        const snapshot = selected.id === currentId && file && document ? readNoteBackup({
-          schemaVersion: 1, kind: "note", name: noteName, folders: [], notes: [{ id: "current", title: noteName,
-            fileName: file.name, folderId: null, pdf: file, strokesByPage: historyRef.current.strokesByPage, textsByPage: historyRef.current.textsByPage }],
-        }) : null;
+        const snapshot = selected.id === currentId && file && document ? captureCurrentNote() : null;
         const id = selected.id;
         return { id, title: snapshot?.notes[0].title ?? selected.title,
           load: async () => snapshot ?? await captureNoteBackup({ kind: "note", id }) };
@@ -461,9 +484,7 @@ export function PdfWorkspace() {
         onDriveSaveRequestClose={() => setDriveSaveRequest(null)}
         onFileChange={handleFileChange} onBackupFileChange={handleBackupFileChange} pdfOpenDisabled={isBusy}
         onClose={() => { setDriveSaveRequest(null); setSidebarVisible(false); }}
-        captureDriveNote={file && document && !isBusy ? () => readNoteBackup({ schemaVersion: 1, kind: "note", name: noteName,
-          folders: [], notes: [{ id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
-            strokesByPage: historyRef.current.strokesByPage, textsByPage: historyRef.current.textsByPage }] }) : undefined}
+        captureDriveNote={file && document && !isBusy ? () => captureCurrentNote() : undefined}
         onImportDriveNote={(backup) => {
           if (operationRef.current || pendingBackup) throw new Error("別の処理が完了してから読み込んでください。");
           setBackupError(null); setIsDriveRestore(true); setPendingBackup(backup);
@@ -598,6 +619,12 @@ export function PdfWorkspace() {
                     </button>
                     <button type="button" className="btn" disabled={isBusy} onClick={() => void handleBackup()}>ノートのバックアップ</button></div>
                     <div className="join shrink-0" role="group" aria-label="ページ切り替え">
+                      <button type="button" className="btn btn-square join-item" aria-label="次に空白ページを追加" title="次に空白ページを追加"
+                        disabled={isBusy || pages.length >= MAX_NOTE_PAGES} onClick={() => void handleInsertBlankPage()}>
+                        <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <rect x="4" y="3" width="16" height="18" rx="2" /><path d="M12 8v8M8 12h8" />
+                        </svg>
+                      </button>
                       <button
                         className="btn btn-square join-item"
                         type="button"
@@ -608,14 +635,14 @@ export function PdfWorkspace() {
                         <EditorIcon name="previous-page" />
                       </button>
                       <span className="btn join-item pointer-events-none min-w-20 tabular-nums" aria-live="polite">
-                        {pageNumber} / {document.numPages}
+                        {pageNumber} / {pages.length}
                       </span>
                       <button
                         className="btn btn-square join-item"
                         type="button"
                         aria-label="次のページ" title="次のページ"
-                        disabled={isBusy || pageNumber === document.numPages}
-                        onClick={() => { if (!isBusy && pageNumber < document.numPages) setPageNumber((page) => page + 1); }}
+                        disabled={isBusy || pageNumber === pages.length}
+                        onClick={() => { if (!isBusy && pageNumber < pages.length) setPageNumber((page) => page + 1); }}
                       >
                         <EditorIcon name="next-page" />
                       </button>
@@ -624,11 +651,12 @@ export function PdfWorkspace() {
                   <div className="desktop-only">{backupNotice}</div>
                 </div>
                 <PdfPage
-                  key={`${documentVersion}-${pageNumber}`}
+                  key={`${documentVersion}-${pageId}`}
                   document={document}
                   pageNumber={pageNumber}
-                  strokes={strokesByPage[pageNumber] ?? []}
-                  texts={history.textsByPage[pageNumber] ?? []}
+                  notePage={currentPage}
+                  strokes={strokesByPage[pageId] ?? []}
+                  texts={history.textsByPage[pageId] ?? []}
                   textControlsContainer={textControlsContainer}
                   onTextsChange={updatePageTexts}
                   editVersion={history.version}
@@ -640,7 +668,7 @@ export function PdfWorkspace() {
                   onZoomChange={setZoom}
                   disabled={isBusy}
                   onStrokeComplete={(stroke) => {
-                    updatePageStrokes([...(historyRef.current.strokesByPage[pageNumber] ?? []), stroke]);
+                    updatePageStrokes([...(historyRef.current.strokesByPage[pageId] ?? []), stroke]);
                   }}
                   onStrokesChange={updatePageStrokes}
                 />

@@ -5,9 +5,10 @@ export const DRIVE_NOTE_FIELDS = "id,name,mimeType,ownedByMe,trashed,parents,app
 export type DriveOverwriteTarget = { note: DriveNoteSummary; version: string };
 export type DriveNoteSummary = { id: string; title: string; updatedAt: string; containerId: string; noteKey: string };
 export type DriveNoteManifest = {
-  schemaVersion: 1; kind: "overlay-drive-note"; noteKey: string; title: string; fileName: string;
+  schemaVersion: 1 | 2; kind: "overlay-drive-note"; noteKey: string; title: string; fileName: string;
   pdfId: string; pdfBytes: number; strokesByPage: NoteBackup["notes"][number]["strokesByPage"];
   textsByPage: NoteBackup["notes"][number]["textsByPage"];
+  pages?: NoteBackup["notes"][number]["pages"];
 };
 
 export function driveObject(value: unknown): Record<string, unknown> {
@@ -54,14 +55,16 @@ export function singleDriveNote(input: unknown) {
 
 export function readDriveManifest(value: unknown, expectedKey: string): DriveNoteManifest {
   const data = driveObject(value);
-  if (data.schemaVersion !== 1 || data.kind !== "overlay-drive-note") throw new Error("このDriveノートの形式バージョンには対応していません。");
+  if ((data.schemaVersion !== 1 && data.schemaVersion !== 2) || data.kind !== "overlay-drive-note") throw new Error("このDriveノートの形式バージョンには対応していません。");
+  if (data.schemaVersion === 2 && data.pages === undefined) throw new Error("Driveノートのページ構成がありません。");
   if (driveId(data.noteKey) !== expectedKey || !Number.isSafeInteger(data.pdfBytes)
     || (data.pdfBytes as number) <= 0 || (data.pdfBytes as number) > BACKUP_LIMITS.bytes) throw new Error("DriveノートのPDF情報が不正です。");
   // ダウンロード前に、共通検証で文章・線・件数・名前を確認する。PDFは後から実データで再検証する。
-  const checked = singleDriveNote({ schemaVersion: 1, kind: "note", name: data.title, folders: [], notes: [{
+  if (data.schemaVersion === 1 && data.pages !== undefined) throw new Error("Driveノートのページ形式が不正です。");
+  const checked = singleDriveNote({ schemaVersion: data.schemaVersion === 2 ? 3 : 1, kind: "note", name: data.title, folders: [], notes: [{
     id: data.noteKey, title: data.title, fileName: data.fileName, folderId: null,
-    strokesByPage: data.strokesByPage, textsByPage: data.textsByPage, pdf: new Blob(["%PDF-placeholder"]),
+    pages: data.pages, strokesByPage: data.strokesByPage, textsByPage: data.textsByPage, pdf: new Blob(["%PDF-placeholder"]),
   }] });
-  return { schemaVersion: 1, kind: "overlay-drive-note", noteKey: expectedKey, title: checked.title, fileName: checked.fileName,
-    pdfId: driveId(data.pdfId), pdfBytes: data.pdfBytes as number, strokesByPage: checked.strokesByPage, textsByPage: checked.textsByPage };
+  return { schemaVersion: data.schemaVersion, kind: "overlay-drive-note", noteKey: expectedKey, title: checked.title, fileName: checked.fileName,
+    ...(checked.pages ? { pages: checked.pages } : {}), pdfId: driveId(data.pdfId), pdfBytes: data.pdfBytes as number, strokesByPage: checked.strokesByPage, textsByPage: checked.textsByPage };
 }

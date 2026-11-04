@@ -3,14 +3,15 @@ import test, { beforeEach, mock } from "node:test";
 import * as React from "react";
 import { createLocalAutosave, type LocalSaveInput } from "@/features/pdf-editor/localAutosave";
 import * as localNotes from "@/features/pdf-editor/localNotes";
-import type { PenStroke, SavedNoteSummary, TextNotesByPage } from "@/features/pdf-editor/types";
+import type { NotePage, PenStroke, SavedNoteSummary, TextNotesByPage } from "@/features/pdf-editor/types";
 import type { NoteDragItem } from "@/features/pdf-editor/noteDrag";
 import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
 
 // Hooksの保持だけを代用し、Workspace内のイベント・状態・保存の接続を検証する。
 // DOM・実際のReact再描画・ブラウザ操作を再現するテストではない。
 const file = new File(["test"], "sample.pdf");
-const pdf = { numPages: 3 };
+let pageFails = false;
+const pdf = { numPages: 3, getPage: async () => { if (pageFails) throw new Error("ページ取得失敗"); return { getViewport: () => ({ width: 800, height: 600 }) }; } };
 let states: { value: unknown }[] = [];
 let refs: { current: unknown }[] = [];
 let stateCursor = 0;
@@ -22,9 +23,11 @@ let persistFails = false;
 let persistWait: Promise<void> | null = null;
 let exportFails = true;
 const exported: Record<number, PenStroke[]>[] = [];
+const exportedPages: (NotePage[] | undefined)[] = [];
 const exportedTexts: (TextNotesByPage | undefined)[] = [];
 const savedInputs: LocalSaveInput[] = [];
 const deletedItems: NoteDragItem[][] = [];
+let openedPages: NotePage[] | undefined;
 let openedTexts: TextNotesByPage | undefined;
 const openedStrokes = { 2: [{ width: 5, points: [{ x: 0.2, y: 0.3 }] }] };
 const backups: NoteBackup[] = [];
@@ -84,7 +87,7 @@ mock.module("@/features/pdf-editor/localNotes", { exports: {
   },
   loadLocalNote: async () => {
     if (openFails) throw new Error("読込失敗");
-    return { file, id: "other", strokesByPage: openedStrokes, textsByPage: openedTexts, revision: 1 };
+    return { file, id: "other", strokesByPage: openedStrokes, textsByPage: openedTexts, pages: openedPages, revision: 1 };
   },
 } });
 mock.module("@/features/pdf-editor/noteBackupFile", { exports: {
@@ -96,9 +99,10 @@ mock.module("pdfjs-dist/legacy/build/pdf.mjs", { exports: {
   getDocument: () => ({ promise: pdfFails ? Promise.reject(new Error("PDF解析失敗")) : Promise.resolve(pdf), destroy: async () => {} }),
 } });
 mock.module("@/features/pdf-editor/exportAnnotatedPdf", { exports: {
-  exportAnnotatedPdf: async (_file: unknown, _pdf: unknown, strokes: Record<number, PenStroke[]>, texts?: TextNotesByPage) => {
+  exportAnnotatedPdf: async (_file: unknown, _pdf: unknown, strokes: Record<number, PenStroke[]>, texts?: TextNotesByPage, pages?: NotePage[]) => {
     exported.push(strokes);
     exportedTexts.push(texts);
+    exportedPages.push(pages);
     // 出力に渡すデータだけを確認し、DOMでのダウンロードは実行しない。
     if (exportFails) throw new Error("テスト用の出力停止");
     return new Uint8Array([1, 2, 3]);
@@ -115,7 +119,7 @@ const { EditorIcon } = await import("@/features/pdf-editor/components/EditorIcon
 const { AppHeader } = await import("@/components/layout/AppHeader");
 const { NotebookRestoreDialog } = await import("@/features/pdf-editor/components/NotebookRestoreDialog");
 
-beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; deletedItems.length = 0; openedTexts = undefined; });
+beforeEach(() => { pageFails = false; openedPages = undefined; exportedPages.length = 0; states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; deletedItems.length = 0; openedTexts = undefined; });
 beforeEach(() => { backups.length = 0; capturedSelections.length = 0; restoreCalls = 0; restoreFails = false; decodeFails = false;
   restoreSkipped = false; restoreOptions.length = 0; capturedNotes.length = 0; captureFails = false; });
 
@@ -1005,4 +1009,54 @@ test("読み込み失敗時は履歴を保持し、別ノートを開けた時�
   assert.equal(props(HistoryControls).canUndo, false);
   assert.equal(props(HistoryControls).canRedo, false);
   assert.equal(props(PdfPage).pageNumber, 1);
+});
+
+
+test("白紙追加は直後へ移動して初回保存し、既存ページの書き込みをずらさずUndo／Redoする", async () => {
+  setup(); await openOther();
+  assert.equal(savedInputs.length, 0);
+  await (button("次に空白ページを追加")!.props as { onClick: () => Promise<void> }).onClick();
+  await new Promise(setImmediate);
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
+  await autosave.flush();
+  assert.equal(props(PdfPage).pageNumber, 2);
+  assert.deepEqual(props(PdfPage).notePage, { id: 4, kind: "blank", width: 800, height: 600 });
+  assert.equal(savedInputs.length, 1); // 描画のない追加だけでも保存する。
+  assert.deepEqual(savedInputs[0].strokesByPage[2], openedStrokes[2]);
+  props(PdfPage).onStrokeComplete(red); await autosave.flush();
+  assert.deepEqual(savedInputs.at(-1)!.strokesByPage[4], [red]);
+  assert.deepEqual(savedInputs.at(-1)!.strokesByPage[2], openedStrokes[2]);
+  props(HistoryControls).onUndo(); props(HistoryControls).onUndo(); await autosave.flush();
+  assert.equal(props(PdfPage).pageNumber, 1);
+  assert.equal(savedInputs.at(-1)!.pages!.length, 3);
+  props(HistoryControls).onRedo(); props(HistoryControls).onRedo(); await autosave.flush();
+  assert.equal(props(PdfPage).pageNumber, 2); assert.deepEqual(props(PdfPage).strokes, [red]);
+  (button("次のページ")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).pageNumber, 3); assert.deepEqual(props(PdfPage).strokes, openedStrokes[2]);
+  const layout = savedInputs.at(-1)!.pages;
+  assert.deepEqual(props(NotebookDrawer).captureDriveNote!().notes[0].pages, layout);
+  props(NotebookSidebar).onSaveItemsToDrive!([{ id: "other", title: "授業メモ" } as SavedNoteSummary]);
+  const request = props(NotebookDrawer).driveSaveRequest!;
+  assert.ok("sources" in request); assert.deepEqual((await request.sources[0].load()).notes[0].pages, layout);
+  props(NotebookDrawer).onDriveSaveRequestClose!();
+  (button("PDFをダウンロード")!.props as { onClick: () => void }).onClick(); await new Promise(setImmediate);
+  assert.deepEqual(exportedPages.at(-1), layout);
+});
+
+test("白紙追加失敗・整理中は内容と履歴を変えず、読込済みページ構成で編集を再開する", async () => {
+  setup(); await openOther(); pageFails = true;
+  await (button("次に空白ページを追加")!.props as { onClick: () => Promise<void> }).onClick(); await new Promise(setImmediate);
+  assert.equal(props(PdfPage).pageNumber, 1); assert.equal(props(HistoryControls).canUndo, false);
+  assert.equal(savedInputs.length, 0);
+  pageFails = false;
+  openedPages = [{ id: 1, kind: "pdf", pageNumber: 1 }, { id: 4, kind: "blank", width: 800, height: 600 },
+    { id: 2, kind: "pdf", pageNumber: 2 }, { id: 3, kind: "pdf", pageNumber: 3 }];
+  await openOther();
+  (button("次のページ")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).notePage!.kind, "blank");
+  props(PdfPage).onStrokeComplete(red);
+  await (refs[3].current as ReturnType<typeof createLocalAutosave>).flush();
+  assert.deepEqual(savedInputs.at(-1)!.pages, openedPages); assert.deepEqual(savedInputs.at(-1)!.strokesByPage[4], [red]);
+  props(NotebookSidebar).onMutationChange(true);
+  assert.equal((button("次に空白ページを追加")!.props as { disabled: boolean }).disabled, true);
 });
