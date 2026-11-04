@@ -25,7 +25,7 @@ test("同時Openと後続のトランザクションで1つの接続を共有し
 test("versionchangeで接続を閉じてキャッシュを破棄し、次回は開き直す", async () => {
   const database = await getConnection();
   const closing = mock.method(database, "close");
-  database.dispatchEvent(new IDBVersionChangeEvent("versionchange", { oldVersion: 1, newVersion: 2 }));
+  database.dispatchEvent(new IDBVersionChangeEvent("versionchange", { oldVersion: 2, newVersion: 3 }));
   assert.equal(closing.mock.callCount(), 1);
   assert.notEqual(await getConnection(), database);
 });

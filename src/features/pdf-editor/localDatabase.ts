@@ -1,5 +1,8 @@
+import { toLocalNoteSummary } from "./localNoteSummary";
+
 const DATABASE_NAME = "overlay-local-notes";
-const STORES = ["notes", "pdfs", "folders"] as const;
+const DATABASE_VERSION = 2;
+const STORES = ["notes", "pdfs", "folders", "noteSummaries"] as const;
 type StoreName = typeof STORES[number];
 type Connection = { factory: IDBFactory; database: IDBDatabase | null; opening: Promise<IDBDatabase> };
 let connection: Connection | null = null;
@@ -27,12 +30,38 @@ function openDatabase(): Promise<IDBDatabase> {
   const current: Connection = { factory: indexedDB, database: null, opening: null! };
   connection = current;
   current.opening = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, 1);
+    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
     let blocked = false;
-    request.onupgradeneeded = () => {
-      for (const name of STORES) request.result.createObjectStore(name, { keyPath: "id" });
+    let upgradeFailure: unknown;
+    request.onupgradeneeded = (event) => {
+      const transaction = request.transaction!;
+      const abortUpgrade = (error: unknown) => {
+        upgradeFailure = error;
+        transaction.abort();
+      };
+      try {
+        for (const name of STORES) {
+          if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: "id" });
+        }
+        if (event.oldVersion > 0 && event.oldVersion < 2) {
+          // 元PDF・編集本文は書き換えない。全件getAllせず、1件ずつ小さい一覧情報だけ複製する。
+          // 失敗時はストア追加と移行をまとめて取り消し、旧版のデータを残す。
+          const summaries = transaction.objectStore("noteSummaries");
+          const cursorRequest = transaction.objectStore("notes").openCursor();
+          cursorRequest.onerror = () => { upgradeFailure = cursorRequest.error; };
+          cursorRequest.onsuccess = () => {
+            const cursor = cursorRequest.result;
+            if (!cursor) return;
+            try {
+              const write = summaries.add(toLocalNoteSummary(cursor.value));
+              write.onerror = () => { upgradeFailure = write.error; };
+              cursor.continue();
+            } catch (error) { abortUpgrade(error); }
+          };
+        }
+      } catch (error) { abortUpgrade(error); }
     };
-    request.onerror = () => reject(storageError(request.error));
+    request.onerror = () => reject(storageError(upgradeFailure ?? request.error));
     request.onblocked = () => {
       blocked = true;
       reject(new Error("保存場所を準備できません。他のOverlayのタブを閉じて再試行してください。"));

@@ -46,9 +46,12 @@ function clickText(node: React.ReactNode, label: string) {
 }
 
 test("選択モードの全選択・解除・終了と一括移動を同じ一覧へ接続する", async () => {
-  await withLocalTransaction(["notes", "folders"], "readwrite", async (tx) => {
+  await withLocalTransaction(["notes", "folders", "noteSummaries"], "readwrite", async (tx) => {
     for (const folder of library.folders) await readRequest(tx.objectStore("folders").put(folder));
-    for (const note of library.notes) await readRequest(tx.objectStore("notes").put({ ...note, strokesByPage: {} }));
+    for (const note of library.notes) {
+      await readRequest(tx.objectStore("notes").put({ ...note, strokesByPage: {} }));
+      await readRequest(tx.objectStore("noteSummaries").put(note));
+    }
   });
   clickText(render(), "選択");
   let node = render();
@@ -125,9 +128,12 @@ test("一括削除は確認を開くだけでは消さず、キャンセル・�
 });
 
 test("確認した一括削除だけを実行し、成功後に一覧を更新して選択を解除する", async () => {
-  await withLocalTransaction(["notes", "folders"], "readwrite", async (tx) => {
+  await withLocalTransaction(["notes", "folders", "noteSummaries"], "readwrite", async (tx) => {
     for (const folder of library.folders) await readRequest(tx.objectStore("folders").put(folder));
-    for (const note of library.notes) await readRequest(tx.objectStore("notes").put({ ...note, strokesByPage: {} }));
+    for (const note of library.notes) {
+      await readRequest(tx.objectStore("notes").put({ ...note, strokesByPage: {} }));
+      await readRequest(tx.objectStore("noteSummaries").put(note));
+    }
   });
   clickText(render(), "選択");
   clickText(render(), "全選択");
@@ -138,10 +144,10 @@ test("確認した一括削除だけを実行し、成功後に一覧を更新�
   await (dialog.props.onSubmit as () => Promise<void>)();
   assert.equal(find(render(), (element) => element.type === NotebookDeleteDialog), undefined);
   assert.ok(find(render(), (element) => element.type === "button" && element.props.children === "選択"));
-  const after = await withLocalTransaction(["notes", "folders"], "readonly", async (tx) => Promise.all([
-    readRequest(tx.objectStore("notes").count()), readRequest(tx.objectStore("folders").count()),
+  const after = await withLocalTransaction(["notes", "folders", "noteSummaries"], "readonly", async (tx) => Promise.all([
+    readRequest(tx.objectStore("notes").count()), readRequest(tx.objectStore("folders").count()), readRequest(tx.objectStore("noteSummaries").count()),
   ]));
-  assert.deepEqual(after, [0, 0]);
+  assert.deepEqual(after, [0, 0, 0]);
 });
 
 function render(overrides: Partial<React.ComponentProps<typeof NotebookSidebar>> = {}) {
