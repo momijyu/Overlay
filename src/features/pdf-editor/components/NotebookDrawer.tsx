@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode, type ChangeEventHandler } from "react";
+import { GoogleDriveSetup } from "./GoogleDriveSetup";
 
 type NotebookDrawerProps = {
   open: boolean;
@@ -57,6 +58,7 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
               aria-label="読み込むOverlayバックアップ" disabled={pdfOpenDisabled} onChange={onBackupFileChange} />
           </div>}
           {children}
+          {open && <GoogleDriveSetup disabled={busy || pdfOpenDisabled} />}
         </div>
         <div className="modal-backdrop">
           <button type="button" aria-label="ノート一覧の外側を押して閉じる" tabIndex={-1}

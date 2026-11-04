@@ -1,6 +1,8 @@
 # Overlay
 
-2026年11月4日の続く更新：Googleの認証はブラウザ完結のGIS token modelに決定し、SDK読み込み・認可・期限切れ・再接続の内部処理を追加しました。通常画面とDrive保存はまだ未接続です。OAuthクライアントID用の空欄を`.env.example`へ追加しました。[Google側の設定手順](./docs/google-drive-setup.md)に従って準備します。トークンやクライアントシークレットはGitへ保存しません。
+2026年11月4日の最新更新：ノート一覧に「Google Driveの接続確認」を追加しました。Googleアカウントを確認し、本人のDriveにあるOverlay専用フォルダを検索・明示作成できます。この段階では保存先はブラウザのままで、ノート送信・Drive読み込み・500MBキャッシュ整理は未実装です。[Google側の設定手順と確認操作](./docs/google-drive-setup.md)を参照してください。実Google・iPad・公開環境の確認は未実施です。
+
+同日の先行更新：Googleの認証をブラウザ完結のGIS token modelに決定し、SDK読み込み・認可・期限切れ・再接続の内部処理を追加しました。OAuthクライアントID用の空欄を`.env.example`へ追加しました。トークンやクライアントシークレットはGitへ保存しません。
 
 2026年11月4日：ノート一覧を小さな一覧専用情報から取得するよう変更しました。初回にIndexedDBを版2へ更新しますが、既存PDF・編集内容は保持します。更新待ちが出る場合は古いOverlayタブを閉じ、サイトデータは削除しないでください。[Drive保存・500MBキャッシュの方針](./docs/drive-storage-plan.md)と[Google側の設定手順](./docs/google-drive-setup.md)を追加しました。Drive接続・自動送信・キャッシュ整理はまだ利用できません。
 

@@ -1,0 +1,209 @@
+import assert from "node:assert/strict";
+import test, { afterEach, mock } from "node:test";
+import { createGoogleDriveClient } from "@/features/pdf-editor/googleDriveClient";
+
+const user = { permissionId: "account_A", displayName: "Test User", emailAddress: "test@example.com", me: true };
+const folder = { id: "folder_A", name: "Overlay", mimeType: "application/vnd.google-apps.folder", ownedByMe: true, trashed: false,
+  appProperties: { overlayApp: "overlay", overlayRole: "root", overlaySchema: "1" } };
+type Reply = (url: string, init: RequestInit) => Promise<Response>;
+const json = (value: unknown, status = 200) => async () => Response.json(value, { status });
+const clients: ReturnType<typeof createGoogleDriveClient>[] = [];
+afterEach(() => { clients.splice(0).forEach((client) => client.dispose()); mock.timers.reset(); });
+
+function fixture() {
+  let token: string | null = "token_A";
+  const replies: Reply[] = [];
+  const requests: { url: URL; init: RequestInit }[] = [];
+  const invalidated: string[] = [];
+  const auth = { getAccessToken() { if (!token) throw new Error("再接続してください。"); return token; },
+    invalidateAccessToken(value: string) { invalidated.push(value); if (value === token) token = null; } };
+  const client = createGoogleDriveClient(auth, (async (url: string, init: RequestInit) => {
+    requests.push({ url: new URL(url), init });
+    const reply = replies.shift();
+    assert.ok(reply, "予定していない通信をしない");
+    return reply(url, init);
+  }) as typeof fetch);
+  clients.push(client);
+  return { client, replies, requests, invalidated, changeToken: (value: string | null) => { token = value; } };
+}
+
+async function verify(f: ReturnType<typeof fixture>) {
+  f.replies.push(json({ user }));
+  return f.client.getAccount();
+}
+
+test("作成だけでは通信せず、確認前・別アカウント指定ではフォルダを操作しない", async () => {
+  const f = fixture();
+  assert.equal(f.requests.length, 0);
+  await assert.rejects(f.client.findRoot(user.permissionId), /接続確認/);
+  await assert.rejects(f.client.createRoot(user.permissionId), /接続確認/);
+  await verify(f);
+  await assert.rejects(f.client.createRoot("account_B"), /接続確認/);
+  assert.equal(f.requests.length, 1);
+});
+
+test("APIの本人情報でアカウントを確認し、トークンはヘッダー以外に渡さない", async () => {
+  const f = fixture();
+  assert.deepEqual(await verify(f), { id: user.permissionId, displayName: user.displayName, emailAddress: user.emailAddress });
+  const { url, init } = f.requests[0];
+  assert.equal(url.origin, "https://www.googleapis.com");
+  assert.equal(url.pathname, "/drive/v3/about");
+  assert.equal(url.searchParams.get("fields"), "user(permissionId,displayName,emailAddress,me)");
+  assert.equal((init.headers as Record<string, string>).Authorization, "Bearer token_A");
+  assert.equal(init.credentials, "omit");
+  assert.equal(init.redirect, "error");
+  assert.equal(init.cache, "no-store");
+  assert.ok(!url.toString().includes("token_A"));
+  assert.equal(init.body, undefined);
+});
+
+test("本人でない・壊れたアカウント応答は採用せず、後続の書き込みを拒否する", async () => {
+  for (const value of [null, {}, { user: { ...user, me: false } }, { user: { ...user, permissionId: "" } },
+    { user: { ...user, displayName: "unsafe\nname" } }]) {
+    const f = fixture();
+    f.replies.push(json(value));
+    await assert.rejects(f.client.getAccount(), /応答/);
+    await assert.rejects(f.client.createRoot(user.permissionId), /接続確認/);
+    assert.equal(f.requests.length, 1);
+  }
+});
+
+test("検索は専用の目印・所有者・ルート・フォルダ種別に限定し、見つからなくても作成しない", async () => {
+  const f = fixture(); await verify(f);
+  f.replies.push(json({ files: [] }));
+  assert.equal(await f.client.findRoot(user.permissionId), null);
+  const { url, init } = f.requests[1];
+  const query = url.searchParams.get("q")!;
+  for (const term of ["trashed = false", "'root' in parents", "'me' in owners", "overlayApp", "overlayRole", "application/vnd.google-apps.folder"]) {
+    assert.ok(query.includes(term));
+  }
+  assert.equal(url.searchParams.get("spaces"), "drive");
+  assert.equal(url.searchParams.get("corpora"), "user");
+  assert.equal(init.method, "GET");
+  assert.equal(f.requests.length, 2);
+});
+
+test("ユーザーが改名した専用フォルダを再利用し、余分なフォルダを作らない", async () => {
+  const f = fixture(); await verify(f);
+  f.replies.push(json({ files: [{ ...folder, name: "大学の資料" }] }));
+  assert.deepEqual(await f.client.createRoot(user.permissionId), { id: folder.id, name: "大学の資料" });
+  assert.ok(f.requests.every((request) => request.init.method === "GET"));
+});
+
+test("明示的な作成でのみメタデータを送信し、ローカルPDF・共有権限を送らない", async () => {
+  const f = fixture(); await verify(f);
+  f.replies.push(json({ files: [] }), json(folder), json({ files: [folder] }));
+  assert.deepEqual(await f.client.createRoot(user.permissionId), { id: folder.id, name: folder.name });
+  assert.equal(f.requests.length, 4);
+  const { url, init } = f.requests[2];
+  assert.equal(url.pathname, "/drive/v3/files");
+  assert.equal(init.method, "POST");
+  assert.deepEqual(JSON.parse(String(init.body)), { name: "Overlay", mimeType: folder.mimeType, parents: ["root"], appProperties: folder.appProperties });
+  assert.equal((init.headers as Record<string, string>)["Content-Type"], "application/json");
+});
+
+test("重複・検索未完了・一般の同名フォルダ・未知の形式では自動採用も作成もしない", async () => {
+  const values = [{ files: [folder, { ...folder, id: "folder_B" }] }, { files: [folder], nextPageToken: "next" },
+    { files: [], incompleteSearch: true }, { files: [{ ...folder, appProperties: {} }] },
+    { files: [{ ...folder, ownedByMe: false }] }, { files: [{ ...folder, trashed: true }] },
+    { files: [{ ...folder, appProperties: { ...folder.appProperties, overlaySchema: "99" } }] },
+    { files: [{ ...folder, id: "https://example.com/folder" }] }, {}];
+  for (const value of values) {
+    const f = fixture(); await verify(f); f.replies.push(json(value));
+    await assert.rejects(f.client.createRoot(user.permissionId));
+    assert.ok(f.requests.every((request) => request.init.method === "GET"));
+  }
+});
+
+test("作成が重なった場合は重複を報告し、勝手な削除や統合をしない", async () => {
+  const f = fixture(); await verify(f);
+  f.replies.push(json({ files: [] }), json(folder), json({ files: [folder, { ...folder, id: "folder_B" }] }));
+  await assert.rejects(f.client.createRoot(user.permissionId), /複数/);
+  assert.equal(f.requests.filter((request) => request.init.method === "POST").length, 1);
+  assert.ok(f.requests.every((request) => ["GET", "POST"].includes(String(request.init.method))));
+});
+
+test("アカウントの再認可後は確認をやり直すまでフォルダへ触れない", async () => {
+  const f = fixture(); await verify(f); f.changeToken("token_B");
+  await assert.rejects(f.client.createRoot(user.permissionId), /接続確認/);
+  assert.equal(f.requests.length, 1);
+  f.replies.push(json({ user: { ...user, permissionId: "account_B" } }));
+  await f.client.getAccount();
+  await assert.rejects(f.client.createRoot(user.permissionId), /接続確認/);
+});
+
+test("応答待ちにアカウントが変わっても、古い結果や401で新しいトークンを失効させない", async () => {
+  for (const status of [200, 401]) {
+    const f = fixture(); await verify(f);
+    f.replies.push(async () => { f.changeToken("token_B"); return Response.json({ files: [folder] }, { status }); });
+    await assert.rejects(f.client.findRoot(user.permissionId), /変更/);
+    assert.deepEqual(f.invalidated, []);
+    assert.equal(f.requests.length, 2);
+  }
+});
+
+test("JSONの読み取り中に認証が失効した場合もアカウントを採用しない", async () => {
+  const f = fixture();
+  f.replies.push(async () => ({ ok: true, status: 200, json: async () => { f.changeToken(null); return { user }; } }) as Response);
+  await assert.rejects(f.client.getAccount(), /再接続/);
+  f.changeToken("token_A");
+  await assert.rejects(f.client.createRoot(user.permissionId), /接続確認/);
+});
+
+test("401は再接続へ、403は設定確認へ案内し、Googleのエラー本文を公開しない", async () => {
+  for (const status of [401, 403, 429, 500]) {
+    const f = fixture();
+    f.replies.push(json({ error: { message: "private-token-and-details" } }, status));
+    await assert.rejects(f.client.getAccount(), (error: Error) => {
+      assert.ok(!error.message.includes("private-token-and-details")); assert.equal(error.cause, undefined);
+      assert.match(error.message, status === 401 ? /再接続/ : status === 403 ? /アクセス権/ : /再試行/); return true;
+    });
+    assert.deepEqual(f.invalidated, status === 401 ? ["token_A"] : []);
+    assert.equal(f.requests.length, 1);
+  }
+});
+
+test("作成時の通信断は結果不明を案内し、自動でPOSTを繰り返さない", async () => {
+  const f = fixture(); await verify(f);
+  f.replies.push(json({ files: [] }), async () => { throw new Error("private-token"); });
+  await assert.rejects(f.client.createRoot(user.permissionId), /再検索/);
+  assert.equal(f.requests.length, 3);
+});
+
+test("作成中の二重要求は拒否し、最初の処理を維持する", async () => {
+  const f = fixture(); await verify(f);
+  let release!: (response: Response) => void;
+  f.replies.push(() => new Promise((resolve) => { release = resolve; }), json(folder), json({ files: [folder] }));
+  const first = f.client.createRoot(user.permissionId);
+  await assert.rejects(f.client.createRoot(user.permissionId), /作成中/);
+  release(Response.json({ files: [] }));
+  await first;
+  assert.equal(f.requests.filter((request) => request.init.method === "POST").length, 1);
+});
+
+test("閉じる操作は通信を中断し、無視して返った古い結果も採用しない", async () => {
+  const f = fixture();
+  let release!: (response: Response) => void;
+  f.replies.push(() => new Promise((resolve) => { release = resolve; }));
+  const pending = f.client.getAccount();
+  const signal = f.requests[0].init.signal!;
+  f.client.dispose();
+  assert.equal(signal.aborted, true);
+  release(Response.json({ user }));
+  await assert.rejects(pending, /キャンセル/);
+  await assert.rejects(f.client.getAccount(), /キャンセル/);
+  assert.equal(f.requests.length, 1);
+});
+
+test("応答がない通信を30秒で中断し、再試行で新しい要求を送れる", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  f.replies.push(async (_url, init) => new Promise((_resolve, reject) => {
+    init.signal!.addEventListener("abort", () => reject(new Error("private-token")), { once: true });
+  }));
+  const pending = f.client.getAccount();
+  const rejected = assert.rejects(pending, /再試行/);
+  mock.timers.tick(30_000);
+  await rejected;
+  assert.deepEqual(await verify(f), { id: user.permissionId, displayName: user.displayName, emailAddress: user.emailAddress });
+});
