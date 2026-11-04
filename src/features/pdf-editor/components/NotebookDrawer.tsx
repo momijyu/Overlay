@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode, type ChangeEventHandler } from "react";
-import { GoogleDriveSetup } from "./GoogleDriveSetup";
+import { GoogleDriveSetup, type DriveSaveRequest } from "./GoogleDriveSetup";
+import type { NoteBackup } from "../noteBackupData";
 
 type NotebookDrawerProps = {
   open: boolean;
@@ -10,10 +11,15 @@ type NotebookDrawerProps = {
   onBackupFileChange?: ChangeEventHandler<HTMLInputElement>;
   pdfOpenDisabled: boolean;
   onClose: () => void;
+  captureDriveNote?: () => NoteBackup;
+  onImportDriveNote?: (backup: NoteBackup) => void;
+  driveSaveRequest?: DriveSaveRequest | null;
+  onDriveSaveRequestClose?: () => void;
   children: ReactNode;
 };
 
-export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, pdfOpenDisabled, onClose, children }: NotebookDrawerProps) {
+export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, pdfOpenDisabled, onClose, children,
+  captureDriveNote, onImportDriveNote, driveSaveRequest, onDriveSaveRequestClose }: NotebookDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
@@ -58,7 +64,8 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
               aria-label="読み込むOverlayバックアップ" disabled={pdfOpenDisabled} onChange={onBackupFileChange} />
           </div>}
           {children}
-          {open && <GoogleDriveSetup disabled={busy || pdfOpenDisabled} />}
+          {open && <GoogleDriveSetup disabled={busy || pdfOpenDisabled} captureNote={captureDriveNote}
+            saveRequest={driveSaveRequest} onSaveRequestClose={onDriveSaveRequestClose} onImportNote={onImportDriveNote} />}
         </div>
         <div className="modal-backdrop">
           <button type="button" aria-label="ノート一覧の外側を押して閉じる" tabIndex={-1}

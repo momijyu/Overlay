@@ -24,6 +24,8 @@ type SidebarProps = {
   onMutationChange: (busy: boolean) => void;
   onBackup?: (item: NoteDragItem) => void;
   onBackupItems?: (items: NoteDragItem[]) => void;
+  onSaveToDrive?: (noteId: string) => void;
+  onSaveItemsToDrive?: (notes: SavedNoteSummary[]) => void;
 };
 
 const emptyLibrary: NoteLibrary = { notes: [], folders: [], foldersEnabled: true };
@@ -74,6 +76,7 @@ export function NotebookSidebar(props: SidebarProps) {
   const canOrganize = !unavailable && result.library.foldersEnabled;
   const allItems = libraryItems(result.library);
   const checked = allItems.filter((item) => checkedItems.has(noteItemKey(item)));
+  const checkedNotes = result.library.notes.filter((note) => checkedItems.has(`note:${note.id}`));
 
   // listenerは毎描画で張り替えず、最新の一覧・展開状態だけを参照する。
   useEffect(() => {
@@ -463,6 +466,12 @@ export function NotebookSidebar(props: SidebarProps) {
                 }}>{selectedFolder ? "フォルダのバックアップ" : "ノートのバックアップ"}</button></li>}
               {selectedNote && <li><button type="button" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "edit-note", note: selectedNote })}>名前・フォルダ</button></li>}
+              {props.onSaveToDrive && selectedNote && <li><button type="button" disabled={unavailable}
+                onClick={() => {
+                  if (unavailable) return;
+                  if (menuRef.current) menuRef.current.open = false;
+                  props.onSaveToDrive?.(selectedNote.id);
+                }}>Google Driveに保存</button></li>}
               {selectedNote && <li><button type="button" className="text-error" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "delete-note", note: selectedNote })}>ノート削除</button></li>}
               {selectedFolder && <li><button type="button" disabled={!canOrganize}
@@ -498,6 +507,14 @@ export function NotebookSidebar(props: SidebarProps) {
               endDrag();
               props.onBackupItems?.(checked.map((item) => ({ ...item })));
             }}>ZIPで保存</button>}
+          {(props.onSaveToDrive || props.onSaveItemsToDrive) && <button type="button" className="btn btn-sm"
+            disabled={unavailable || !checkedNotes.length || (!props.onSaveItemsToDrive && checked.length !== 1)}
+            title="選択したノートをDriveに保存" onClick={() => {
+              if (unavailable || !checkedNotes.length) return;
+              endDrag();
+              if (props.onSaveItemsToDrive) props.onSaveItemsToDrive(checkedNotes.map((note) => ({ ...note })));
+              else if (checked.length === 1) props.onSaveToDrive?.(checkedNotes[0].id);
+            }}>Driveに保存</button>}
           <button type="button" className="btn btn-sm text-error" disabled={unavailable || !checked.length}
             onClick={() => {
               setMoveError(null); setMoveMessage(null);

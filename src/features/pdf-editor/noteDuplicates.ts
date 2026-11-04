@@ -1,0 +1,61 @@
+import { readRequest, withLocalTransaction } from "./localDatabase";
+import type { BackupNote } from "./noteBackupData";
+import { readStrokes } from "./strokeData";
+import { readTextNotes } from "./textData";
+
+type StoredNote = { id: string; revision?: number; strokesByPage: unknown; textsByPage?: unknown };
+
+function editingKey(note: { strokesByPage: unknown; textsByPage?: unknown }): string {
+  // 検証済みの一定のプロパティ順で比較する。空ページの有無は編集の差にしない。
+  const nonempty = (pages: Record<number, unknown[]>) => Object.fromEntries(Object.entries(pages).filter(([, items]) => items.length));
+  return JSON.stringify([nonempty(readStrokes(note.strokesByPage)), nonempty(readTextNotes(note.textsByPage))]);
+}
+
+async function samePdf(first: Blob, second: Blob): Promise<boolean> {
+  if (first.size !== second.size) return false;
+  // PDF全体や全ライブラリを同時にメモリへ展開しない。ハッシュ等の保存データも増やさない。
+  const chunkBytes = 1024 * 1024;
+  for (let offset = 0; offset < first.size; offset += chunkBytes) {
+    const a = new Uint8Array(await first.slice(offset, offset + chunkBytes).arrayBuffer());
+    const b = new Uint8Array(await second.slice(offset, offset + chunkBytes).arrayBuffer());
+    if (a.some((byte, index) => byte !== b[index])) return false;
+  }
+  return true;
+}
+
+// 時間のかかるBlob読み取りはDBトランザクションの外で行い、追加直前に再検証する。
+export async function prepareNoteDeduplication(note: BackupNote) {
+  const ids = await withLocalTransaction(["noteSummaries"], "readonly", async (tx) =>
+    readRequest<IDBValidKey[]>(tx.objectStore("noteSummaries").getAllKeys()));
+  const key = editingKey(note);
+  const checked = new Map<string, number>();
+  let duplicateId: string | null = null;
+  for (const id of ids) {
+    const candidate = await withLocalTransaction(["notes", "pdfs"], "readonly", async (tx) => {
+      const stored = await readRequest<StoredNote | undefined>(tx.objectStore("notes").get(id));
+      if (!stored) throw new Error("ノート一覧が変わりました。もう一度復元してください。");
+      checked.set(stored.id, stored.revision ?? 0);
+      if (editingKey(stored) !== key) return null;
+      return readRequest<{ blob: Blob } | undefined>(tx.objectStore("pdfs").get(id));
+    });
+    if (candidate?.blob instanceof Blob && await samePdf(note.pdf, candidate.blob)) {
+      duplicateId = String(id);
+      break;
+    }
+  }
+  return async (tx: IDBTransaction): Promise<boolean> => {
+    const changed = () => new Error("比較中にノートが変更されました。もう一度復元してください。");
+    if (!duplicateId) {
+      const currentIds = await readRequest<IDBValidKey[]>(tx.objectStore("noteSummaries").getAllKeys());
+      if (currentIds.length !== ids.length || currentIds.some((id, index) => id !== ids[index])) throw changed();
+    }
+    for (const [id, revision] of checked) {
+      if (duplicateId && id !== duplicateId) continue;
+      const current = await readRequest<StoredNote | undefined>(tx.objectStore("notes").get(id));
+      if (!current || (current.revision ?? 0) !== revision) throw changed();
+      // 元PDFの欠落したノートを「復元済み」として扱わない。
+      if (id === duplicateId && !await readRequest(tx.objectStore("pdfs").get(id))) throw changed();
+    }
+    return duplicateId !== null;
+  };
+}

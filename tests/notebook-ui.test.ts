@@ -41,6 +41,17 @@ test("バックアップ復元の確認は件数・上書きしない旨・キ�
   }
 });
 
+test("Drive復元の確認は同一PDF・編集のスキップと異なる内容のコピーを案内する", () => {
+  const html = renderToStaticMarkup(createElement(NotebookRestoreDialog, {
+    backup: { schemaVersion: 1, kind: "note", name: "講義", folders: [], notes: [] },
+    skipDuplicates: true, busy: false, error: null, onClose: () => {}, onRestore: () => {},
+  }));
+  assert.match(html, /同じPDF・書き込みのノートは追加しません/);
+  assert.match(html, /内容が違う場合はコピーを追加/);
+  assert.match(html, /既存のノートは上書きしません/);
+  assert.match(html, /キャンセル/);
+});
+
 test("編集画面はサーバー描画でIndexedDBを開かず、定期的なPDF保管だけを案内する", () => {
   const html = renderToStaticMarkup(createElement(PdfWorkspace));
   assert.match(html, /重要なノートは定期的に『PDFをダウンロード』して保管してください/);

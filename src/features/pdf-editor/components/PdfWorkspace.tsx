@@ -12,10 +12,11 @@ import { backupDownloadName, readNoteBackup, type NoteBackup } from "../noteBack
 import { NotebookRestoreDialog } from "./NotebookRestoreDialog";
 import type { NoteDragItem } from "../noteDrag";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
-import type { PenStroke, EditorTool, TextNote, TextNotesByPage } from "../types";
+import type { PenStroke, EditorTool, TextNote, TextNotesByPage, SavedNoteSummary } from "../types";
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookDrawer } from "./NotebookDrawer";
+import type { DriveSaveRequest } from "./GoogleDriveSetup";
 import { EraserSizeControl } from "./EraserSizeControl";
 import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
@@ -71,6 +72,8 @@ export function PdfWorkspace() {
   const [pendingBackup, setPendingBackup] = useState<NoteBackup | null>(null);
   const [backupError, setBackupError] = useState<string | null>(null);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [isDriveRestore, setIsDriveRestore] = useState(false);
+  const [driveSaveRequest, setDriveSaveRequest] = useState<DriveSaveRequest | null>(null);
   const mountedRef = useRef(false);
   const operationRef = useRef(false);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
@@ -338,6 +341,46 @@ export function PdfWorkspace() {
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
+  async function handleSaveToDrive(id: string) {
+    if (operationRef.current || pendingBackup) return;
+    operationRef.current = true;
+    setIsBackupWorking(true); setError(null);
+    try {
+      const currentId = autosaveRef.current?.getState().noteId;
+      const backup = id === currentId && file && document
+        ? readNoteBackup({ schemaVersion: 1, kind: "note", name: noteName, folders: [], notes: [{
+          id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
+          strokesByPage: historyRef.current.strokesByPage, textsByPage: historyRef.current.textsByPage,
+        }] }) : await captureNoteBackup({ kind: "note", id });
+      if (mountedRef.current) setDriveSaveRequest({ id: crypto.randomUUID(), backup });
+    } catch (error) {
+      if (mountedRef.current) setError(error instanceof Error ? error.message : "保存するノートを読み込めませんでした。");
+    } finally {
+      operationRef.current = false;
+      if (mountedRef.current) setIsBackupWorking(false);
+    }
+  }
+
+  function handleSaveItemsToDrive(notes: SavedNoteSummary[]) {
+    if (operationRef.current || pendingBackup || !notes.length) return;
+    setError(null);
+    try {
+      if (notes.length > 200 || new Set(notes.map((note) => note.id)).size !== notes.length) throw new Error("保存するノートは1〜200件で選択してください。");
+      const currentId = autosaveRef.current?.getState().noteId;
+      const sources = notes.map((selected) => {
+        // 編集中の1件だけ確定内容を保持。他のPDFは各送信時に取得して解放する。
+        const snapshot = selected.id === currentId && file && document ? readNoteBackup({
+          schemaVersion: 1, kind: "note", name: noteName, folders: [], notes: [{ id: "current", title: noteName,
+            fileName: file.name, folderId: null, pdf: file, strokesByPage: historyRef.current.strokesByPage, textsByPage: historyRef.current.textsByPage }],
+        }) : null;
+        const id = selected.id;
+        return { id, title: snapshot?.notes[0].title ?? selected.title,
+          load: async () => snapshot ?? await captureNoteBackup({ kind: "note", id }) };
+      });
+      setDriveSaveRequest({ id: crypto.randomUUID(), sources });
+    } catch (error) { setError(error instanceof Error ? error.message : "保存するノートを確認できませんでした。"); }
+  }
+
   async function handleBackupFileChange(event: ChangeEvent<HTMLInputElement>) {
     const selectedFile = event.target.files?.[0];
     event.target.value = "";
@@ -348,7 +391,7 @@ export function PdfWorkspace() {
     try {
       const { decodeNoteBackup } = await import("../noteBackupFile");
       const backup = await decodeNoteBackup(selectedFile);
-      if (mountedRef.current) setPendingBackup(backup);
+      if (mountedRef.current) { setIsDriveRestore(false); setPendingBackup(backup); }
     } catch (error) {
       if (mountedRef.current) setError(error instanceof Error ? error.message : "バックアップを読み込めませんでした。");
     } finally {
@@ -362,11 +405,15 @@ export function PdfWorkspace() {
     operationRef.current = true;
     setIsBackupWorking(true); setBackupError(null);
     try {
-      const restored = await restoreNoteBackup(pendingBackup);
+      if (isDriveRestore && autosaveRef.current && !await autosaveRef.current.flush()) {
+        throw new Error("編集中のノートを保存できませんでした。保存を再試行してから復元してください。");
+      }
+      const restored = await restoreNoteBackup(pendingBackup, isDriveRestore ? { skipDuplicates: true } : undefined);
       if (!mountedRef.current) return;
       setPendingBackup(null);
       setRefreshVersion((value) => value + 1);
-      setBackupMessage(`ノート${restored.notes}件・フォルダ${restored.folders}件を復元しました。`);
+      setBackupMessage(restored.skippedNotes ? "同じPDF・書き込みのノートがあるため、復元しませんでした。"
+        : `ノート${restored.notes}件・フォルダ${restored.folders}件を復元しました。`);
     } catch (error) {
       if (mountedRef.current) setBackupError(error instanceof Error ? error.message : "復元できませんでした。");
     } finally {
@@ -410,7 +457,17 @@ export function PdfWorkspace() {
         </>}
       </AppHeader>
       <NotebookDrawer open={sidebarVisible} busy={isOrganizing || isBackupWorking || !!pendingBackup}
-        onFileChange={handleFileChange} onBackupFileChange={handleBackupFileChange} pdfOpenDisabled={isBusy} onClose={() => setSidebarVisible(false)}>
+        driveSaveRequest={driveSaveRequest}
+        onDriveSaveRequestClose={() => setDriveSaveRequest(null)}
+        onFileChange={handleFileChange} onBackupFileChange={handleBackupFileChange} pdfOpenDisabled={isBusy}
+        onClose={() => { setDriveSaveRequest(null); setSidebarVisible(false); }}
+        captureDriveNote={file && document && !isBusy ? () => readNoteBackup({ schemaVersion: 1, kind: "note", name: noteName,
+          folders: [], notes: [{ id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
+            strokesByPage: historyRef.current.strokesByPage, textsByPage: historyRef.current.textsByPage }] }) : undefined}
+        onImportDriveNote={(backup) => {
+          if (operationRef.current || pendingBackup) throw new Error("別の処理が完了してから読み込んでください。");
+          setBackupError(null); setIsDriveRestore(true); setPendingBackup(backup);
+        }}>
           {error && <p role="alert" className="px-4 pt-3 text-error">{error}</p>}
           {isBackupWorking && <p role="status" className="px-4 pt-3 text-sm">バックアップ処理中…</p>}
           {backupMessage && <p role="status" className="px-4 pt-3 text-sm">{backupMessage}</p>}
@@ -429,12 +486,14 @@ export function PdfWorkspace() {
             onDeleteItems={handleDeleteItems}
             onBackup={(item) => { void handleBackup(item); }}
             onBackupItems={(items) => { void handleBackup(items); }}
+            onSaveToDrive={(id) => { void handleSaveToDrive(id); }}
+            onSaveItemsToDrive={handleSaveItemsToDrive}
             onMutationChange={(busy) => {
               operationRef.current = busy;
               setIsOrganizing(busy);
             }}
           />
-          {pendingBackup && <NotebookRestoreDialog backup={pendingBackup} busy={isBackupWorking} error={backupError}
+          {pendingBackup && <NotebookRestoreDialog backup={pendingBackup} skipDuplicates={isDriveRestore} busy={isBackupWorking} error={backupError}
             onRestore={() => void handleRestoreBackup()}
             onClose={() => { if (!operationRef.current) { setPendingBackup(null); setBackupError(null); } }} />}
       </NotebookDrawer>

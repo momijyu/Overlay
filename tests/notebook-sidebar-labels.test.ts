@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { beforeEach, mock } from "node:test";
 import * as React from "react";
 import { buildNoteTree } from "@/features/pdf-editor/noteTree";
-import type { NoteLibrary } from "@/features/pdf-editor/types";
+import type { NoteLibrary, SavedNoteSummary } from "@/features/pdf-editor/types";
 import { IDBFactory } from "fake-indexeddb";
 import { readRequest, withLocalTransaction } from "@/features/pdf-editor/localDatabase";
 import { deleteSavedItems } from "@/features/pdf-editor/localNotes";
@@ -155,6 +155,56 @@ function render(overrides: Partial<React.ComponentProps<typeof NotebookSidebar>>
   return NotebookSidebar({ refreshVersion: 0, currentNoteId: "note", disabled: false,
     onOpen: () => {}, onRenamed: () => {}, onDelete: async () => {}, onDeleteItems: deleteSavedItems, onMutationChange: () => {}, ...overrides });
 }
+
+test("操作のDrive保存は選択ノートを渡し、フォルダ・未選択・処理中は送らない", () => {
+  const calls: string[] = [];
+  const overrides = { onSaveToDrive: (id: string) => calls.push(id) };
+  clickText(render(overrides), "Google Driveに保存");
+  const busy = find(render({ ...overrides, disabled: true }), (entry) => entry.type === "button" && entry.props.children === "Google Driveに保存")!;
+  assert.equal(busy.props.disabled, true);
+  (busy.props.onClick as () => void)();
+  const tree = find(render(overrides), (entry) => entry.type === NotebookTree)!;
+  (tree.props.onSelect as (item: unknown) => void)({ kind: "folder", id: "subject" });
+  assert.equal(find(render(overrides), (entry) => entry.type === "button" && entry.props.children === "Google Driveに保存"), undefined);
+  assert.deepEqual(calls, ["note"]);
+});
+
+test("チェックでノート1件だけ選ぶとDrive保存でき、複数やフォルダだけでは実行しない", () => {
+  const calls: string[] = [];
+  const overrides = { onSaveToDrive: (id: string) => calls.push(id) };
+  clickText(render(overrides), "選択");
+  const attemptDisabled = () => {
+    const button = find(render(overrides), (entry) => entry.type === "button" && entry.props.children === "Driveに保存")!;
+    assert.equal(button.props.disabled, true);
+    (button.props.onClick as () => void)();
+  };
+  const check = (item: unknown) => (find(render(overrides), (entry) => entry.type === NotebookTree)!.props.onCheck as (item: unknown) => void)(item);
+  attemptDisabled();
+  check({ kind: "folder", id: "subject" }); attemptDisabled();
+  check({ kind: "note", id: "note" }); attemptDisabled();
+  check({ kind: "folder", id: "subject" });
+  clickText(render(overrides), "Driveに保存");
+  assert.deepEqual(calls, ["note"]);
+});
+
+test("複数チェックのDrive保存は子ノートを重複なく渡し、空フォルダだけでは実行しない", () => {
+  library.notes[0].folderId = "subject";
+  library.notes.push({ ...library.notes[0], id: "second", title: "別の講義" });
+  library.folders.push({ id: "empty", name: "空", parentId: null });
+  const calls: SavedNoteSummary[][] = [];
+  const overrides = { onSaveItemsToDrive: (notes: SavedNoteSummary[]) => calls.push(notes) };
+  clickText(render(overrides), "選択");
+  const check = (item: unknown) => (find(render(overrides), (entry) => entry.type === NotebookTree)!.props.onCheck as (item: unknown) => void)(item);
+  check({ kind: "folder", id: "empty" });
+  const empty = find(render(overrides), (entry) => entry.type === "button" && entry.props.children === "Driveに保存")!;
+  assert.equal(empty.props.disabled, true); (empty.props.onClick as () => void)();
+  check({ kind: "folder", id: "subject" });
+  clickText(render(overrides), "Driveに保存");
+  assert.deepEqual(calls.map((notes) => notes.map((note) => note.id)), [["note", "second"]]);
+  const disabled = find(render({ ...overrides, disabled: true }), (entry) => entry.type === "button" && entry.props.children === "Driveに保存")!;
+  (disabled.props.onClick as () => void)(); assert.equal(calls.length, 1);
+  assert.notEqual(calls[0][0], library.notes[0]);
+});
 
 test("バックアップ操作は選択した単体ノート・フォルダを渡し、未選択や処理中に出力しない", () => {
   const calls: unknown[] = [];

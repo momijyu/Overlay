@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import type { NoteBackup } from "../noteBackupData";
 
-export function NotebookRestoreDialog({ backup, busy, error, onClose, onRestore }: {
-  backup: NoteBackup; busy: boolean; error: string | null;
+export function NotebookRestoreDialog({ backup, skipDuplicates = false, busy, error, onClose, onRestore }: {
+  backup: NoteBackup; skipDuplicates?: boolean; busy: boolean; error: string | null;
   onClose: () => void; onRestore: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -17,7 +17,9 @@ export function NotebookRestoreDialog({ backup, busy, error, onClose, onRestore 
       <h2 id="backup-restore-heading" className="text-lg font-semibold">バックアップを復元</h2>
       <p className="mt-4 break-words">{backup.name}</p>
       <p className="mt-2 text-sm">ノート{backup.notes.length}件・フォルダ{backup.folders.length}件</p>
-      <p className="mt-3 text-sm">一覧の一番上へコピーを追加します。既存のノートは上書きしません。</p>
+      <p className="mt-3 text-sm">{skipDuplicates
+        ? "同じPDF・書き込みのノートは追加しません。内容が違う場合はコピーを追加し、既存のノートは上書きしません。"
+        : "一覧の一番上へコピーを追加します。既存のノートは上書きしません。"}</p>
       {error && <p role="alert" className="mt-3 text-error">{error}</p>}
       {busy && <p role="status" className="mt-3 text-sm">復元中…</p>}
       <div className="modal-action">

@@ -29,8 +29,12 @@ let openedTexts: TextNotesByPage | undefined;
 const openedStrokes = { 2: [{ width: 5, points: [{ x: 0.2, y: 0.3 }] }] };
 const backups: NoteBackup[] = [];
 const capturedSelections: NoteDragItem[][] = [];
+const capturedNotes: unknown[] = [];
+let captureFails = false;
 let restoreCalls = 0;
 let restoreFails = false;
+let restoreSkipped = false;
+const restoreOptions: ({ skipDuplicates?: boolean } | undefined)[] = [];
 let decodeFails = false;
 const importedBackup: NoteBackup = { schemaVersion: 1, kind: "note", name: "復元用", folders: [],
   notes: [{ id: "backup", title: "復元用", fileName: file.name, folderId: null, pdf: file, strokesByPage: {}, textsByPage: {} }] };
@@ -52,12 +56,17 @@ mock.module("react", { exports: {
 } });
 mock.module("@/features/pdf-editor/localNotes", { exports: {
   ...localNotes,
-  restoreNoteBackup: async () => {
+  restoreNoteBackup: async (_backup: NoteBackup, options?: { skipDuplicates?: boolean }) => {
     restoreCalls++;
+    restoreOptions.push(options);
     if (restoreFails) throw new Error("復元容量不足");
-    return { notes: 1, folders: 0 };
+    return { notes: restoreSkipped ? 0 : 1, folders: 0, skippedNotes: restoreSkipped ? 1 : 0 };
   },
-  captureNoteBackup: async () => importedBackup,
+  captureNoteBackup: async (item: unknown) => {
+    capturedNotes.push(item);
+    if (captureFails) throw new Error("対象ノートがありません。");
+    return importedBackup;
+  },
   captureSelectedNoteBackup: async (items: NoteDragItem[]) => {
     capturedSelections.push(items);
     return { ...importedBackup, schemaVersion: 2, kind: "selection", name: "Overlay-選択項目" };
@@ -107,7 +116,8 @@ const { AppHeader } = await import("@/components/layout/AppHeader");
 const { NotebookRestoreDialog } = await import("@/features/pdf-editor/components/NotebookRestoreDialog");
 
 beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; deletedItems.length = 0; openedTexts = undefined; });
-beforeEach(() => { backups.length = 0; capturedSelections.length = 0; restoreCalls = 0; restoreFails = false; decodeFails = false; });
+beforeEach(() => { backups.length = 0; capturedSelections.length = 0; restoreCalls = 0; restoreFails = false; decodeFails = false;
+  restoreSkipped = false; restoreOptions.length = 0; capturedNotes.length = 0; captureFails = false; });
 
 function render() {
   stateCursor = 0;
@@ -141,6 +151,139 @@ function setup() {
 }
 
 const red: PenStroke = { width: 2.5, color: "#ff0000", points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
+
+test("一覧で選んだ未表示ノートをDrive保存の確認へ渡し、編集画面とDBを変更しない", async () => {
+  setup(); await openOther(); props(PdfPage).onStrokeComplete(red);
+  props(NotebookSidebar).onSaveToDrive!("closed-note");
+  await new Promise(setImmediate);
+  assert.deepEqual(capturedNotes, [{ kind: "note", id: "closed-note" }]);
+  const request = props(NotebookDrawer).driveSaveRequest!;
+  assert.ok("backup" in request);
+  assert.equal(request.backup, importedBackup);
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+  assert.equal(props(HistoryControls).canUndo, true);
+  props(NotebookDrawer).onDriveSaveRequestClose!();
+  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+});
+
+test("選択した編集中ノートは最新の確定内容を使い、保存失敗中もDBの古い内容を送らない", async () => {
+  setup(); await openOther(); persistFails = true;
+  props(NotebookSidebar).onRenamed("other", "選択したノート");
+  props(PdfPage).onStrokeComplete(red);
+  props(NotebookSidebar).onSaveToDrive!("other");
+  await new Promise(setImmediate);
+  assert.deepEqual(capturedNotes, []);
+  const request = props(NotebookDrawer).driveSaveRequest!;
+  assert.ok("backup" in request);
+  const snapshot = request.backup;
+  assert.equal(snapshot.notes[0].title, "選択したノート");
+  assert.deepEqual(snapshot.notes[0].strokesByPage[1], [red]);
+  props(PdfPage).onStrokeComplete({ ...red, width: 3 });
+  assert.deepEqual(snapshot.notes[0].strokesByPage[1], [red]);
+});
+
+test("選択ノートの取得失敗ではDrive保存を開かず、編集中の内容を維持する", async () => {
+  setup(); await openOther(); props(PdfPage).onStrokeComplete(red); captureFails = true;
+  props(NotebookSidebar).onSaveToDrive!("missing");
+  await new Promise(setImmediate);
+  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+  assert.ok(find(render(), (element) => (element.props as { role?: string }).role === "alert"));
+});
+
+test("一括Drive保存は名前と取得口だけを渡し、編集中の1件以外の本文を先読みしない", async () => {
+  setup(); await openOther(); props(PdfPage).onStrokeComplete(red);
+  props(NotebookSidebar).onRenamed("other", "編集中");
+  const selected: SavedNoteSummary[] = [
+    { id: "other", title: "一覧の古い名前", fileName: file.name, folderId: null, updatedAt: "2026-11-04" },
+    { id: "closed", title: "復元用", fileName: file.name, folderId: null, updatedAt: "2026-11-04" },
+  ];
+  props(NotebookSidebar).onSaveItemsToDrive!(selected);
+  const request = props(NotebookDrawer).driveSaveRequest!;
+  assert.ok("sources" in request);
+  assert.deepEqual(request.sources.map((source) => source.title), ["編集中", "復元用"]);
+  assert.deepEqual(capturedNotes, []);
+  selected[1].id = "changed-after-click"; selected[1].title = "変更後";
+  const current = await request.sources[0].load();
+  assert.deepEqual(current.notes[0].strokesByPage[1], [red]);
+  assert.deepEqual(capturedNotes, []);
+  assert.equal(await request.sources[1].load(), importedBackup);
+  assert.deepEqual(capturedNotes, [{ kind: "note", id: "closed" }]);
+  assert.equal(request.sources[1].title, "復元用");
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+  assert.equal(props(HistoryControls).canUndo, true);
+  props(NotebookDrawer).onClose(); assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+});
+
+test("一括Drive保存は空選択・整理中・重複IDを受け付けず、既存編集を変えない", () => {
+  setup();
+  props(NotebookSidebar).onSaveItemsToDrive!([]);
+  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  const selected: SavedNoteSummary = { id: "closed", title: "復元用", fileName: file.name, folderId: null, updatedAt: "2026-11-04" };
+  props(NotebookSidebar).onSaveItemsToDrive!([selected, selected]);
+  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  props(NotebookSidebar).onMutationChange(true);
+  props(NotebookSidebar).onSaveItemsToDrive!([selected]);
+  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  assert.deepEqual(capturedNotes, []);
+});
+
+test("Drive新規保存の取得口は最新の確定内容を渡し、ローカル保存・履歴を変更しない", async () => {
+  setup(); await openOther();
+  props(NotebookSidebar).onRenamed("other", "Drive保存用");
+  const capture = props(NotebookDrawer).captureDriveNote!;
+  props(PdfPage).onStrokeComplete(red);
+  const snapshot = capture(); // 取得口を渡した後の描画も、履歴refから読み取る。
+  assert.equal(snapshot.notes[0].title, "Drive保存用");
+  assert.deepEqual(snapshot.notes[0].strokesByPage[1], [red]);
+  assert.equal(snapshot.notes[0].pdf, file);
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+  assert.equal(props(HistoryControls).canUndo, true);
+  props(PdfPage).onStrokeComplete({ ...red, width: 3 });
+  assert.deepEqual(snapshot.notes[0].strokesByPage[1], [red]); // 確認後の追記は保存スナップショットを変えない。
+});
+
+test("Driveからのコピーは既存の復元確認へ渡し、承認前やキャンセル時は元ノートを変えない", async () => {
+  setup(); await openOther(); props(PdfPage).onStrokeComplete(red);
+  props(NotebookDrawer).onImportDriveNote!(importedBackup);
+  assert.equal(restoreCalls, 0);
+  assert.deepEqual(props(NotebookRestoreDialog).backup, importedBackup);
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+  props(NotebookRestoreDialog).onClose();
+  assert.equal(find(render(), (element) => element.type === NotebookRestoreDialog), undefined);
+  assert.equal(restoreCalls, 0);
+});
+
+test("Drive復元は自動保存を待って重複をスキップし、通常バックアップへモードを持ち越さない", async () => {
+  setup(); await openOther(); props(PdfPage).onStrokeComplete(red);
+  props(NotebookDrawer).onImportDriveNote!(importedBackup);
+  assert.equal(props(NotebookRestoreDialog).skipDuplicates, true);
+  restoreSkipped = true;
+  props(NotebookRestoreDialog).onRestore();
+  await new Promise(setImmediate);
+  assert.deepEqual(restoreOptions, [{ skipDuplicates: true }]);
+  assert.ok(find(render(), (element) => (element.props as { children?: unknown }).children === "同じPDF・書き込みのノートがあるため、復元しませんでした。"));
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+  assert.equal(props(HistoryControls).canUndo, true);
+  await importForConfirmation();
+  assert.equal(props(NotebookRestoreDialog).skipDuplicates, false);
+  props(NotebookRestoreDialog).onRestore();
+  await new Promise(setImmediate);
+  assert.equal(restoreOptions.at(-1), undefined);
+});
+
+test("Drive復元前の自動保存失敗では比較・復元を開始せず、確認と未保存内容を残す", async () => {
+  setup(); await openOther(); persistFails = true;
+  props(PdfPage).onStrokeComplete(red);
+  props(NotebookDrawer).onImportDriveNote!(importedBackup);
+  props(NotebookRestoreDialog).onRestore();
+  await new Promise(setImmediate);
+  assert.equal(restoreCalls, 0);
+  assert.match(props(NotebookRestoreDialog).error!, /編集中のノートを保存できません/);
+  assert.deepEqual(props(PdfPage).strokes, [red]);
+});
 
 test("ノートのバックアップは保存失敗中も最新の確定済み内容を渡し、元の履歴を変えない", async () => {
   setup();

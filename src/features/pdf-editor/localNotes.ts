@@ -79,11 +79,15 @@ async function captureBackup(items: NoteDragItem[], selection: boolean): Promise
 }
 
 // 解析済みバックアップを新しいIDで追加する。途中の失敗では全件ロールバックする。
-export async function restoreNoteBackup(input: NoteBackup): Promise<{ notes: number; folders: number }> {
+export async function restoreNoteBackup(input: NoteBackup, options: { skipDuplicates?: boolean } = {}): Promise<{ notes: number; folders: number; skippedNotes?: number }> {
   const backup = readNoteBackup(input);
+  if (options.skipDuplicates && backup.kind !== "note") throw new Error("重複確認は単独ノートの復元に対応しています。");
+  const checkDuplicateNote = options.skipDuplicates
+    ? await (await import("./noteDuplicates")).prepareNoteDeduplication(backup.notes[0]) : null;
   const folderIds = new Map(backup.folders.map((folder) => [folder.id, crypto.randomUUID()]));
   const notes = backup.notes.map((note) => ({ ...note, id: crypto.randomUUID() }));
-  await withLocalTransaction(["notes", "pdfs", "folders", "noteSummaries"], "readwrite", async (transaction) => {
+  const skipped = await withLocalTransaction(["notes", "pdfs", "folders", "noteSummaries"], "readwrite", async (transaction) => {
+    if (checkDuplicateNote && await checkDuplicateNote(transaction)) return true;
     const library = await readLibrary(transaction);
     for (const folder of backup.folders) {
       let name = folder.name;
@@ -107,8 +111,10 @@ export async function restoreNoteBackup(input: NoteBackup): Promise<{ notes: num
         folderId: note.folderId === null ? null : folderIds.get(note.folderId)!, updatedAt, revision: 1,
         strokesByPage: note.strokesByPage, textsByPage: note.textsByPage }, "add");
     }
+    return false;
   });
-  return { notes: notes.length, folders: backup.folders.length };
+  return { notes: skipped ? 0 : notes.length, folders: backup.folders.length,
+    ...(checkDuplicateNote ? { skippedNotes: skipped ? 1 : 0 } : {}) };
 }
 
 function readRevision(note: LocalNote): number {
