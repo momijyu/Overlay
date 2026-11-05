@@ -104,7 +104,7 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, onImportNote, sav
     }}>
     <div className="modal-box max-w-md rounded-box space-y-4">
       <h2 id="google-drive-setup-title" className="text-lg font-bold">Google Driveの接続確認</h2>
-      <p className="text-sm">Driveへは手動で保存します。自動保存先はこのブラウザのままです。</p>
+      <p className="text-sm">ここでは手動保存・読み込みを行います。自動保存はノート一覧でノートごとに有効にしてください。</p>
       {state.account && <dl className="space-y-1 text-sm break-words">
         <dt className="font-semibold">確認したアカウント</dt>
         <dd>{state.account.emailAddress}</dd>

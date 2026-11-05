@@ -93,8 +93,8 @@ test("開いた時だけ準備し、保存先は変わらないことを表示�
   assert.equal(prepared, 1);
   assert.equal(connected + accounts + creates, 0);
   const { html } = render();
-  assert.match(html, /自動保存先はこのブラウザのまま/);
-  assert.match(html, /Driveへは手動で保存/);
+  assert.match(html, /自動保存はノート一覧でノートごとに有効/);
+  assert.match(html, /手動保存・読み込み/);
   assert.match(html, /Googleで接続確認/);
   assert.ok(!html.includes("専用フォルダを作成</button>"));
   cleanup();

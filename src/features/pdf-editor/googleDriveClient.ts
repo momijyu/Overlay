@@ -1,6 +1,7 @@
 import type { NoteBackup } from "./noteBackupData";
 import type { DriveNoteAccess } from "./googleDriveNotes";
 import type { DriveOverwriteTarget } from "./googleDriveNoteData";
+import { DriveHttpError } from "./driveHttpError";
 
 // 通常の自動保存とは分離し、確認後の手動保存・コピー読み込みを扱う。
 type DriveAuthorization = { getAccessToken: () => string; invalidateAccessToken: (token: string) => void };
@@ -121,7 +122,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
         verified = null;
         throw new Error("Googleへ再接続してから操作してください。");
       }
-      if (!response.ok) throw new Error(response.status === 403
+      if (!response.ok) throw new DriveHttpError(response.status, response.status === 403
         ? "Google Driveにアクセスできません。Drive APIの設定とアクセス権を確認してください。"
         : response.status === 404 ? "Driveの対象ファイルが見つからないか、アクセスできません。一覧を更新してください。"
         : "Google Driveの操作に失敗しました。通信状態を確認して再試行してください。");
@@ -136,12 +137,13 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
       // サーバーの本文やfetchの例外は認証情報を含む可能性があるため、そのまま転送しない。
       assertToken(token);
       assertOperation(operationVersion);
+      if (error instanceof DriveHttpError) throw error;
       if (error instanceof Error && [INVALID_RESPONSE,
         "Googleへ再接続してから操作してください。",
         "Google Driveにアクセスできません。Drive APIの設定とアクセス権を確認してください。",
         "Driveの対象ファイルが見つからないか、アクセスできません。一覧を更新してください。",
         "Google Driveの操作に失敗しました。通信状態を確認して再試行してください。"].includes(error.message)) throw new Error(error.message);
-      throw new Error(options.rawBody ? "Driveへの送信結果を確認できませんでした。一覧を更新して確認してください。"
+      throw new DriveHttpError(0, options.rawBody ? "Driveへの送信結果を確認できませんでした。一覧を更新して確認してください。"
         : body === undefined
         ? "Google Driveへ接続できませんでした。通信状態を確認して再試行してください。"
         : "フォルダ作成の結果を確認できませんでした。接続確認からフォルダを再検索してください。");
@@ -218,20 +220,20 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     async function upload(metadata: Record<string, unknown>, data: Blob, fileId?: string) {
         const { DRIVE_NOTE_FIELDS } = await import("./googleDriveNoteData");
         const path = fileId ? `files/${fileId}` : "files";
-        if (fileId && metadata.mimeType === "application/json" && data.size <= 1024 * 1024) {
+        if (fileId && !metadata.name && metadata.mimeType === "application/json" && data.size <= 1024 * 1024) {
           return noteRequest(path, { uploadType: "media", fields: DRIVE_NOTE_FIELDS }, token, undefined, {
             upload: true, method: "PATCH", rawBody: data, headers: { "Content-Type": "application/json" },
           });
         }
         // 小さい編集JSONだけはメタデータと本文を1回で送る。元PDF・大きいJSONは従来の方式を維持する。
-        // 自動再送はしないため、応答を失った場合は従来どおり一覧で確認する。
-        if (!fileId && metadata.mimeType === "application/json" && data.size <= 1024 * 1024) {
+        // 手動保存の応答不明は一覧で確認する。自動保存だけは予約IDで結果を再検証する。
+        if (metadata.mimeType === "application/json" && data.size <= 1024 * 1024) {
           const boundary = `overlay_${crypto.randomUUID()}`;
           const body = new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
             JSON.stringify(metadata), `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`,
             data, `\r\n--${boundary}--\r\n`]);
-          return noteRequest("files", { uploadType: "multipart", fields: DRIVE_NOTE_FIELDS }, token, undefined, {
-            upload: true, method: "POST", rawBody: body, headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+          return noteRequest(path, { uploadType: "multipart", fields: DRIVE_NOTE_FIELDS }, token, undefined, {
+            upload: true, method: fileId ? "PATCH" : "POST", rawBody: body, headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
           });
         }
         const location = await noteRequest(path, { uploadType: "resumable", fields: DRIVE_NOTE_FIELDS }, token, metadata, {
@@ -254,7 +256,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
       download: async (fileId, maximumBytes) => await noteRequest(`files/${fileId}`, { alt: "media" }, token, undefined,
         { read: (response) => boundedBlob(response, maximumBytes) }) as Blob,
       upload,
-      replace: (fileId, data) => upload({ mimeType: "application/json" }, data, fileId),
+      replace: (fileId, data, metadata) => upload({ ...metadata, mimeType: "application/json" }, data, fileId),
     };
   }
 
@@ -325,5 +327,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     cancelPending();
   }
 
-  return { getAccount, findRoot, createRoot, saveNewNote, findSaveTarget, findSaveTargetByTitle, saveConfirmedNote, listNotes, loadNote, cancelPending, dispose };
+  return { getAccount, findRoot, createRoot, saveNewNote, findSaveTarget, findSaveTargetByTitle, saveConfirmedNote, listNotes, loadNote,
+    // 自動保存は別インスタンスで利用し、手動モーダルを閉じる中断と分離する。
+    autosaveAccess: noteAccess, cancelPending, dispose };
 }

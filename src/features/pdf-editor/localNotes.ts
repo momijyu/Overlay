@@ -1,3 +1,4 @@
+import { dirtyDriveBinding } from "./driveOutbox";
 import { readPageHeadings } from "./pageHeadings";
 import { readNotePages, checkPageBindings } from "./notePages";
 import { readRequest, withLocalTransaction } from "./localDatabase";
@@ -17,12 +18,14 @@ type LocalPdf = { id: string; blob: Blob };
 async function writeLocalNote(transaction: IDBTransaction, note: LocalNote, method: "add" | "put" = "put") {
   await readRequest(transaction.objectStore("notes")[method](note));
   await readRequest(transaction.objectStore("noteSummaries")[method](toLocalNoteSummary(note)));
+  await dirtyDriveBinding(transaction, note.id);
 }
 
 async function deleteLocalNote(transaction: IDBTransaction, id: string) {
   await readRequest(transaction.objectStore("notes").delete(id));
   await readRequest(transaction.objectStore("pdfs").delete(id));
   await readRequest(transaction.objectStore("noteSummaries").delete(id));
+  await readRequest(transaction.objectStore("driveBindings").delete(id));
 }
 
 // 同じreadonlyトランザクションで階層・ノート・元PDFを取得する。
@@ -89,7 +92,7 @@ export async function restoreNoteBackup(input: NoteBackup, options: { skipDuplic
     ? await (await import("./noteDuplicates")).prepareNoteDeduplication(backup.notes[0]) : null;
   const folderIds = new Map(backup.folders.map((folder) => [folder.id, crypto.randomUUID()]));
   const notes = backup.notes.map((note) => ({ ...note, id: crypto.randomUUID() }));
-  const skipped = await withLocalTransaction(["notes", "pdfs", "folders", "noteSummaries"], "readwrite", async (transaction) => {
+  const skipped = await withLocalTransaction(["notes", "pdfs", "folders", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
     if (checkDuplicateNote && await checkDuplicateNote(transaction)) return true;
     const library = await readLibrary(transaction);
     for (const folder of backup.folders) {
@@ -172,7 +175,7 @@ export async function saveLocalNote(input: {
   const headingsByPage = input.headingsByPage === undefined ? undefined : readPageHeadings(input.headingsByPage);
   checkPageBindings(pages, [strokesByPage, textsByPage ?? {}, headingsByPage ?? {}]);
   const id = input.noteId ?? crypto.randomUUID();
-  return withLocalTransaction(["notes", "pdfs", "noteSummaries"], "readwrite", async (transaction) => {
+  return withLocalTransaction(["notes", "pdfs", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
     const notes = transaction.objectStore("notes");
     const pdfs = transaction.objectStore("pdfs");
     const updatedAt = new Date().toISOString();
@@ -221,7 +224,7 @@ export async function loadLocalNote(noteId: string): Promise<LoadedNote> {
 }
 
 export async function deleteSavedNote(noteId: string): Promise<void> {
-  await withLocalTransaction(["notes", "pdfs", "noteSummaries"], "readwrite", async (transaction) => {
+  await withLocalTransaction(["notes", "pdfs", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
     const notes = transaction.objectStore("notes");
     if (!await readRequest(notes.get(noteId))) throw new Error("削除するノートが見つかりません。一覧を更新してください。");
     // 片方の削除に失敗したら両方取り消す。元PDFが欠けたノートも削除できる。
@@ -232,7 +235,7 @@ export async function deleteSavedNote(noteId: string): Promise<void> {
 export async function deleteSavedItems(items: NoteDragItem[]): Promise<void> {
   // 呼び出し後に配列が変わっても、確認時の対象を増減させない。
   const confirmed = items.map((item) => ({ ...item }));
-  await withLocalTransaction(["notes", "pdfs", "folders", "noteSummaries"], "readwrite", async (transaction) => {
+  await withLocalTransaction(["notes", "pdfs", "folders", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
     const targets = checkedDeletion(confirmed, await readLibrary(transaction));
     for (const item of targets) {
       if (item.kind === "note") {
@@ -260,7 +263,7 @@ export async function createNoteFolder(name: string, parentId: string | null): P
 // 整理操作は最新の階層を同一トランザクションで再確認する。別タブとの競合も直列に処理する。
 export async function organizeNote(noteId: string, title: string, folderId: string | null): Promise<void> {
   const trimmedTitle = checkedName(title, 120);
-  await withLocalTransaction(["notes", "folders", "noteSummaries"], "readwrite", async (transaction) => {
+  await withLocalTransaction(["notes", "folders", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
     checkParent(folderId, await readLibrary(transaction));
     const notes = transaction.objectStore("notes");
     const note = await readRequest<LocalNote | undefined>(notes.get(noteId));
@@ -270,7 +273,7 @@ export async function organizeNote(noteId: string, title: string, folderId: stri
 }
 
 export async function moveSavedNote(noteId: string, folderId: string | null): Promise<void> {
-  await withLocalTransaction(["notes", "folders", "noteSummaries"], "readwrite", async (transaction) => {
+  await withLocalTransaction(["notes", "folders", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
     checkParent(folderId, await readLibrary(transaction));
     const notes = transaction.objectStore("notes");
     const note = await readRequest<LocalNote | undefined>(notes.get(noteId));
@@ -291,7 +294,7 @@ export async function moveNoteFolder(folderId: string, parentId: string | null):
 }
 
 export async function moveSavedItems(items: NoteDragItem[], parentId: string | null): Promise<void> {
-  await withLocalTransaction(["notes", "folders", "noteSummaries"], "readwrite", async (transaction) => {
+  await withLocalTransaction(["notes", "folders", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
     const library = await readLibrary(transaction);
     if (!canMoveItems(items, parentId, library)) {
       throw new Error("移動できません。項目の存在・現在の場所・自己や子孫・同名フォルダを確認してください。");

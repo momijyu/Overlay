@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import { createGoogleDriveClient } from "@/features/pdf-editor/googleDriveClient";
 import { DRIVE_NOTE_SUFFIX } from "@/features/pdf-editor/googleDriveNoteData";
+import { reserveDriveIds, sendDriveAutosave, sha256 } from "@/features/pdf-editor/driveAutosaveRemote";
 import { listDriveNotes } from "@/features/pdf-editor/googleDriveNotes";
 import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
 import type { HeadingsByPage } from "@/features/pdf-editor/types";
@@ -52,25 +53,28 @@ function fixture() {
     if (alternate) return alternate;
     const { url } = call;
     if (url.pathname === "/drive/v3/about") return Response.json({ user: { permissionId: "account_A", displayName: "Test User", emailAddress: "test@example.com", me: true } });
+    if (url.pathname === "/drive/v3/files/generateIds") return Response.json({ ids: [`reserved_${++serial}`, `reserved_${++serial}`, `reserved_${++serial}`] });
     if (url.pathname === "/drive/v3/files" && init.method === "GET") {
       if (url.searchParams.get("q")?.includes("value='root'")) return Response.json({ files: [root] });
       const match = url.searchParams.get("q")?.match(/and name = '((?:\\.|[^'])*)'$/);
       const name = match?.[1].replace(/\\(['\\])/g, "$1");
-      return Response.json({ files: [...files.values()].filter((file) => file.appProperties.overlayRole === "note"
+      return Response.json({ files: [...files.values()].filter((file) => (file.appProperties.overlayRole === "note" || url.searchParams.get("q")?.includes("sync-note") && file.appProperties.overlayRole === "sync-note")
         && (name === undefined || file.name === name)).map(metadata) });
     }
     if (url.pathname === "/drive/v3/files" && init.method === "POST") {
-      const file = { ...JSON.parse(String(init.body)), id: `file_${++serial}`, ownedByMe: true, trashed: false, version: "1" } as Stored;
+      const details = JSON.parse(String(init.body));
+      const file = { ...details, id: typeof details.id === "string" ? details.id : `file_${++serial}`, ownedByMe: true, trashed: false, version: "1" } as Stored;
       files.set(file.id, file); return Response.json(metadata(file));
     }
     if (url.pathname === "/upload/drive/v3/files" && init.method === "POST") {
       if (url.searchParams.get("uploadType") === "multipart") {
         const { metadata: details, data } = await multipart(call);
-        const file = { ...details, id: `file_${++serial}`, ownedByMe: true, trashed: false,
+        const file = { ...details, id: typeof details.id === "string" ? details.id : `file_${++serial}`, ownedByMe: true, trashed: false,
           data, size: String(data.size), version: "1", modifiedTime: "2026-11-04T08:00:00.000Z" } as Stored;
         files.set(file.id, file); return Response.json(metadata(file));
       }
-      const file = { ...JSON.parse(String(init.body)), id: `file_${++serial}`, ownedByMe: true, trashed: false } as Stored;
+      const details = JSON.parse(String(init.body));
+      const file = { ...details, id: typeof details.id === "string" ? details.id : `file_${++serial}`, ownedByMe: true, trashed: false } as Stored;
       sessions.set(file.id, file);
       return new Response(null, { status: 200, headers: { Location: `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=${file.id}` } });
     }
@@ -79,6 +83,11 @@ function fixture() {
       if (url.searchParams.get("uploadType") === "resumable") {
         sessions.set(stored.id, { ...stored, ...JSON.parse(String(init.body)) });
         return new Response(null, { headers: { Location: `https://www.googleapis.com${url.pathname}?upload_id=${stored.id}` } });
+      }
+      if (url.searchParams.get("uploadType") === "multipart") {
+        const { metadata: details, data } = await multipart(call);
+        Object.assign(stored, details, { data, size: String(data.size), modifiedTime: "2026-11-05T09:00:00Z" });
+        return Response.json(metadata(stored));
       }
       assert.equal(url.searchParams.get("uploadType"), "media");
       assert.ok(init.body instanceof Blob);
@@ -112,6 +121,27 @@ function metadata(file: Stored) { const { data: _data, ...value } = file; void _
 async function verified() { const f = fixture(); await f.client.getAccount(); return f; }
 const save = (f: Awaited<ReturnType<typeof verified>>, value = backup) => f.client.saveNewNote("account_A", root.id, value);
 const list = (f: Awaited<ReturnType<typeof verified>>) => f.client.listNotes("account_A", root.id);
+
+test("自動保存の実HTTP窓口は予約IDを渡し、改名付きJSON更新・一覧・コピーに対応する", async () => {
+  const f = await verified();
+  const access = await f.client.autosaveAccess("account_A", root.id);
+  const ids = await reserveDriveIds(access);
+  const binding = { id: "local_A", key: "branch_A", deviceId: "device_A", accountId: "account_A", rootId: root.id,
+    enabled: true, generation: 1, uploadedGeneration: 0, dirtySince: 0, changedAt: 0, ids, pdfHash: await sha256(backup.notes[0].pdf) };
+  await sendDriveAutosave(access, binding, backup);
+  assert.deepEqual([...f.files.keys()].sort(), Object.values(ids).sort());
+  assert.equal((await list(f)).notes[0].deviceId, "device_A");
+  const changed = { ...backup, name: "変更後", notes: [{ ...backup.notes[0], title: "変更後", strokesByPage: {} }] };
+  await sendDriveAutosave(access, { ...binding, generation: 2, uploadedGeneration: 1 }, changed);
+  const patches = f.calls.filter((c) => c.init.method === "PATCH");
+  assert.equal(patches.length, 1); assert.equal(patches[0].url.searchParams.get("uploadType"), "multipart");
+  assert.equal(f.files.size, 3);
+  assert.equal((await list(f)).notes[0].title, "変更後");
+  const restored = await f.client.loadNote("account_A", root.id, ids.note);
+  assert.equal(restored.notes[0].title, "変更後");
+  assert.deepEqual(restored.notes[0].strokesByPage, {});
+  assert.equal(f.calls.filter((c) => c.init.headers && (c.init.headers as Record<string, string>)["X-Upload-Content-Type"] === "application/pdf").length, 1);
+});
 
 test("見出しをDrive JSON版3で保持し、見出しだけの変更・削除では元PDFを再送しない", async () => {
   const pdf = await PDFDocument.create(); pdf.addPage([600, 800]); pdf.addPage([600, 800]);

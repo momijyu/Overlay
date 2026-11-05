@@ -115,7 +115,9 @@ export function GoogleDriveNotes({ drive, accountId, rootId, captureNote, initia
     {!list.loading && !list.error && list.notes.length === 0 && <p className="text-sm">Driveのノートはありません。</p>}
     <ul className="max-h-56 space-y-2 overflow-y-auto">
       {list.notes.map((note) => <li key={note.id} className="flex min-w-0 flex-wrap items-center gap-2 rounded-box border border-base-300 p-2">
-        <span className="min-w-0 flex-1 break-words text-sm">{note.title}</span>
+        <span className="min-w-0 flex-1 break-words text-sm">{note.title}
+          {note.deviceId && <span className="block text-xs text-base-content/60">自動保存・端末 {note.deviceId.slice(0, 8)}・{new Date(note.updatedAt).toLocaleString("ja-JP")}</span>}
+        </span>
         {onImportNote && <button type="button" className="btn btn-xs" disabled={disabled} onClick={() => {
           void run("ノートを読み込み中…", async () => {
             const backup = await drive.loadNote(accountId, rootId, note.id);

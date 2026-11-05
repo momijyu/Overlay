@@ -8,13 +8,14 @@ export type DriveNoteAccess = {
   json(path: string, parameters: Record<string, string>, body?: unknown): Promise<unknown>;
   upload(metadata: Record<string, unknown>, data: Blob): Promise<unknown>;
   download(fileId: string, maximumBytes: number): Promise<Blob>;
-  replace?: (fileId: string, data: Blob) => Promise<unknown>;
+  replace?: (fileId: string, data: Blob, metadata?: Record<string, unknown>) => Promise<unknown>;
 };
 
-function noteQuery(rootId: string) {
+function noteQuery(rootId: string, includeAutosave = false) {
   return "trashed = false and 'me' in owners and mimeType = 'application/json'"
     + " and appProperties has { key='overlayApp' and value='overlay' }"
-    + " and appProperties has { key='overlayRole' and value='note' }"
+    + (includeAutosave ? " and (appProperties has { key='overlayRole' and value='note' } or appProperties has { key='overlayRole' and value='sync-note' })"
+      : " and appProperties has { key='overlayRole' and value='note' }")
     + ` and appProperties has { key='overlayRootId' and value='${driveId(rootId)}' }`;
 }
 
@@ -66,7 +67,7 @@ export async function listDriveNotes(access: DriveNoteAccess, rootId: string, pa
   driveId(rootId);
   if (pageToken !== undefined && (pageToken.length > 4096 || /[\u0000-\u001f]/.test(pageToken))) throw new Error("Drive一覧の続き情報が不正です。");
   const value = driveObject(await access.json("files", {
-    q: noteQuery(rootId),
+    q: noteQuery(rootId, true),
     spaces: "drive", corpora: "user", pageSize: "50", orderBy: "modifiedTime desc",
     fields: `files(${DRIVE_NOTE_FIELDS}),nextPageToken,incompleteSearch`, ...(pageToken ? { pageToken } : {}),
   }));
@@ -94,6 +95,7 @@ async function readDriveSource(access: DriveNoteAccess, rootId: string, noteId: 
   let raw: unknown;
   try { raw = JSON.parse(await data.text()); } catch { throw new Error("Driveノートの編集情報を読み取れませんでした。"); }
   const manifest = readDriveManifest(raw, summary.noteKey);
+  if (summary.deviceId !== manifest.sync?.deviceId) throw new Error("Driveノートの端末情報が一致しません。");
   const pdfMetadata = driveFile(await access.json(`files/${manifest.pdfId}`, { fields: DRIVE_NOTE_FIELDS }), "pdf", rootId, summary.noteKey, summary.containerId);
   if (pdfMetadata.id !== manifest.pdfId || Number(pdfMetadata.size) !== manifest.pdfBytes) throw new Error("DriveノートのPDF情報が一致しません。");
   return { metadata: driveObject(metadata), summary, manifest, pdfMetadata };
@@ -121,6 +123,7 @@ export async function overwriteDriveNote(access: DriveNoteAccess, rootId: string
   const note = singleDriveNote(input);
   if (note.title !== target.note.title) throw new Error("確認したノート名が変わりました。保存対象を選び直してください。");
   const source = await readDriveSource(access, rootId, target.note.id);
+  if (source.summary.deviceId) throw new Error("自動保存用ノートは手動で上書きできません。別ノートとして保存してください。");
   if (version(source.metadata.version) !== target.version || source.summary.containerId !== target.note.containerId
     || source.summary.noteKey !== target.note.noteKey || source.summary.title !== target.note.title) throw new Error("確認後にDriveノートが変更されました。キャンセルして保存対象を選び直してください。");
   if (!((await note.pdf.slice(0, 1024).text()).includes("%PDF-"))) throw new Error("保存するPDFの形式が不正です。");

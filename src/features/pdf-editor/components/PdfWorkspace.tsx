@@ -20,6 +20,7 @@ import type { HeadingsByPage, NotePage, PenStroke, EditorTool, TextNote, TextNot
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookDrawer } from "./NotebookDrawer";
+import { DriveAutosavePanel } from "./DriveAutosavePanel";
 import type { DriveSaveRequest } from "./GoogleDriveSetup";
 import { EraserSizeControl } from "./EraserSizeControl";
 import { PenWidthControl } from "./PenWidthControl";
@@ -560,6 +561,7 @@ export function PdfWorkspace() {
               setIsOrganizing(busy);
             }}
           />
+          <DriveAutosavePanel noteId={noteId} title={noteName} disabled={isBusy} drawerOpen={sidebarVisible} />
           {pendingBackup && <NotebookRestoreDialog backup={pendingBackup} skipDuplicates={isDriveRestore} busy={isBackupWorking} error={backupError}
             onRestore={() => void handleRestoreBackup()}
             onClose={() => { if (!operationRef.current) { setPendingBackup(null); setBackupError(null); } }} />}

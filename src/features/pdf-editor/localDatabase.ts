@@ -1,9 +1,10 @@
 import { toLocalNoteSummary } from "./localNoteSummary";
+import { notifyDriveQueue } from "./driveQueueEvents";
 
 const DATABASE_NAME = "overlay-local-notes";
-// 旧タブがページ構成や見出しを知らずに保存し直すことを防ぐ。ストアと既存本文は変更しない。
-const DATABASE_VERSION = 5;
-const STORES = ["notes", "pdfs", "folders", "noteSummaries"] as const;
+// 旧タブが送信待ち情報を更新せず本文だけ保存することを防ぐ。
+const DATABASE_VERSION = 6;
+const STORES = ["notes", "pdfs", "folders", "noteSummaries", "driveBindings", "driveSettings"] as const;
 type StoreName = typeof STORES[number];
 type Connection = { factory: IDBFactory; database: IDBDatabase | null; opening: Promise<IDBDatabase> };
 let connection: Connection | null = null;
@@ -121,7 +122,10 @@ export async function withLocalTransaction<T>(
   return new Promise<T>((resolve, reject) => {
     let result: T;
     let failure: unknown;
-    transaction.oncomplete = () => resolve(result);
+    transaction.oncomplete = () => {
+      resolve(result);
+      if (mode === "readwrite" && stores.includes("driveBindings")) notifyDriveQueue();
+    };
     transaction.onabort = () => {
       const error = failure ?? transaction.error;
       if (error instanceof Error && error.name === "UnknownError") releaseConnection(database);

@@ -6,8 +6,11 @@ export function createGoogleDriveSession() {
   const auth = createGoogleDriveAuth();
   const drive = createGoogleDriveClient(auth);
   let connection: { account: GoogleDriveAccount; root: GoogleDriveRoot | null; token: string } | null = null;
+  const listeners = new Set<() => void>();
+  const changed = () => { for (const listener of listeners) listener(); };
   return {
     auth, drive,
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     getConnection() {
       if (auth.getState().status !== "authorized") { connection = null; return null; }
       if (!connection || connection.token !== auth.getAccessToken()) { connection = null; return null; }
@@ -15,8 +18,9 @@ export function createGoogleDriveSession() {
     },
     remember(account: GoogleDriveAccount, root: GoogleDriveRoot | null) {
       connection = { account, root, token: auth.getAccessToken() };
+      changed();
     },
-    clear() { connection = null; },
+    clear() { connection = null; changed(); },
     detach() {
       drive.cancelPending();
       // 認可・準備の途中は中断する。有効な接続だけ画面を閉じた後もメモリへ保持する。
