@@ -4,6 +4,7 @@ import { createGoogleDriveClient } from "@/features/pdf-editor/googleDriveClient
 import { DRIVE_NOTE_SUFFIX } from "@/features/pdf-editor/googleDriveNoteData";
 import { listDriveNotes } from "@/features/pdf-editor/googleDriveNotes";
 import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
+import type { HeadingsByPage } from "@/features/pdf-editor/types";
 import { PDFDocument } from "pdf-lib";
 import { resolveNotePages, insertBlankPage } from "@/features/pdf-editor/notePages";
 
@@ -111,6 +112,49 @@ function metadata(file: Stored) { const { data: _data, ...value } = file; void _
 async function verified() { const f = fixture(); await f.client.getAccount(); return f; }
 const save = (f: Awaited<ReturnType<typeof verified>>, value = backup) => f.client.saveNewNote("account_A", root.id, value);
 const list = (f: Awaited<ReturnType<typeof verified>>) => f.client.listNotes("account_A", root.id);
+
+test("見出しをDrive JSON版3で保持し、見出しだけの変更・削除では元PDFを再送しない", async () => {
+  const pdf = await PDFDocument.create(); pdf.addPage([600, 800]); pdf.addPage([600, 800]);
+  const data = new Blob([new Uint8Array(await pdf.save())], { type: "application/pdf" });
+  for (const pages of [undefined, insertBlankPage(resolveNotePages(undefined, 2), 1, 600, 800)]) {
+    const headingsByPage: HeadingsByPage = pages ? { 2: "試験範囲", 3: "計算メモ" } : { 2: "試験範囲" };
+    const input: NoteBackup = { ...backup, schemaVersion: 4, notes: [{ ...backup.notes[0], pdf: data, pages, headingsByPage }] };
+    const f = await verified(); const saved = await save(f, input);
+    assert.equal(JSON.parse(await f.files.get(saved.id)!.data!.text()).schemaVersion, 3);
+    const restored = await f.client.loadNote("account_A", root.id, saved.id);
+    assert.equal(restored.schemaVersion, 4);
+    assert.deepEqual(restored.notes[0].headingsByPage, headingsByPage);
+    assert.deepEqual(restored.notes[0].pages, pages);
+    assert.deepEqual(await restored.notes[0].pdf.arrayBuffer(), await data.arrayBuffer());
+    const updates: HeadingsByPage[] = [{ 2: "更新した見出し" }, {}];
+    for (const headings of updates) {
+      const target = await f.client.findSaveTarget("account_A", root.id, input); assert.ok(target);
+      f.calls.length = 0;
+      await f.client.saveConfirmedNote("account_A", root.id, { ...input, notes: [{ ...input.notes[0], headingsByPage: headings }] }, target);
+      assert.ok(!f.calls.some(({ init }) => init.method === "PUT" || init.method === "POST"));
+      assert.equal(f.calls.filter(({ init }) => init.method === "PATCH").length, 1);
+      const loaded = await f.client.loadNote("account_A", root.id, saved.id);
+      assert.deepEqual(loaded.notes[0].headingsByPage ?? {}, headings);
+      assert.deepEqual(loaded.notes[0].pages, pages);
+    }
+  }
+});
+
+test("Driveの不正な見出し・元PDFにないページの見出しをコピー前に拒否する", async () => {
+  const pdf = await PDFDocument.create(); pdf.addPage(); pdf.addPage();
+  const input: NoteBackup = { ...backup, schemaVersion: 4, notes: [{ ...backup.notes[0],
+    pdf: new Blob([new Uint8Array(await pdf.save())], { type: "application/pdf" }), headingsByPage: { 2: "見出し" } }] };
+  const f = await verified(); const saved = await save(f, input);
+  const stored = f.files.get(saved.id)!;
+  const original = JSON.parse(await stored.data!.text());
+  for (const headings of [{ 2: "長".repeat(121) }, { 9: "存在しないページ" }]) {
+    stored.data = new Blob([JSON.stringify({ ...original, headingsByPage: headings })], { type: "application/json" });
+    stored.size = String(stored.data.size); f.calls.length = 0;
+    await assert.rejects(f.client.loadNote("account_A", root.id, saved.id));
+    assert.ok(f.calls.every(({ init }) => init.method === "GET"));
+    if ("2" in headings) assert.ok(!f.calls.some(({ url }) => url.searchParams.get("alt") === "media" && url.pathname.endsWith(original.pdfId)));
+  }
+});
 
 test("白紙の位置・編集はDrive JSON版2へ保存し、同じ元PDFの上書きはPDFを再送せず読み戻せる", async () => {
   const pdf = await PDFDocument.create(); pdf.addPage([600, 800]); pdf.addPage([600, 800]);

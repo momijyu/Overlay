@@ -1,17 +1,18 @@
+import { readPageHeadings } from "./pageHeadings";
 import { readNotePages } from "./notePages";
 import { readRequest, withLocalTransaction } from "./localDatabase";
 import type { BackupNote } from "./noteBackupData";
 import { readStrokes } from "./strokeData";
 import { readTextNotes } from "./textData";
 
-type StoredNote = { id: string; revision?: number; strokesByPage: unknown; textsByPage?: unknown; pages?: unknown };
+type StoredNote = { id: string; revision?: number; strokesByPage: unknown; textsByPage?: unknown; pages?: unknown; headingsByPage?: unknown };
 
-function editingKey(note: { strokesByPage: unknown; textsByPage?: unknown; pages?: unknown }): string {
-  // 空の書き込み配列は差にしない。白紙の配置・寸法は編集内容として比較する。
+function editingKey(note: { strokesByPage: unknown; textsByPage?: unknown; pages?: unknown; headingsByPage?: unknown }): string {
+  // 空の書き込み配列は差にしない。白紙の配置・寸法と見出しは編集内容として比較する。
   const nonempty = (pages: Record<number, unknown[]>) => Object.fromEntries(Object.entries(pages).filter(([, items]) => items.length));
   const pages = readNotePages(note.pages);
   const layout = pages?.some((page) => page.kind === "blank") ? pages : undefined;
-  return JSON.stringify([layout, nonempty(readStrokes(note.strokesByPage)), nonempty(readTextNotes(note.textsByPage))]);
+  return JSON.stringify([layout, readPageHeadings(note.headingsByPage), nonempty(readStrokes(note.strokesByPage)), nonempty(readTextNotes(note.textsByPage))]);
 }
 
 async function samePdf(first: Blob, second: Blob): Promise<boolean> {

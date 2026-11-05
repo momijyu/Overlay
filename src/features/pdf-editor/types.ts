@@ -31,6 +31,8 @@ export type TextNote = {
   backgroundColor?: string;
 };
 export type TextNotesByPage = Record<number, TextNote[]>;
+export type HeadingsByPage = Record<number, string>;
+export type StickyPageLink = { pageId: number; pageNumber: number; textId: string; label: string };
 
 // idは書き込みのキー。配列の位置（表示順）とは独立させる。
 export type NotePage =
@@ -43,6 +45,8 @@ export type SavedNoteSummary = {
   updatedAt: string;
   title: string;
   folderId: string | null;
+  // 付箋一覧用の派生情報。本文・PDF・座標は含めない。
+  stickyNotes?: StickyPageLink[];
 };
 
 export type NoteFolder = {
@@ -63,6 +67,7 @@ export type LoadedNote = {
   strokesByPage: Record<number, PenStroke[]>;
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
+  headingsByPage?: HeadingsByPage;
   // ローカル保存の更新番号。番号のない旧データは0として読み込む。
   revision?: number;
 };

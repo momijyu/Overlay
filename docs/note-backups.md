@@ -22,6 +22,8 @@
 
 ## 共通データとファイル形式
 
+見出しを含むノートがあれば`schemaVersion:4`を使い、各ノートの`headingsByPage`へページIDと文字列を保持する。種類は`note|folder|selection`。見出しのない出力は従来形式を維持し、旧版1〜3も読み込む。重複判定は見出しも比較する。詳細は[ページ見出し](./page-headings.md)。
+
 `NoteBackup`はページ構成を含む場合に`schemaVersion:3`（`kind:note|folder|selection`）を使い、各ノートの`pages`へ順序・ID・白紙寸法を含める。旧版も継続して読み込み、ページ構成のない出力は従来版を維持する。単体・フォルダ用の`schemaVersion:1`・`kind:note|folder`、選択ZIP用の`schemaVersion:2`・`kind:selection`を扱う。名前、フォルダ配列、ノート配列を持つ。各ノートには元PDFのBlob、名前、元ファイル名、所属、全ページの`strokesByPage`・`textsByPage`を保持する。ペン・マーカーの色と太さ、テキスト・付箋の文字サイズ・色・背景・旧ボックス寸法も維持する。旧ノートの文章未定義は空として扱い、以前の`.overlay`も引き続き読める。
 
 ファイルは無圧縮ZIPを`.overlay`拡張子で出力する。追加した[fflate](https://github.com/101arrowz/fflate) 0.8.3（MIT）は梱包・読み込みだけを担当し、バックアップ操作時に遅延ロードする。PDFを再圧縮せず、Base64にも変換しない。導入版の[ライセンス全文](../public/licenses/fflate-LICENSE.txt)を公開サイトの`/licenses/fflate-LICENSE.txt`にも同梱する。

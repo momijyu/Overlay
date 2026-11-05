@@ -29,7 +29,7 @@ async function snapshot() {
 async function assertSummariesMatch() {
   const [notes, , , summaries] = await snapshot();
   assert.deepEqual(summaries, notes.map(toLocalNoteSummary));
-  assert.ok(summaries.every((note) => Object.keys(note).length === 5));
+  assert.ok(summaries.every((note) => Object.keys(note).length === (note.stickyNotes ? 6 : 5)));
 }
 
 async function seedLegacy() {
@@ -218,7 +218,8 @@ test("同時に一覧を開いても移行は一度だけ、本文・一覧・PD
 test("一覧用データは余分な編集情報を持ち込まず、元のオブジェクトを変更しない", () => {
   const record = { id: "test", title: "題名", fileName: "test.pdf", folderId: null, updatedAt: "date", strokesByPage, textsByPage };
   const summary: SavedNoteSummary = toLocalNoteSummary(record);
-  assert.deepEqual(summary, { id: "test", title: "題名", fileName: "test.pdf", folderId: null, updatedAt: "date" });
+  assert.deepEqual(summary, { id: "test", title: "題名", fileName: "test.pdf", folderId: null, updatedAt: "date",
+    stickyNotes: [{ pageId: 2, pageNumber: 2, textId: "sticky", label: "復習" }] });
   assert.equal(record.strokesByPage, strokesByPage);
   assert.equal(record.textsByPage, textsByPage);
 });

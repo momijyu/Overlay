@@ -3,7 +3,7 @@ import test, { beforeEach, mock } from "node:test";
 import * as React from "react";
 import { createLocalAutosave, type LocalSaveInput } from "@/features/pdf-editor/localAutosave";
 import * as localNotes from "@/features/pdf-editor/localNotes";
-import type { NotePage, PenStroke, SavedNoteSummary, TextNotesByPage } from "@/features/pdf-editor/types";
+import type { HeadingsByPage, NotePage, PenStroke, SavedNoteSummary, TextNotesByPage } from "@/features/pdf-editor/types";
 import type { NoteDragItem } from "@/features/pdf-editor/noteDrag";
 import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
 
@@ -27,6 +27,7 @@ const exportedPages: (NotePage[] | undefined)[] = [];
 const exportedTexts: (TextNotesByPage | undefined)[] = [];
 const savedInputs: LocalSaveInput[] = [];
 const deletedItems: NoteDragItem[][] = [];
+let openedHeadings: HeadingsByPage | undefined;
 let openedPages: NotePage[] | undefined;
 let openedTexts: TextNotesByPage | undefined;
 const openedStrokes = { 2: [{ width: 5, points: [{ x: 0.2, y: 0.3 }] }] };
@@ -87,7 +88,7 @@ mock.module("@/features/pdf-editor/localNotes", { exports: {
   },
   loadLocalNote: async () => {
     if (openFails) throw new Error("読込失敗");
-    return { file, id: "other", strokesByPage: openedStrokes, textsByPage: openedTexts, pages: openedPages, revision: 1 };
+    return { file, id: "other", strokesByPage: openedStrokes, headingsByPage: openedHeadings, textsByPage: openedTexts, pages: openedPages, revision: 1 };
   },
 } });
 mock.module("@/features/pdf-editor/noteBackupFile", { exports: {
@@ -109,6 +110,7 @@ mock.module("@/features/pdf-editor/exportAnnotatedPdf", { exports: {
   },
 } });
 const { PdfWorkspace } = await import("@/features/pdf-editor/components/PdfWorkspace");
+const { PageHeadingsPanel } = await import("@/features/pdf-editor/components/PageHeadingsPanel");
 const { PdfPage } = await import("@/features/pdf-editor/components/PdfPage");
 const { HistoryControls } = await import("@/features/pdf-editor/components/HistoryControls");
 const { ZoomControl } = await import("@/features/pdf-editor/components/ZoomControl");
@@ -119,7 +121,7 @@ const { EditorIcon } = await import("@/features/pdf-editor/components/EditorIcon
 const { AppHeader } = await import("@/components/layout/AppHeader");
 const { NotebookRestoreDialog } = await import("@/features/pdf-editor/components/NotebookRestoreDialog");
 
-beforeEach(() => { pageFails = false; openedPages = undefined; exportedPages.length = 0; states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; deletedItems.length = 0; openedTexts = undefined; });
+beforeEach(() => { openedHeadings = undefined; pageFails = false; openedPages = undefined; exportedPages.length = 0; states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; deletedItems.length = 0; openedTexts = undefined; });
 beforeEach(() => { backups.length = 0; capturedSelections.length = 0; restoreCalls = 0; restoreFails = false; decodeFails = false;
   restoreSkipped = false; restoreOptions.length = 0; capturedNotes.length = 0; captureFails = false; });
 
@@ -1059,4 +1061,126 @@ test("白紙追加失敗・整理中は内容と履歴を変えず、読込済�
   assert.deepEqual(savedInputs.at(-1)!.pages, openedPages); assert.deepEqual(savedInputs.at(-1)!.strokesByPage[4], [red]);
   props(NotebookSidebar).onMutationChange(true);
   assert.equal((button("次に空白ページを追加")!.props as { disabled: boolean }).disabled, true);
+});
+
+
+test("見出しの確定は自動保存・履歴・バックアップ・Drive単体／選択保存へ渡る", async () => {
+  setup(); await openOther(); const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
+  props(PageHeadingsPanel).onChange(2, "重要な公式"); await autosave.flush();
+  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, { 2: "重要な公式" });
+  assert.deepEqual(savedInputs.at(-1)!.strokesByPage, openedStrokes);
+  const captured = props(NotebookDrawer).captureDriveNote!();
+  assert.equal(captured.schemaVersion, 4); assert.deepEqual(captured.notes[0].headingsByPage, { 2: "重要な公式" });
+  props(NotebookSidebar).onSaveToDrive!("other"); await new Promise(setImmediate);
+  const request = props(NotebookDrawer).driveSaveRequest!; assert.ok("backup" in request);
+  assert.deepEqual(request.backup.notes[0].headingsByPage, { 2: "重要な公式" });
+  props(NotebookDrawer).onDriveSaveRequestClose!();
+  props(NotebookSidebar).onSaveItemsToDrive!([{ id: "other", title: "授業メモ" } as SavedNoteSummary]);
+  const batch = props(NotebookDrawer).driveSaveRequest!; assert.ok("sources" in batch);
+  assert.deepEqual((await batch.sources[0].load()).notes[0].headingsByPage, { 2: "重要な公式" });
+  props(NotebookDrawer).onDriveSaveRequestClose!();
+  (button("ノートのバックアップ")!.props as { onClick: () => void }).onClick(); await new Promise(setImmediate);
+  assert.deepEqual(backups.at(-1)!.notes[0].headingsByPage, { 2: "重要な公式" });
+  props(HistoryControls).onUndo(); await autosave.flush();
+  assert.equal(props(PdfPage).pageNumber, 2); assert.deepEqual(props(PageHeadingsPanel).headings, {});
+  props(HistoryControls).onRedo(); await autosave.flush();
+  assert.deepEqual(props(PageHeadingsPanel).headings, { 2: "重要な公式" });
+  props(PageHeadingsPanel).onChange(2, ""); await autosave.flush();
+  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, {});
+});
+
+test("白紙挿入後も元ページの見出しを保持し、目次から新しい表示番号へ移動する", async () => {
+  setup(); openedHeadings = { 2: "公式", 3: "演習" }; await openOther();
+  assert.equal(savedInputs.length, 0); // 読み込んだだけでは保存しない。
+  await (button("次に空白ページを追加")!.props as { onClick: () => Promise<void> }).onClick(); await new Promise(setImmediate);
+  assert.deepEqual(props(PageHeadingsPanel).headings, openedHeadings);
+  (button("ノート一覧を開く")!.props as { onClick: () => void }).onClick();
+  props(PageHeadingsPanel).onNavigate(2);
+  assert.equal(props(PdfPage).pageNumber, 3); assert.equal(props(PdfPage).notePage!.id, 2);
+  assert.equal(props(NotebookDrawer).open, false);
+  assert.deepEqual(props(PdfPage).strokes, openedStrokes[2]);
+  const count = savedInputs.length;
+  props(NotebookSidebar).onMutationChange(true);
+  assert.equal(props(PageHeadingsPanel).disabled, true);
+  props(PageHeadingsPanel).onChange(2, "停止中"); props(PageHeadingsPanel).onNavigate(3);
+  assert.equal(props(PdfPage).pageNumber, 3); assert.equal(savedInputs.length, count);
+  assert.deepEqual(props(PageHeadingsPanel).headings, openedHeadings);
+});
+
+test("見出し保存失敗では画面に変更を残し、再試行後に保存する", async () => {
+  setup(); await openOther(); persistFails = true;
+  props(PageHeadingsPanel).onChange(1, "試験範囲");
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
+  assert.equal(await autosave.flush(), false);
+  assert.deepEqual(props(PageHeadingsPanel).headings, { 1: "試験範囲" });
+  assert.ok(button("保存を再試行")); persistFails = false;
+  (button("保存を再試行")!.props as { onClick: () => void }).onClick(); await new Promise(setImmediate);
+  assert.equal(autosave.hasPendingChanges(), false);
+  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, { 1: "試験範囲" });
+});
+
+test("付箋一覧から別資料の該当ページを直接開き、白紙追加後も安定IDで移動する", async () => {
+  setup();
+  openedTexts = { 2: [{ id: "sticky", kind: "sticky", text: "試験範囲\n補足", x: .1, y: .2, width: .3, fontSize: 14 }] };
+  openedPages = [{ id: 1, kind: "pdf", pageNumber: 1 }, { id: 4, kind: "blank", width: 800, height: 600 },
+    { id: 2, kind: "pdf", pageNumber: 2 }, { id: 3, kind: "pdf", pageNumber: 3 }];
+  props(NotebookSidebar).onOpenSticky!({ id: "other", title: "別資料" } as SavedNoteSummary, 2, "sticky");
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+  assert.equal(props(PdfPage).notePage!.id, 2); assert.equal(props(PdfPage).pageNumber, 3);
+  assert.equal(props(NotebookDrawer).open, false); assert.equal(savedInputs.length, 0);
+  assert.deepEqual(props(NotebookSidebar).currentStickyOutline!.entries, [{ pageId: 2, pageNumber: 3, textId: "sticky", label: "試験範囲" }]);
+  props(PdfPage).onStrokeComplete(red);
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>; await autosave.flush();
+  const count = savedInputs.length;
+  (button("前のページ")!.props as { onClick: () => void }).onClick();
+  props(NotebookSidebar).onOpenSticky!({ id: "other" } as SavedNoteSummary, 2, "sticky");
+  assert.equal(props(PdfPage).pageNumber, 3); assert.equal(props(HistoryControls).canUndo, true);
+  assert.equal(savedInputs.length, count);
+});
+
+test("削除済み付箋や読み込み失敗では編集中の資料・履歴を保持し、処理中は移動しない", async () => {
+  setup(); await openOther(); props(PdfPage).onStrokeComplete(red);
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>; await autosave.flush();
+  props(NotebookSidebar).onOpenSticky!({ id: "deleted" } as SavedNoteSummary, 2, "missing");
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+  assert.deepEqual(props(PdfPage).strokes, [red]); assert.equal(props(HistoryControls).canUndo, true);
+  assert.ok(find(render(), (element) => String((element.props as { children?: unknown }).children).includes("削除または変更")));
+  props(NotebookSidebar).onMutationChange(true);
+  props(NotebookSidebar).onOpenSticky!({ id: "blocked" } as SavedNoteSummary, 2, "sticky");
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+});
+
+test("未保存の付箋変更・削除・Undoは一覧へ即座に反映し、保存失敗でも移動できる", async () => {
+  setup(); openedTexts = { 1: [{ id: "sticky", kind: "sticky", text: "元の付箋", x: .1, y: .2, width: .3, fontSize: 14 }] };
+  await openOther(); persistFails = true;
+  props(PdfPage).onTextsChange([{ ...openedTexts[1][0], text: "最新の付箋" }]);
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
+  assert.equal(await autosave.flush(), false);
+  assert.equal(props(NotebookSidebar).currentStickyOutline!.entries[0].label, "最新の付箋");
+  (button("次のページ")!.props as { onClick: () => void }).onClick();
+  props(NotebookSidebar).onOpenSticky!({ id: "other" } as SavedNoteSummary, 1, "sticky");
+  assert.equal(props(PdfPage).pageNumber, 1); assert.equal(props(HistoryControls).canUndo, true);
+  props(PdfPage).onTextsChange([]);
+  assert.deepEqual(props(NotebookSidebar).currentStickyOutline!.entries, []);
+  props(HistoryControls).onUndo();
+  assert.equal(props(NotebookSidebar).currentStickyOutline!.entries[0].label, "最新の付箋");
+});
+
+test("付箋から別資料へ移動する前に未保存内容を待ち、破棄確認のキャンセルで元資料を保つ", async () => {
+  setup(); await openOther(); persistFails = true; props(PdfPage).onStrokeComplete(red);
+  assert.equal(await (refs[3].current as ReturnType<typeof createLocalAutosave>).flush(), false);
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  let confirms = 0;
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { confirm: () => { confirms++; return false; } } });
+  try {
+    props(NotebookSidebar).onOpenSticky!({ id: "next" } as SavedNoteSummary, 2, "sticky");
+    for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+    assert.equal(confirms, 1); assert.equal(props(NotebookSidebar).currentNoteId, "other");
+    assert.deepEqual(props(PdfPage).strokes, [red]); assert.equal(props(HistoryControls).canUndo, true);
+  } finally {
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
 });

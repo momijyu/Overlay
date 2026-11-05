@@ -1,8 +1,8 @@
 import { toLocalNoteSummary } from "./localNoteSummary";
 
 const DATABASE_NAME = "overlay-local-notes";
-// 旧タブがページ構成を知らずに保存し直すことを防ぐ。ストアと既存本文は変更しない。
-const DATABASE_VERSION = 3;
+// 旧タブがページ構成や見出しを知らずに保存し直すことを防ぐ。ストアと既存本文は変更しない。
+const DATABASE_VERSION = 5;
 const STORES = ["notes", "pdfs", "folders", "noteSummaries"] as const;
 type StoreName = typeof STORES[number];
 type Connection = { factory: IDBFactory; database: IDBDatabase | null; opening: Promise<IDBDatabase> };
@@ -47,7 +47,7 @@ function openDatabase(): Promise<IDBDatabase> {
         for (const name of STORES) {
           if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: "id" });
         }
-        if (event.oldVersion > 0 && event.oldVersion < 2) {
+        if (event.oldVersion > 0 && event.oldVersion < 5) {
           // 元PDF・編集本文は書き換えない。全件getAllせず、1件ずつ小さい一覧情報だけ複製する。
           // 失敗時はストア追加と移行をまとめて取り消し、旧版のデータを残す。
           const summaries = transaction.objectStore("noteSummaries");
@@ -57,7 +57,8 @@ function openDatabase(): Promise<IDBDatabase> {
             const cursor = cursorRequest.result;
             if (!cursor) return;
             try {
-              const write = summaries.add(toLocalNoteSummary(cursor.value));
+              const summary = toLocalNoteSummary(cursor.value);
+              const write = event.oldVersion < 2 ? summaries.add(summary) : summaries.put(summary);
               write.onerror = () => { upgradeFailure = write.error; };
               cursor.continue();
             } catch (error) { abortUpgrade(error); }

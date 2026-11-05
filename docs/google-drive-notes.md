@@ -59,6 +59,8 @@ Overlay/                        アプリ専用のルート
     ノート名.overlay.json       編集用のJSON
 ```
 
+見出し付きJSONは`schemaVersion:3`で、`headingsByPage`にページIDと見出しを保持する。ページ構成の有無にかかわらず扱い、旧版1・2も読み込む。見出しだけの変更・削除は元PDFが同一ならJSONだけ更新する。単体・一括手動保存とコピー復元で保持する。閲覧用PDFへ印字する情報ではない。[ページ見出し](./page-headings.md)。
+
 JSONは旧ノートが`schemaVersion: 1`、ページ構成付きが`schemaVersion: 2`で、後者は`pages`にページID・表示順・白紙寸法を含める。両方を読み込める。その他の項目は`kind: overlay-drive-note`、ノート固有キー、名前、元ファイル名、PDFのDrive IDとサイズ、`strokesByPage`、`textsByPage`を持つ。トークン・クライアントシークレット・ダウンロードURLは記録しない。フォルダ／PDF／JSONの`appProperties`へOverlayの目印、形式版、役割、ルートID、ノートキーを付ける。表示名だけで別のファイルを読み込まない。
 
 元PDFを先に送り、最後に編集JSONを送る。JSONのアップロードが完了したものだけを一覧の対象にする。Drive側に複数ファイルを原子的に書く機能があるとは扱わない。途中失敗でノートフォルダ・PDFが残る場合があり、自動削除はまだ行わない。保存結果が不明なら勝手に同じ送信を繰り返さず、一覧の更新で確認する。

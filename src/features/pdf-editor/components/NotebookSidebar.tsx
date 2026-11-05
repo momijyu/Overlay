@@ -12,6 +12,8 @@ import { NotebookActionDialog, type NotebookAction } from "./NotebookActionDialo
 import { NotebookTree } from "./NotebookTree";
 import { NotebookMoveDialog } from "./NotebookMoveDialog";
 import { NotebookDeleteDialog } from "./NotebookDeleteDialog";
+import { StickyNotesPanel } from "./StickyNotesPanel";
+import type { CurrentStickyOutline } from "../stickyOutline";
 
 type SidebarProps = {
   refreshVersion: number;
@@ -26,6 +28,9 @@ type SidebarProps = {
   onBackupItems?: (items: NoteDragItem[]) => void;
   onSaveToDrive?: (noteId: string) => void;
   onSaveItemsToDrive?: (notes: SavedNoteSummary[]) => void;
+  currentStickyOutline?: CurrentStickyOutline;
+  currentPageId?: number;
+  onOpenSticky?: (note: SavedNoteSummary | null, pageId: number, textId: string) => void;
 };
 
 const emptyLibrary: NoteLibrary = { notes: [], folders: [], foldersEnabled: true };
@@ -438,6 +443,9 @@ export function NotebookSidebar(props: SidebarProps) {
   return (
     <nav ref={navRef} aria-labelledby="notebook-heading" className="card border border-base-300 bg-base-100 shadow-sm">
       <div className="card-body gap-3 p-4">
+        {props.onOpenSticky && <StickyNotesPanel notes={result.library.notes} current={props.currentStickyOutline}
+          currentPageId={props.currentPageId} disabled={unavailable || !!action || selectionMode || bulkMoving || !!deleting}
+          onNavigate={props.onOpenSticky} />}
         <div className="flex items-center justify-between gap-2">
           <h2 id="notebook-heading" className="font-semibold">ノート</h2>
           <button type="button" className="btn btn-sm" disabled={props.disabled || isMutating || isLoading}

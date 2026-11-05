@@ -1,4 +1,4 @@
-import type { NotePage, PenStroke, TextNotesByPage } from "./types";
+import type { HeadingsByPage, NotePage, PenStroke, TextNotesByPage } from "./types";
 
 type Strokes = Record<number, PenStroke[]>;
 export type LocalSaveInput = {
@@ -6,6 +6,7 @@ export type LocalSaveInput = {
   strokesByPage: Strokes;
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
+  headingsByPage?: HeadingsByPage;
   noteId: string | null;
   expectedRevision: number;
 };
@@ -24,6 +25,7 @@ export function createLocalAutosave(options: {
   strokesByPage: Strokes;
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
+  headingsByPage?: HeadingsByPage;
   revision?: number;
   persist: (input: LocalSaveInput) => Promise<string>;
   onChange: (state: LocalSaveState) => void;
@@ -33,7 +35,9 @@ export function createLocalAutosave(options: {
   let savedTexts = latestTexts;
   let latestPages = options.pages;
   let savedPages = latestPages;
-  // 開いただけではDirtyにしない。最初の描画・文章確定・白紙追加で保存する。
+  let latestHeadings = options.headingsByPage ?? {};
+  let savedHeadings = latestHeadings;
+  // 開いただけではDirtyにしない。最初の描画・文章確定・白紙追加・見出し確定で保存する。
   let saved = latest;
   let noteId = options.noteId;
   let revision = options.revision ?? 0;
@@ -51,7 +55,7 @@ export function createLocalAutosave(options: {
   }
 
   function hasPendingChanges() {
-    return latest !== saved || latestTexts !== savedTexts || latestPages !== savedPages;
+    return latest !== saved || latestTexts !== savedTexts || latestPages !== savedPages || latestHeadings !== savedHeadings;
   }
 
   function flush(retry = false): Promise<boolean> {
@@ -69,14 +73,16 @@ export function createLocalAutosave(options: {
           const snapshot = latest;
           const textSnapshot = latestTexts;
           const pageSnapshot = latestPages;
+          const headingSnapshot = latestHeadings;
           noteId = await options.persist({
             file: options.file, strokesByPage: snapshot, textsByPage: textSnapshot, noteId, expectedRevision: revision,
-            pages: pageSnapshot,
+            pages: pageSnapshot, headingsByPage: headingSnapshot,
           });
           revision += 1;
           saved = snapshot;
           savedTexts = textSnapshot;
           savedPages = pageSnapshot;
+          savedHeadings = headingSnapshot;
           // 保存中に追加された線は保存済みにせず、最新の状態を続けて保存する。
           notify();
         }
@@ -101,10 +107,11 @@ export function createLocalAutosave(options: {
     getState,
     hasPendingChanges,
     flush,
-    update(strokesByPage: Strokes, textsByPage = latestTexts, pages?: NotePage[]) {
+    update(strokesByPage: Strokes, textsByPage = latestTexts, pages?: NotePage[], headingsByPage = latestHeadings) {
       if (disposed) return;
       latest = strokesByPage;
       latestTexts = textsByPage;
+      latestHeadings = headingsByPage;
       // 第3引数省略は構成を維持。明示的なundefinedは挿入前の履歴へのUndo。
       if (arguments.length >= 3) latestPages = pages;
       // 失敗後は勝手な連続再試行をせず、最新の線を保持して手動の再試行を待つ。

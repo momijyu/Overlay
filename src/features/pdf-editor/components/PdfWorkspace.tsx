@@ -4,6 +4,9 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import { AppHeader } from "@/components/layout/AppHeader";
 
+import { readPageHeadings } from "../pageHeadings";
+import { PageHeadingsPanel } from "./PageHeadingsPanel";
+import { createStickyOutline, stickyDestination } from "../stickyOutline";
 import { checkPageBindings, resolveNotePages, insertBlankPage, MAX_NOTE_PAGES } from "../notePages";
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { pdfDownloadName } from "../pdfDownloadName";
@@ -13,7 +16,7 @@ import { backupDownloadName, readNoteBackup, type NoteBackup } from "../noteBack
 import { NotebookRestoreDialog } from "./NotebookRestoreDialog";
 import type { NoteDragItem } from "../noteDrag";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
-import type { NotePage, PenStroke, EditorTool, TextNote, TextNotesByPage, SavedNoteSummary } from "../types";
+import type { HeadingsByPage, NotePage, PenStroke, EditorTool, TextNote, TextNotesByPage, SavedNoteSummary } from "../types";
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookDrawer } from "./NotebookDrawer";
@@ -23,7 +26,7 @@ import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
 import { ZoomControl } from "./ZoomControl";
 import { EditorIcon } from "./EditorIcon";
-import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordPageInsertion, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
+import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordPageInsertion, recordHeadingEdit, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
 
 type PdfInput = {
   file: File;
@@ -32,6 +35,7 @@ type PdfInput = {
   strokesByPage: Record<number, PenStroke[]>;
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
+  headingsByPage?: HeadingsByPage;
   revision?: number;
 };
 
@@ -106,7 +110,7 @@ export function PdfWorkspace() {
 
   useEffect(() => attachLocalAutosaveLifecycle(window, window.document, () => autosaveRef.current), []);
 
-  async function openPdf(getInput: () => Promise<PdfInput>) {
+  async function openPdf(getInput: () => Promise<PdfInput>, destination?: { pageId: number; textId: string }) {
     if (operationRef.current) return;
     operationRef.current = true;
     setIsLoading(true);
@@ -120,6 +124,10 @@ export function PdfWorkspace() {
         && !window.confirm("保存できていない変更があります。変更を破棄して別のノートを開きますか？")) return;
       if (!mountedRef.current) return;
       const input = await getInput();
+      // 古い一覧の付箋が既に消えていた場合は、開いているノートを切り替えない。
+      if (destination && !input.textsByPage?.[destination.pageId]?.some((text) => text.kind === "sticky" && text.id === destination.textId)) {
+        throw new Error("この付箋は削除または変更されています。一覧を更新してください。");
+      }
       isReadingPdf = true;
       const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
       pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -133,18 +141,21 @@ export function PdfWorkspace() {
       loadingTaskRef.current = loadingTask;
       const loadedDocument = await loadingTask.promise;
       if (!mountedRef.current) return;
-      checkPageBindings(input.pages, [input.strokesByPage, input.textsByPage ?? {}], loadedDocument.numPages);
+      const headingsByPage = readPageHeadings(input.headingsByPage);
+      checkPageBindings(input.pages, [input.strokesByPage, input.textsByPage ?? {}, headingsByPage], loadedDocument.numPages);
+      const initialPage = destination ? stickyDestination(resolveNotePages(input.pages, loadedDocument.numPages),
+        input.textsByPage, destination.pageId, destination.textId) : 1;
 
       // PDFと線を両方読み込めてから切り替え、失敗時は編集中の内容を残す。
       previousAutosave?.dispose();
-      const nextHistory = createStrokeHistory(input.strokesByPage, input.textsByPage, input.pages);
+      const nextHistory = createStrokeHistory(input.strokesByPage, input.textsByPage, input.pages, headingsByPage);
       historyRef.current = nextHistory;
       setFile(input.file);
       setDocument(loadedDocument);
       setHistory(nextHistory);
       setNoteId(input.id);
       setNoteName(input.name ?? (input.file.name.replace(/\.pdf$/i, "") || input.file.name));
-      setPageNumber(1);
+      setPageNumber(initialPage);
       setZoom(1);
       setPenTool("pen");
       setSaveError(null);
@@ -152,7 +163,7 @@ export function PdfWorkspace() {
       setDocumentVersion((value) => value + 1);
       const autosave = createLocalAutosave({
         file: input.file, noteId: input.id, strokesByPage: input.strokesByPage, textsByPage: nextHistory.textsByPage,
-        pages: input.pages, revision: input.revision, persist: saveNote,
+        pages: input.pages, headingsByPage: nextHistory.headingsByPage, revision: input.revision, persist: saveNote,
         onChange: (state) => {
           // 古いノートの保存結果が、新しく開いた画面に混ざらないようにする。
           if (!mountedRef.current || autosaveRef.current !== autosave) return;
@@ -221,7 +232,34 @@ export function PdfWorkspace() {
       if (index >= 0) setPageNumber(index + 1);
     }
     // Undo / Redoも通常の編集として保存係へ渡し、保存中の古い結果で上書きしない。
-    autosaveRef.current?.update(next.strokesByPage, next.textsByPage, next.pages);
+    autosaveRef.current?.update(next.strokesByPage, next.textsByPage, next.pages, next.headingsByPage);
+  }
+
+  function updatePageHeading(pageId: number, heading: string) {
+    if (operationRef.current || !document || !pages.some((page) => page.id === pageId)) return;
+    applyHistory(recordHeadingEdit(historyRef.current, pageId, heading));
+  }
+
+  function navigateToHeading(pageId: number) {
+    if (operationRef.current || !document) return;
+    const index = resolveNotePages(historyRef.current.pages, document.numPages).findIndex((page) => page.id === pageId);
+    if (index >= 0) { setPageNumber(index + 1); setSidebarVisible(false); }
+  }
+
+  function openStickyPage(note: SavedNoteSummary | null, targetPageId: number, textId: string) {
+    if (operationRef.current) return;
+    if (!note || note.id === autosaveRef.current?.getState().noteId) {
+      if (!document) return;
+      try {
+        const content = historyRef.current;
+        setPageNumber(stickyDestination(resolveNotePages(content.pages, document.numPages), content.textsByPage, targetPageId, textId));
+        setError(null); setSidebarVisible(false);
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : "付箋のページを開けませんでした。");
+      }
+      return;
+    }
+    void openPdf(async () => ({ ...await loadSavedNote(note.id), name: note.title }), { pageId: targetPageId, textId });
   }
 
   async function handleInsertBlankPage() {
@@ -323,9 +361,11 @@ export function PdfWorkspace() {
   function captureCurrentNote(): NoteBackup {
     if (!file || !document) throw new Error("ノートを開いてください。");
     const content = historyRef.current;
-    return readNoteBackup({ schemaVersion: content.pages ? 3 : 1, kind: "note", name: noteName, folders: [], notes: [{
+    const hasHeadings = Object.keys(content.headingsByPage).length > 0;
+    return readNoteBackup({ schemaVersion: hasHeadings ? 4 : content.pages ? 3 : 1, kind: "note", name: noteName, folders: [], notes: [{
       id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
       strokesByPage: content.strokesByPage, textsByPage: content.textsByPage, pages: content.pages,
+      ...(hasHeadings ? { headingsByPage: content.headingsByPage } : {}),
     }] });
   }
 
@@ -493,9 +533,15 @@ export function PdfWorkspace() {
           {isBackupWorking && <p role="status" className="px-4 pt-3 text-sm">バックアップ処理中…</p>}
           {backupMessage && <p role="status" className="px-4 pt-3 text-sm">{backupMessage}</p>}
           {isLoading && <p role="status" className="px-4 pt-3">PDFを読み込んでいます…</p>}
+          {document && file && <PageHeadingsPanel key={documentVersion} pages={pages} headings={history.headingsByPage}
+            currentPageId={pageId} disabled={isBusy} onChange={updatePageHeading} onNavigate={navigateToHeading} />}
           <NotebookSidebar
             refreshVersion={refreshVersion}
             currentNoteId={noteId}
+            currentStickyOutline={document && file ? { id: noteId, title: noteName,
+              entries: createStickyOutline(history.textsByPage, pages) } : undefined}
+            currentPageId={pageId}
+            onOpenSticky={openStickyPage}
             disabled={isBusy}
             onOpen={(note) => {
               void openPdf(async () => ({ ...await loadSavedNote(note.id), name: note.title }));

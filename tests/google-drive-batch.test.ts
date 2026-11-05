@@ -44,6 +44,24 @@ test("一括確認はPDFを読まず新規・上書きを判別し、承認後�
   assert.ok(f.entries().every((entry) => entry.status === "saved"));
 });
 
+test("一括保存もノートごとの見出しを保持し、確認前には本文を読み出さない", async () => {
+  const f = fixture();
+  f.sources[0].load = async () => ({ ...backup("A"), schemaVersion: 4,
+    notes: [{ ...backup("A").notes[0], headingsByPage: { 1: "授業の要点" } }] });
+  const received: NoteBackup[] = [];
+  const access = { ...f.access, saveConfirmedNote: async (_account: string, _root: string, data: NoteBackup) => {
+    received.push(data); return summary(data.notes[0].title);
+  } };
+  const ready = await prepareDriveBatch(createDriveBatch(f.sources), access, "account", "root", () => true, () => {});
+  assert.equal(received.length, 0);
+  assert.ok(f.events.every((event) => event.startsWith("check:")));
+  await saveDriveBatch(ready, access, "account", "root", () => true, () => {}, () => {});
+  assert.equal(received.length, 3);
+  assert.equal(received[0].schemaVersion, 4);
+  assert.deepEqual(received[0].notes[0].headingsByPage, { 1: "授業の要点" });
+  assert.equal(received[1].notes[0].headingsByPage, undefined);
+});
+
 test("同名の複数選択・重複ID・件数超過は送信前に拒否する", () => {
   const f = fixture();
   assert.throws(() => createDriveBatch([]), /1〜200/);
