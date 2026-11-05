@@ -207,3 +207,11 @@ test("応答がない通信を30秒で中断し、再試行で新しい要求を
   await rejected;
   assert.deepEqual(await verify(f), { id: user.permissionId, displayName: user.displayName, emailAddress: user.emailAddress });
 });
+
+
+test("専用フォルダの重複時はデータを変えず、削除せずに復旧する手順を案内する", async () => {
+  const f = fixture(); await verify(f);
+  f.replies.push(json({ files: [folder, { ...folder, id: "folder_B" }] }));
+  await assert.rejects(f.client.findRoot(user.permissionId), /マイドライブ直下に1つ残し.*別の場所へ移動.*再接続/);
+  assert.ok(f.requests.every((request) => request.init.method === "GET"));
+});

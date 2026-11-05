@@ -83,6 +83,8 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
     }
   }
 
+  const finishRef = useRef(finish);
+  useEffect(() => { finishRef.current = finish; });
   useEffect(() => {
     // ボタンの処理より先に確定する。ページ・道具・ノート切替やダウンロードも最新の文章を使う。
     function outside(event: Event) {
@@ -91,9 +93,9 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
       if (event.type === "pointerdown") ignoreOpeningClick.current = false;
       if (event.type === "click" && ignoreOpeningClick.current) { ignoreOpeningClick.current = false; return; }
       if (root.current?.contains(event.target as Node)) return;
-      if (!finish()) { event.preventDefault(); event.stopPropagation(); textarea.current?.focus(); }
+      if (!finishRef.current()) { event.preventDefault(); event.stopPropagation(); textarea.current?.focus(); }
     }
-    function leaving() { finish(); }
+    function leaving() { finishRef.current(); }
     function visibility() { if (document.visibilityState === "hidden") leaving(); }
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("click", outside, true); // キーボードによるボタン操作も対象。
@@ -105,7 +107,7 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
       document.removeEventListener("visibilitychange", visibility);
       window.removeEventListener("pagehide", leaving);
     };
-  });
+  }, []);
 
   function blur(event: FocusEvent) {
     if (root.current?.contains(event.relatedTarget as Node)) return;

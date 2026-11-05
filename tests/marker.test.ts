@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, decodePDFRawStream, degrees } from "pdf-lib";
@@ -47,7 +48,7 @@ test("回転PDFでもマーカーを1本のパスで半透明・乗算出力し�
   for (const angle of [0, 90, 180, 270]) source.addPage([400, 600]).setRotation(degrees(angle));
   const original = new Uint8Array(await source.save());
   const file = new File([original], "marker.pdf");
-  const displayed = await getDocument({ data: original.slice() }).promise;
+  const displayed = await getDocument({ standardFontDataUrl: fileURLToPath(new URL("../public/pdfjs/standard_fonts/", import.meta.url)), data: original.slice() }).promise;
   try {
     const strokes = Object.fromEntries([1, 2, 3, 4].map((page) => [page, [marker,
       { ...marker, points: [{ x: 0.2, y: 0.2 }, { x: 0.2, y: 0.2 }] }]]));

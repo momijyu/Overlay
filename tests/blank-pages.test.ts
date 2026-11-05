@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import test, { beforeEach, afterEach, mock } from "node:test";
 import { readFileSync } from "node:fs";
@@ -166,12 +167,12 @@ test("ページ構成と実PDFの枚数が違うバックアップは書き出�
 });
 
 test("回転PDFの直後に同じ表示寸法の白紙を出力し、日本語・付箋・線と後続ページを維持する", async () => {
-  const displayed = await getDocument({ data: new Uint8Array(await file.arrayBuffer()), disableFontFace: true }).promise;
+  const displayed = await getDocument({ standardFontDataUrl: fileURLToPath(new URL("../public/pdfjs/standard_fonts/", import.meta.url)), data: new Uint8Array(await file.arrayBuffer()), disableFontFace: true }).promise;
   try {
     const originalBytes = await file.arrayBuffer();
     const output = await exportAnnotatedPdf(file, displayed, { 2: [stroke], 3: [stroke] },
       { 3: [text, { ...text, id: "sticky", kind: "sticky", text: "確認", y: 0.5 }] }, pages);
-    const parsed = await getDocument({ data: output.slice(), disableFontFace: true }).promise;
+    const parsed = await getDocument({ standardFontDataUrl: fileURLToPath(new URL("../public/pdfjs/standard_fonts/", import.meta.url)), data: output.slice(), disableFontFace: true }).promise;
     try {
       assert.equal(parsed.numPages, 3);
       const view = (await parsed.getPage(2)).getViewport({ scale: 1 });

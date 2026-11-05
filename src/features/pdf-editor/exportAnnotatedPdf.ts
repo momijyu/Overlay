@@ -99,16 +99,18 @@ export async function exportAnnotatedPdf(
       const unitScale = Math.hypot(right[0] - origin[0], right[1] - origin[1]);
       for (const note of texts) {
         const layout = textNoteLayout(note, viewport.width, fontData.font, viewport.height);
-        if (note.y * viewport.height + layout.height > viewport.height + 0.001) throw new Error("テキストがページの高さを超えています。");
+        if (layout.height > viewport.height + 0.001) throw new Error("テキストがページの高さを超えています。");
+        // 書き込み自体が収まる場合は出力時の位置だけを補正する。保存データを変更しない。
+        const top = Math.max(0, Math.min(note.y * viewport.height, viewport.height - layout.height));
         if (note.kind === "sticky") {
-          const [x, y] = viewport.convertToPdfPoint(note.x * viewport.width, note.y * viewport.height + layout.height);
+          const [x, y] = viewport.convertToPdfPoint(note.x * viewport.width, top + layout.height);
           outputPage.drawRectangle({ x, y, width: layout.width * unitScale, height: layout.height * unitScale,
             rotate: degrees(angle), color: toColor(note.backgroundColor ?? STICKY_BACKGROUND) });
         }
         layout.lines.forEach((line, index) => {
           if (!line) return;
           const [x, y] = viewport.convertToPdfPoint(note.x * viewport.width + TEXT_PADDING,
-            note.y * viewport.height + layout.baseline + layout.lineHeight * index);
+            top + layout.baseline + layout.lineHeight * index);
           outputPage.drawText(line, { x, y, font: outputFont, size: note.fontSize * unitScale,
             rotate: degrees(angle), color: toColor(note.color ?? PEN_COLOR) });
         });

@@ -43,3 +43,16 @@ LucideのISCライセンスの著作権表示・許諾文・免責事項を含�
 
 `public`は配信物にも含まれるため、GitHub上の資料だけに残すのではなく、公開サイトからも全文を取得できる構成にする。アイコンのコピー・改変・再配布時も、このライセンスファイルと取得元の記録を一緒に維持する。このファイルは法的な無侵害の保証をするものではない。
 白紙追加ボタンの紙枠＋十字は、このプロジェクトで作成した単純なSVG図形。既存ツールと同じ24×24・線幅1.75で表示し、外部画像・絵文字は使わない。
+
+
+## ノートのDrive保存状態（2026年11月5日追加）
+
+`NotebookDriveBadge.tsx`へ、既存と同じLucide **1.59.0**の公式SVGを追加した。図形と24×24のviewBoxを保持し、一覧では16px・線幅1.75・currentColorで表示する。絵文字や外部画像の実行時読込は使わない。
+
+| 用途 | 固定タグの取得元 |
+| --- | --- |
+| この端末へ取得が必要 | [cloud.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/cloud.svg) |
+| 未送信あり | [cloud-upload.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/cloud-upload.svg) |
+| 保存失敗・複数版・差分の要確認 | [cloud-alert.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/cloud-alert.svg) |
+
+取得時に固定タグの公式ファイルと図形を確認した。ISCの著作権・許諾・免責事項と、Feather由来のMIT表示を含む既存の`public/licenses/lucide-LICENSE.txt`を引き続き配信物へ同梱する。ライセンスファイルは変更しない。マークの読み上げ・タイトル・フォーカス時の案内は外側の要素で担当する。

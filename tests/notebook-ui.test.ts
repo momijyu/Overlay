@@ -416,8 +416,9 @@ test("フォルダとノートの名前に共通の配置と省略用の要素�
   assert.match(folder.props.className as string, /notebook-row notebook-folder/);
   assert.match(note.props.className as string, /notebook-row/);
   for (const row of [folder, note]) {
-    assert.ok(isValidElement<Record<string, unknown>>(row.props.children));
-    assert.equal(row.props.children.props.className, "notebook-label");
+    const label = Children.toArray(row.props.children as ReactNode).find((child) =>
+      isValidElement<Record<string, unknown>>(child) && child.props.className === "notebook-label");
+    assert.ok(label);
   }
   const longTitle = "長いノート名".repeat(15);
   const html = renderToStaticMarkup(createElement(NotebookTree, treeProps({

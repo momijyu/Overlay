@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import test, { afterEach, mock } from "node:test";
 import { readFileSync } from "node:fs";
@@ -154,7 +155,7 @@ test("実PDFの日本語・付箋・改行を0/90/180/270度で出力し、文�
   }
   const original = new Uint8Array(await source.save());
   const file = new File([original], "notes.pdf");
-  const displayed = await getDocument({ data: original.slice(), disableFontFace: true }).promise;
+  const displayed = await getDocument({ standardFontDataUrl: fileURLToPath(new URL("../public/pdfjs/standard_fonts/", import.meta.url)), data: original.slice(), disableFontFace: true }).promise;
   try {
     const texts: TextNotesByPage = {};
     for (const page of [1, 2, 3, 4]) {
@@ -176,7 +177,7 @@ test("実PDFの日本語・付箋・改行を0/90/180/270度で出力し、文�
       for (const color of ["1 0 0 rg", "0 0 1 rg", "0 1 0 rg"]) assert.ok(operators.includes(color));
     }
     assert.ok(output.length < 5000000); // フォントをPDF内で共有し、ページごとには複製しない。
-    const result = await getDocument({ data: output.slice(), disableFontFace: true }).promise;
+    const result = await getDocument({ standardFontDataUrl: fileURLToPath(new URL("../public/pdfjs/standard_fonts/", import.meta.url)), data: output.slice(), disableFontFace: true }).promise;
     try {
       for (let page = 1; page <= 4; page++) {
         const resultPage = await result.getPage(page);
@@ -201,5 +202,33 @@ test("実PDFの日本語・付箋・改行を0/90/180/270度で出力し、文�
       }
     } finally { await result.loadingTask.destroy(); }
     assert.deepEqual(new Uint8Array(await file.arrayBuffer()), original);
+  } finally { await displayed.loadingTask.destroy(); }
+});
+
+
+test("下端付近のテキストと付箋は出力位置だけ補正し、高さを超える文章は拒否する", async () => {
+  mock.method(globalThis, "fetch", async () => new Response(bytes));
+  const source = await PDFDocument.create(); source.addPage([400, 600]);
+  const file = new File([new Uint8Array(await source.save())], "edge.pdf");
+  const displayed = await getDocument({ data: new Uint8Array(await file.arrayBuffer()), disableFontFace: true }).promise;
+  try {
+    const texts: TextNotesByPage = { 1: [
+      { ...note, y: 0.999, text: "下端メモ" },
+      { ...note, id: "sticky-edge", kind: "sticky", y: 0.999, text: "下端付箋" },
+    ] };
+    const before = structuredClone(texts);
+    const output = await exportAnnotatedPdf(file, displayed, {}, texts);
+    const parsed = await getDocument({ data: output.slice(), disableFontFace: true }).promise;
+    try {
+      const page = await parsed.getPage(1); const viewport = page.getViewport({ scale: 1 });
+      const content = await page.getTextContent();
+      for (const item of content.items) if ("str" in item && item.str.trim()) {
+        const [, y] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+        assert.ok(y >= 0 && y <= 600, `文字の基準線がページ内: ${y}`);
+      }
+      assert.match(content.items.flatMap((item) => "str" in item ? item.str : []).join(""), /下端メモ.*下端付箋/);
+    } finally { await parsed.loadingTask.destroy(); }
+    assert.deepEqual(texts, before);
+    await assert.rejects(exportAnnotatedPdf(file, displayed, {}, { 1: [{ ...note, text: "長い文章\n".repeat(100) }] }), /ページの高さ/);
   } finally { await displayed.loadingTask.destroy(); }
 });

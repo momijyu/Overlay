@@ -84,11 +84,12 @@ test("途中失敗では成功と残りを表示し、残りを再確認して�
   assert.deepEqual(sent, ["A", "B", "B", "C"]); assert.match(render().html, /3件を保存しました/); close();
 });
 
-test("同名の選択や確認エラーでは保存ボタンを出さず、PDFを読まない", async () => {
+test("同名の選択は識別子付きの保存名を表示し、確認中にはPDFを読まない", async () => {
   sources[1] = { ...sources[1], title: "A" };
   const close = await mount();
-  assert.match(render().html, /同名の「A」/);
-  assert.doesNotMatch(render().html, /まとめて保存|上書きを含めて保存/);
+  assert.match(render().html, /保存名：A \(A\)/);
+  assert.match(render().html, /保存名：A \(B\)/);
+  assert.match(render().html, /まとめて保存/);
   assert.deepEqual(loaded, []); assert.deepEqual(sent, []); close();
 });
 

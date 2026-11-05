@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createBrowserDriveLibrary } from "../driveLibraryRuntime";
-import { readLibraryStatus, resolveLibraryPlacement } from "../driveLibraryLocal";
+import { readLibraryPending, readLibraryStatus, resolveLibraryPlacement } from "../driveLibraryLocal";
 import { LibraryConflict, type LibraryConflictItem, type LibraryEntity, type LibraryScope } from "../driveLibraryData";
 import { listDriveBindings, updateDriveBinding, type DriveBinding } from "../driveOutbox";
 import { subscribeDriveQueue } from "../driveQueueEvents";
 import { DrivePlacementDialog } from "./DrivePlacementDialog";
 import { getGoogleDriveSession } from "../googleDriveSession";
+import { DriveCacheSettings } from "./DriveCacheSettings";
 
 export function driveAutosaveStatus(rows: DriveBinding[], connection: { account: { id: string }; root: { id: string } | null } | null) {
   const pending = rows.filter((row) => row.enabled && row.generation > row.uploadedGeneration);
@@ -41,30 +42,41 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
     const runner = createBrowserDriveLibrary();
     runnerRef.current = runner;
     const canSync = !!navigator.locks && !!crypto.subtle;
+    const showFailure = (cause: unknown) => {
+      if (!active) return;
+      setError(cause instanceof Error ? cause.message : "Drive連携を確認できませんでした。");
+      if (cause instanceof LibraryConflict) void readLibraryStatus().then((library) => {
+        if (active) { setEntities(library.entities); setConflict(cause.conflicts[0]); }
+      }).catch(() => { /* 確認に失敗した場合も既存内容を維持する。 */ });
+    };
+    const run = () => {
+      if (canSync) void runner.tick().then((completed) => { if (active && completed) setError(null); }).catch(showFailure);
+    };
     const refresh = async () => {
-      if (refreshing) return;
+      if (refreshing || !active) return;
       refreshing = true;
       try {
         const current = await listDriveBindings();
+        const connection = session.getConnection();
+        const library = await readLibraryPending();
         if (!active) return;
         setSupported(canSync);
         setRows((previous) => JSON.stringify(previous) === JSON.stringify(current) ? previous : current);
-        setConnected(session.getConnection());
-        const library = await readLibraryStatus();
-        if (!active) return;
-        setScope(library.scope); setEntities(library.entities); setTreePending(library.pending);
-        // 通信が長くても状態取得を止めない。runner自身が同時送信を防ぐ。
-        if (canSync) void runner.tick().then((completed) => { if (active && completed) setError(null); }).catch((cause: unknown) => { if (active) { setError(cause instanceof Error ? cause.message : "Drive連携を確認できませんでした。"); if (cause instanceof LibraryConflict) setConflict(cause.conflicts[0]); } });
-      } catch (cause) {
-        if (active) setError(cause instanceof Error ? cause.message : "Drive自動保存を確認できませんでした。");
-      } finally { refreshing = false; }
+        setConnected((previous) => JSON.stringify(previous) === JSON.stringify(connection) ? previous : connection);
+        setScope((previous) => JSON.stringify(previous) === JSON.stringify(library.scope) ? previous : library.scope);
+        setTreePending(library.pending);
+      } catch (cause) { showFailure(cause); }
+      finally { refreshing = false; }
     };
-    const unsubscribeQueue = subscribeDriveQueue(() => { void refresh(); });
-    const unsubscribeSession = session.subscribe(() => { void refresh(); });
-    const interval = setInterval(() => { void refresh(); }, 1000);
-    window.addEventListener("online", refresh);
-    void refresh();
-    return () => { active = false; clearInterval(interval); unsubscribeQueue(); unsubscribeSession(); window.removeEventListener("online", refresh); runnerRef.current = null; runner.dispose(); };
+    const changed = () => { void refresh(); run(); };
+    const unsubscribeQueue = subscribeDriveQueue(changed);
+    const unsubscribeSession = session.subscribe(changed);
+    // 送信の時刻判定は軽いハートビート。UIは変更通知と別タブ用の低頻度確認で更新する。
+    const heartbeat = setInterval(run, 1000);
+    const interval = setInterval(() => { void refresh(); }, 5000);
+    window.addEventListener("online", changed);
+    changed();
+    return () => { active = false; clearInterval(heartbeat); clearInterval(interval); unsubscribeQueue(); unsubscribeSession(); window.removeEventListener("online", changed); runnerRef.current = null; runner.dispose(); };
   }, []);
   const status = (error ? "Drive連携が停止しています。ノート一覧で確認してください。" : driveAutosaveStatus(rows, connected)) || (treePending ? "Driveへ階層を保存待ち…" : "");
   useEffect(() => {
@@ -74,6 +86,11 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
     return () => window.removeEventListener("beforeunload", warn);
   }, [status]);
   const matchingConnection = connected?.root && (!scope || scope.accountId === connected.account.id && scope.rootId === connected.root.id);
+  function showConflict(cause: LibraryConflict) {
+    void readLibraryStatus().then((library) => {
+      setEntities(library.entities); setConflict(cause.conflicts[0]);
+    }).catch(() => { /* 読み直し失敗時も既存のエラーと内容を残す。 */ });
+  }
   async function retryLibrary() {
     setBusy(true); setError(null);
     try {
@@ -82,7 +99,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
         await updateDriveBinding(row.id, row.key, (live) => ({ ...live, error: undefined, retryAt: undefined, failures: 0 }));
       }
       await runnerRef.current?.tick(true);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Drive一覧を更新できませんでした。"); if (cause instanceof LibraryConflict) setConflict(cause.conflicts[0]); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Drive一覧を更新できませんでした。"); if (cause instanceof LibraryConflict) showConflict(cause); }
     finally { setBusy(false); }
   }
   return <>
@@ -90,7 +107,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
       onChoose={(head) => {
         setBusy(true); setError(null); onMutationChange?.(true);
         void resolveLibraryPlacement(conflict, head).then(() => { setConflict(null); return runnerRef.current?.tick(true); })
-          .catch((cause: unknown) => { setError(cause instanceof Error ? cause.message : "配置を確定できませんでした。"); if (cause instanceof LibraryConflict) setConflict(cause.conflicts[0]); })
+          .catch((cause: unknown) => { setError(cause instanceof Error ? cause.message : "配置を確定できませんでした。"); if (cause instanceof LibraryConflict) showConflict(cause); })
           .finally(() => { setBusy(false); onMutationChange?.(false); });
       }} />}
     <section aria-label="Drive自動保存" className="mx-4 my-3 border-t border-base-300 pt-3">
@@ -103,6 +120,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
       <p className="mt-2 text-xs text-base-content/70">端末ごとに別の保存先を作ります。未送信の間はこのブラウザに保管します。</p>
       {status && <p role="status" className="mt-2 text-xs">{status}</p>}
       {(error || rows.some((row) => row.enabled && row.error)) && <p role="alert" className="mt-2 text-xs text-error">{error || rows.find((row) => row.enabled && row.error)?.error}</p>}
+      <DriveCacheSettings />
     </section>
     {!drawerOpen && status && typeof document !== "undefined" && createPortal(
       <div className="pointer-events-none fixed bottom-3 right-3 z-30 max-w-[calc(100vw-1.5rem)] rounded-box border border-base-300 bg-base-100 px-3 py-2 text-xs shadow-sm" role="status">{status}</div>, document.body)}

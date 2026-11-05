@@ -35,6 +35,20 @@ async function ensureBinding(tx: IDBTransaction, scope: LibraryScope, id: string
     enabled: true, generation: 1, uploadedGeneration: 0, dirtySince: now, changedAt: now } satisfies DriveBinding));
 }
 
+// 本文を実際に保存した1件だけ登録する。閲覧用キャッシュは自動登録しない。
+export async function enrollDriveNote(tx: IDBTransaction, id: string) {
+  const scope = await libraryScope(tx);
+  if (scope) await ensureBinding(tx, scope, id);
+}
+
+export async function checkDriveFolderDeletion(tx: IDBTransaction, folderIds: Set<string>, selectedKeys: Set<string>) {
+  if (!folderIds.size) return;
+  const rows = await readRequest<LibraryEntity[]>(tx.objectStore("driveEntities").getAll());
+  if (rows.some((row) => !row.entry.deleted && row.entry.parentId && folderIds.has(row.entry.parentId) && !selectedKeys.has(row.id))) {
+    throw new Error("フォルダ内に未選択または初回送信中の項目があります。一覧を更新し、送信完了後に選び直してください。");
+  }
+}
+
 // 通常の階層変更と同じトランザクション。名前やパスをIDとして使わない。
 export async function recordDriveLibrary(tx: IDBTransaction, enrollNotes = true) {
   const scope = await libraryScope(tx); if (!scope) return;
@@ -78,7 +92,7 @@ export async function enableDriveLibrary(accountId: string, rootId: string) {
     if (previous && (previous.accountId !== accountId || previous.rootId !== rootId)) throw new Error("別アカウントの階層が保存されています。元のアカウントへ接続してください。");
     const scope = { ...previous, accountId, rootId, deviceId: await libraryDevice(tx) };
     await readRequest(tx.objectStore("driveSettings").put({ id: "library", value: scope }));
-    await recordDriveLibrary(tx);
+    await recordDriveLibrary(tx, !previous);
     if (!previous) {
       const store = tx.objectStore("driveBindings");
       for (const row of await readRequest<DriveBinding[]>(store.getAll())) {
@@ -104,6 +118,14 @@ export async function registerLibrarySource(binding: DriveBinding, fileName: str
     await queueEvent(tx, { schemaVersion: 1, kind: "overlay-library-event", id: crypto.randomUUID(), deviceId: binding.deviceId, changes: [], source });
     await readRequest(store.put({ ...row, sources: [...row.sources, source] }));
   }, false);
+}
+
+// ハートビートでは階層全件を取得せず、小さな送信待ちフラグだけ確認する。
+export async function readLibraryPending() {
+  return withLocalTransaction(["driveSettings"], "readonly", async (tx) => ({
+    scope: await libraryScope(tx),
+    pending: !!(await readRequest<{ value: boolean } | undefined>(tx.objectStore("driveSettings").get("tree-pending")))?.value,
+  }));
 }
 
 export async function readLibraryStatus() {
@@ -153,8 +175,11 @@ export async function applyDriveLibrary(scope: LibraryScope, merged: Map<string,
         const summary = await readRequest<SavedNoteSummary | undefined>(summaryStore.get(row.entry.id));
         if (summary || row.sources.length) await readRequest(summaryStore.put({ ...summary, id: row.entry.id, title: row.entry.name,
           folderId: row.entry.parentId, fileName: summary?.fileName ?? row.sources[0].fileName, updatedAt: summary?.updatedAt ?? new Date().toISOString() }));
-        const note = await readRequest<Record<string, unknown> | undefined>(tx.objectStore("notes").get(row.entry.id));
-        if (note) await readRequest(tx.objectStore("notes").put({ ...note, title: row.entry.name, folderId: row.entry.parentId }));
+        // 変わっていない階層同期で全ノート本文を読み直さない。
+        if (!old || old.entry.name !== row.entry.name || old.entry.parentId !== row.entry.parentId) {
+          const note = await readRequest<Record<string, unknown> | undefined>(tx.objectStore("notes").get(row.entry.id));
+          if (note) await readRequest(tx.objectStore("notes").put({ ...note, title: row.entry.name, folderId: row.entry.parentId }));
+        }
       }
       const listed = row.entry.kind === "folder" || !!await readRequest(tx.objectStore("noteSummaries").getKey(row.entry.id));
       await readRequest(store.put({ ...old, ...row, listed }));

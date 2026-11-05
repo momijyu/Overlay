@@ -16,11 +16,15 @@ import { NotebookMoveDialog } from "./NotebookMoveDialog";
 import { NotebookDeleteDialog } from "./NotebookDeleteDialog";
 import { StickyNotesPanel } from "./StickyNotesPanel";
 import type { CurrentStickyOutline } from "../stickyOutline";
+import { readNoteDriveStatuses, type NoteDriveStatus } from "../noteDriveStatus";
+import { subscribeDriveQueue } from "../driveQueueEvents";
 
 type SidebarProps = {
   refreshVersion: number;
   onDestinationChange?: (id: string | null) => void;
   currentNoteId: string | null;
+  currentNoteSaveState?: "pending" | "warning";
+  visible?: boolean;
   disabled: boolean;
   onOpen: (note: SavedNoteSummary) => void;
   onRenamed: (id: string, title: string) => void;
@@ -70,6 +74,8 @@ export function NotebookSidebar(props: SidebarProps) {
   const touchFrame = useRef<number | null>(null);
   const [deleting, setDeleting] = useState<{ items: NoteDragItem[]; library: NoteLibrary } | null>(null);
   const [driveLinked, setDriveLinked] = useState(false);
+  const [driveStatuses, setDriveStatuses] = useState<Record<string, NoteDriveStatus>>({});
+  const [driveStatusError, setDriveStatusError] = useState<string | null>(null);
   const { onDestinationChange } = props;
   const isLoading = result.key !== requestKey;
   const selected = selection === "root" ? null : selection ?? (
@@ -89,6 +95,37 @@ export function NotebookSidebar(props: SidebarProps) {
   const checkedNotes = result.library.notes.filter((note) => checkedItems.has(`note:${note.id}`));
 
   useEffect(() => subscribeLibraryChanged(() => setRetry((value) => value + 1)), []);
+
+  useEffect(() => {
+    if (props.visible === false) return;
+    let active = true; let reading = false; let again = false;
+    async function refresh() {
+      if (!active) return;
+      if (reading) { again = true; return; }
+      reading = true;
+      try {
+        const statuses = await readNoteDriveStatuses();
+        if (active) {
+          setDriveStatuses((previous) => JSON.stringify(previous) === JSON.stringify(statuses) ? previous : statuses);
+          setDriveStatusError(null);
+        }
+      } catch {
+        if (active) { setDriveStatuses({}); setDriveStatusError("Driveの保存状態を確認できませんでした。"); }
+      } finally {
+        reading = false;
+        if (again && active) { again = false; void refresh(); }
+      }
+    }
+    const unsubscribeQueue = subscribeDriveQueue(() => { void refresh(); });
+    const unsubscribeLibrary = subscribeLibraryChanged(() => { void refresh(); });
+    const interval = setInterval(() => { void refresh(); }, 5000);
+    void refresh();
+    return () => { active = false; clearInterval(interval); unsubscribeQueue(); unsubscribeLibrary(); };
+  }, [props.visible]);
+
+  const shownDriveStatuses = props.currentNoteId && props.currentNoteSaveState && driveStatuses[props.currentNoteId]
+    ? { ...driveStatuses, [props.currentNoteId]: driveStatuses[props.currentNoteId] === "warning" ? "warning" as const : props.currentNoteSaveState }
+    : driveStatuses;
 
   useEffect(() => { onDestinationChange?.(selectedFolder?.id ?? selectedNote?.folderId ?? null); }, [onDestinationChange, selectedFolder?.id, selectedNote?.folderId]);
 
@@ -542,6 +579,7 @@ export function NotebookSidebar(props: SidebarProps) {
         </div>}
         {moveMessage && <p role="status" className="text-sm">{moveMessage}</p>}
         {moveError && !action && !bulkMoving && !deleting && <p role="alert" className="text-error">{moveError}</p>}
+        {driveStatusError && <p role="alert" className="text-xs text-error">{driveStatusError}</p>}
         {isLoading ? <p role="status">読み込み中…</p>
           : result.error ? <p role="alert" className="text-error">{result.error}</p>
           : (
@@ -563,6 +601,7 @@ export function NotebookSidebar(props: SidebarProps) {
                   onDragOver={(event) => dragOver(event, null)} onDragLeave={dragLeave}
                   onDrop={(event) => drop(event, null)}>
                   <NotebookTree tree={result.tree} expanded={expanded} currentNoteId={props.currentNoteId}
+                    driveStatuses={shownDriveStatuses}
                     selected={selected} onSelect={(item) => {
                       // ノートを開く操作は実際の表示中IDに追従する。切り替えをキャンセルしても対象がずれない。
                       setSelection(item.kind === "note" ? null : item);

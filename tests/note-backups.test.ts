@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import test, { beforeEach, afterEach, mock } from "node:test";
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
@@ -205,10 +206,10 @@ test("復元したノートを部分消去・自動保存・再読み込みし�
     assert.equal(url, "/fonts/NotoSansJP-Regular.otf");
     return new Response(fontBytes);
   });
-  const displayed = await getDocument({ data: new Uint8Array(await reopened.file.arrayBuffer()), disableFontFace: true }).promise;
+  const displayed = await getDocument({ standardFontDataUrl: fileURLToPath(new URL("../public/pdfjs/standard_fonts/", import.meta.url)), data: new Uint8Array(await reopened.file.arrayBuffer()), disableFontFace: true }).promise;
   try {
     const output = await exportAnnotatedPdf(reopened.file, displayed, reopened.strokesByPage, reopened.textsByPage);
-    const parsed = await getDocument({ data: output.slice(), disableFontFace: true }).promise;
+    const parsed = await getDocument({ standardFontDataUrl: fileURLToPath(new URL("../public/pdfjs/standard_fonts/", import.meta.url)), data: output.slice(), disableFontFace: true }).promise;
     try {
       assert.equal(parsed.numPages, 2);
       const content = await (await parsed.getPage(2)).getTextContent();

@@ -19,6 +19,7 @@ let refCursor = 0;
 let deleteFails = false;
 let openFails = false;
 let pdfFails = false;
+const documentOptions: { standardFontDataUrl?: string }[] = [];
 let persistFails = false;
 let persistWait: Promise<void> | null = null;
 let exportFails = true;
@@ -97,7 +98,7 @@ mock.module("@/features/pdf-editor/noteBackupFile", { exports: {
 } });
 mock.module("pdfjs-dist/legacy/build/pdf.mjs", { exports: {
   GlobalWorkerOptions: {},
-  getDocument: () => ({ promise: pdfFails ? Promise.reject(new Error("PDF解析失敗")) : Promise.resolve(pdf), destroy: async () => {} }),
+  getDocument: (options: { standardFontDataUrl?: string }) => { documentOptions.push(options); return ({ promise: pdfFails ? Promise.reject(new Error("PDF解析失敗")) : Promise.resolve(pdf), destroy: async () => {} }); },
 } });
 mock.module("@/features/pdf-editor/exportAnnotatedPdf", { exports: {
   exportAnnotatedPdf: async (_file: unknown, _pdf: unknown, strokes: Record<number, PenStroke[]>, texts?: TextNotesByPage, pages?: NotePage[]) => {
@@ -510,7 +511,8 @@ test("スマホの書き出しメニューにPDFダウンロードと保管案�
   assert.ok(find(menu, (element) => element.type === "button" && (element.props as { children?: string }).children === "PDFをダウンロード"));
   assert.ok(find(menu, (element) => "data-pdf-backup-notice" in (element.props as Record<string, unknown>)));
   const desktop = find(editorRow("actions"), (element) => element.type === "button" && (element.props as { children?: string }).children === "PDFをダウンロード")!;
-  assert.match((desktop.props as React.ComponentProps<"button">).className!, /desktop-only/);
+  assert.doesNotMatch((desktop.props as React.ComponentProps<"button">).className!, /desktop-only/);
+  assert.ok(find(editorRow("actions"), (element) => (element.props as { className?: string }).className?.includes("desktop-only") === true && !!find(element, (child) => child.type === "button" && (child.props as { children?: string }).children === "PDFをダウンロード")));
 });
 
 test("長いノート名・保存中・保存完了でも道具の行は移動させず、状態は名前横の同じ欄に表示する", async () => {
@@ -1175,4 +1177,11 @@ test("付箋から別資料へ移動する前に未保存内容を待ち、破�
     if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
     else Reflect.deleteProperty(globalThis, "window");
   }
+});
+
+
+test("PDF読み込みには同梱の標準フォント配信先を指定する", async () => {
+  setup(); const before = documentOptions.length; await openOther();
+  assert.ok(documentOptions.length > before);
+  assert.equal(documentOptions.at(-1)!.standardFontDataUrl, "/pdfjs/standard_fonts/");
 });

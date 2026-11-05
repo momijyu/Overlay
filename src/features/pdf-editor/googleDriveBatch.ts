@@ -5,6 +5,7 @@ import { singleDriveNote, type DriveNoteSummary, type DriveOverwriteTarget } fro
 export type DriveSaveSource = { id: string; title: string; load: () => Promise<NoteBackup> };
 export type DriveBatchEntry = {
   source: DriveSaveSource; target?: DriveOverwriteTarget | null;
+  saveTitle?: string;
   status: "unchecked" | "ready" | "saving" | "saved" | "failed";
   error?: string;
 };
@@ -17,13 +18,24 @@ export function createDriveBatch(sources: DriveSaveSource[]): DriveBatchEntry[] 
   if (!sources.length || sources.length > 200 || new Set(sources.map((source) => source.id)).size !== sources.length) {
     throw new Error("保存するノートは1〜200件で選択してください。");
   }
-  const titles = new Set<string>();
+  const titles = new Map<string, number>();
   for (const source of sources) {
     if (!source.id || !source.title.trim() || [...source.title].length > 120 || /\p{Cc}/u.test(source.title)) throw new Error("保存するノート名が不正です。");
-    if (titles.has(source.title)) throw new Error(`選択したノートに同名の「${source.title}」があります。名前を変更してから保存してください。`);
-    titles.add(source.title);
+    titles.set(source.title, (titles.get(source.title) ?? 0) + 1);
   }
-  return sources.map((source) => ({ source: { ...source }, status: "unchecked" }));
+  const used = new Set(sources.map((source) => source.title));
+  return sources.map((source) => {
+    if (titles.get(source.title) === 1) return { source: { ...source }, status: "unchecked" };
+    const id = [...source.id.replace(/\p{Cc}/gu, "_")].slice(0, 40).join("");
+    let suffix = ` (${id})`, saveTitle = "", index = 1;
+    for (;;) {
+      saveTitle = [...source.title].slice(0, 120 - [...suffix].length).join("") + suffix;
+      if (!used.has(saveTitle)) break;
+      suffix = ` (${id}-${index++})`;
+    }
+    used.add(saveTitle);
+    return { source: { ...source }, saveTitle, status: "unchecked" };
+  });
 }
 
 export async function prepareDriveBatch(entries: DriveBatchEntry[], access: DriveBatchAccess, account: string, root: string,
@@ -34,7 +46,7 @@ export async function prepareDriveBatch(entries: DriveBatchEntry[], access: Driv
     if (result[index].status === "saved") continue;
     const entry = result[index];
     try {
-      const target = await access.findSaveTargetByTitle(account, root, entry.source.title);
+      const target = await access.findSaveTargetByTitle(account, root, entry.saveTitle ?? entry.source.title);
       if (!active()) return result;
       result[index] = { ...entry, target, status: "ready" };
     } catch (error) {
@@ -64,7 +76,8 @@ export async function saveDriveBatch(entries: DriveBatchEntry[], access: DriveBa
       const backup = await entry.source.load();
       if (!active()) return;
       if (singleDriveNote(backup).title !== entry.source.title) throw new Error("確認後にノート名が変わりました。一覧から選び直してください。");
-      const note = await access.saveConfirmedNote(account, root, backup, entry.target!);
+      const data = entry.saveTitle ? { ...backup, name: entry.saveTitle, notes: [{ ...singleDriveNote(backup), title: entry.saveTitle }] } : backup;
+      const note = await access.saveConfirmedNote(account, root, data, entry.target!);
       if (!active()) return;
       result[index] = { ...entry, status: "saved", error: undefined };
       update([...result]); saved(note);

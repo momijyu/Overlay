@@ -68,6 +68,8 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
   let savingNote = false;
   let cancellationVersion = 0;
   let rootLookup: { token: string; accountId: string; result: Promise<GoogleDriveRoot | null> } | null = null;
+  // 取得先の確認だけを短期間共有する。手動の接続確認と本文の競合検証は省略しない。
+  let checkedRoot: { token: string; accountId: string; root: GoogleDriveRoot; at: number } | null = null;
   const pending = new Set<AbortController>();
 
   function currentToken() {
@@ -154,7 +156,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
   }
 
   async function getAccount(): Promise<GoogleDriveAccount> {
-    verified = null;
+    verified = null; checkedRoot = null;
     const token = currentToken();
     const value = object(await request("about", { fields: "user(permissionId,displayName,emailAddress,me)" }, token));
     const user = object(value.user);
@@ -175,13 +177,18 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     if (value.incompleteSearch === true) throw new Error("専用フォルダを検索しきれませんでした。接続確認をやり直してください。");
     if (!Array.isArray(value.files)) throw new Error(INVALID_RESPONSE);
     if (value.nextPageToken || value.files.length > 1) {
-      throw new Error("Overlay専用フォルダが複数あります。自動選択せず停止しました。");
+      throw new Error("Overlay専用フォルダが複数あります。使用していたフォルダをマイドライブ直下に1つ残し、それ以外は別の場所へ移動してから再接続してください。フォルダやデータの削除・統合は不要です。");
     }
     return value.files.length ? root(value.files[0]) : null;
     })();
     const lookup = { token, accountId, result };
     rootLookup = lookup;
-    try { return await result; }
+    try {
+      const value = await result;
+      assertToken(token);
+      checkedRoot = value ? { token, accountId, root: value, at: Date.now() } : null;
+      return value;
+    } catch (error) { checkedRoot = null; throw error; }
     finally { if (rootLookup === lookup) rootLookup = null; }
   }
 
@@ -209,7 +216,9 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
   async function noteAccess(accountId: string, rootId: string): Promise<DriveNoteAccess> {
     const operationVersion = cancellationVersion;
     const token = accountToken(accountId);
-    const currentRoot = await findRoot(accountId);
+    const currentRoot = checkedRoot?.token === token && checkedRoot.accountId === accountId
+      && checkedRoot.root.id === rootId && Date.now() - checkedRoot.at < 30000
+      ? checkedRoot.root : await findRoot(accountId);
     assertToken(token);
     assertOperation(operationVersion);
     if (!currentRoot || currentRoot.id !== rootId) throw new Error("専用フォルダが変更されました。接続確認をやり直してください。");
@@ -317,7 +326,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
 
   function cancelPending() {
     cancellationVersion++;
-    rootLookup = null;
+    rootLookup = null; checkedRoot = null;
     for (const controller of pending) controller.abort();
     pending.clear();
   }

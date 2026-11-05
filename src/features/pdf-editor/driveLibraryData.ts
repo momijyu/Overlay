@@ -6,7 +6,7 @@ export type LibrarySource = { logicalId: string; noteId: string; noteKey: string
 export type LibraryEvent = { schemaVersion: 1; kind: "overlay-library-event"; id: string; deviceId: string;
   changes: { before: string | string[] | null; entry: LibraryEntry }[]; source?: LibrarySource };
 export type LibraryEntity = { id: string; entry: LibraryEntry; head: string; sources: LibrarySource[];
-  listed?: boolean; cachedSource?: string; cachedVersion?: string; cachedBytes?: number; lastUsed?: number };
+  listed?: boolean; cachedSource?: string; cachedVersion?: string; cachedBytes?: number; lastUsed?: number; cacheWarning?: string };
 export type LibraryEventRow = { id: string; event: LibraryEvent; fileId?: string; hash?: string; sent: boolean };
 export type LibraryConflictItem = { key: string; versions: { head: string; deviceId: string; entry: LibraryEntry }[] };
 export class LibraryConflict extends Error {

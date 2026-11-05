@@ -11,6 +11,8 @@ let cursor = 0;
 let refCursor = 0;
 let effects: (() => void | (() => void))[] = [];
 let cleanups: (() => void)[] = [];
+let effectCursor = 0;
+let effectSlots: { deps?: unknown[]; cleanup?: () => void }[] = [];
 mock.module("react", { exports: {
   ...React,
   useState: <T,>(initial: T) => {
@@ -18,7 +20,11 @@ mock.module("react", { exports: {
     return [slot.value, (next: T) => { slot.value = next; }];
   },
   useRef: (initial: unknown) => refs[refCursor++] ??= { current: initial },
-  useEffect: (effect: () => void | (() => void)) => { effects.push(effect); },
+  useEffect: (effect: () => void | (() => void), deps?: unknown[]) => {
+    const index = effectCursor++; const previous = effectSlots[index];
+    if (deps && previous?.deps && deps.length === previous.deps.length && deps.every((dep, i) => Object.is(dep, previous.deps![i]))) return;
+    effects.push(() => { previous?.cleanup?.(); const cleanup = effect(); effectSlots[index] = { deps, cleanup: cleanup || undefined }; });
+  },
 } });
 const { TextBoxEditor } = await import("@/features/pdf-editor/components/TextBoxEditor");
 const { TextSizeControl } = await import("@/features/pdf-editor/components/TextSizeControl");
@@ -45,7 +51,7 @@ let win: Events;
 const oldDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 const oldWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 beforeEach(() => {
-  states = []; refs = []; cursor = 0; refCursor = 0; effects = []; cleanups = [];
+  states = []; refs = []; cursor = 0; refCursor = 0; effects = []; cleanups = []; effectCursor = 0; effectSlots = [];
   doc = new Events(); win = new Events();
   Object.defineProperty(globalThis, "document", { value: doc, configurable: true });
   Object.defineProperty(globalThis, "window", { value: win, configurable: true });
@@ -74,13 +80,13 @@ function fixture(existing = true, initial = note, openedByPointer = false) {
   const root = { contains: (target: unknown) => target === inside,
     parentElement: { style: { setProperty: (name: string, value: string) => cssVariables.set(name, value) } } };
   function render() {
-    cleanups.forEach((cleanup) => cleanup()); cleanups = [];
-    cursor = 0; refCursor = 0; effects = [];
+    cursor = 0; refCursor = 0; effectCursor = 0; effects = [];
     const tree = TextBoxEditor({ note: initial, font, pageWidth: 400, pageHeight: 600, pageScale: 1.5, existing, openedByPointer,
       onCommit: (next) => { commits.push(next); }, onCancel: () => { cancelled++; }, onDelete: () => { removed++; } });
     refs[0].current = root;
     refs[1].current = { focus: () => { focused++; } };
-    for (const effect of effects) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); }
+    for (const effect of effects) effect();
+    cleanups = effectSlots.flatMap((slot) => slot.cleanup ? [slot.cleanup] : []);
     return tree;
   }
   function input() { return find(render(), (element) => element.type === "textarea")!.props as React.ComponentProps<"textarea">; }
@@ -255,6 +261,7 @@ test("ページ・道具・PDF出力等の外部クリックより前に確定�
 
 test("非対応文字・空の既存文章・長すぎる文章は草稿を残し、外部操作を止める", () => {
   for (const text of ["😀", " ", "文".repeat(2001), "行\n".repeat(100)]) {
+    cleanups.forEach((cleanup) => cleanup()); cleanups = []; effectSlots = [];
     states = []; refs = [];
     const f = fixture();
     f.change(text);
@@ -359,4 +366,17 @@ test("サイズ変更のキャンセルと、範囲外・変換中・ページ�
   f.key("Escape");
   assert.equal(f.getCancelled(), 1);
   assert.equal(f.commits.length, 0);
+});
+
+
+test("入力と文字サイズ変更でも外側操作の監視を再登録せず、最新の草稿を確定する", () => {
+  const f = fixture(); f.render();
+  const pointer = [...doc.listeners.get("pointerdown")!][0];
+  const leaving = [...win.listeners.get("pagehide")!][0];
+  f.change("最新の草稿"); f.size().onChange(28); f.render();
+  assert.equal([...doc.listeners.get("pointerdown")!][0], pointer);
+  assert.equal([...win.listeners.get("pagehide")!][0], leaving);
+  assert.equal(doc.listeners.get("pointerdown")!.size, 1);
+  doc.emit("pointerdown");
+  assert.equal(f.commits[0].text, "最新の草稿"); assert.equal(f.commits[0].fontSize, 28);
 });

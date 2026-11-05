@@ -195,12 +195,17 @@ body {
 
 .notebook-tree .notebook-row {
   display: grid;
-  grid-template-columns: 0.75rem minmax(0, 1fr);
+  grid-template-columns: 0.75rem minmax(0, 1fr) auto;
   gap: 0.5rem;
   align-items: center;
   min-height: 1.875rem;
   padding-inline: 0.5rem;
   font-size: 0.875rem;
+}
+
+.notebook-tree .notebook-drive-status {
+  grid-column: 3;
+  grid-row: 1;
 }
 
 @media (pointer: coarse) {

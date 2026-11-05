@@ -5,7 +5,7 @@
   "browserslist": "> 1%",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "test": "node --experimental-test-module-mocks --import ./tests/register.ts --test tests/*.test.ts",
     "lint": "eslint",
@@ -32,5 +32,6 @@
     "fake-indexeddb": "^6.2.5",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3"
-  }
+  },
+  "type": "module"
 }

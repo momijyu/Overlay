@@ -51,6 +51,7 @@ export function GoogleDriveBatchSave({ sources, drive, accountId, rootId, disabl
     <ul className="max-h-48 space-y-2 overflow-y-auto">
       {entries.map((entry) => <li key={entry.source.id} className="break-words">
         <span>{entry.source.title}</span>
+        {entry.saveTitle && <p className="text-xs text-base-content/70">保存名：{entry.saveTitle}</p>}
         <span className="ms-2 text-xs">{entry.status === "saved" ? "保存済み" : entry.status === "saving" ? "保存中…"
           : entry.status === "failed" ? "要確認" : entry.target === undefined ? "未確認" : entry.target ? "上書き" : "新規"}</span>
         {entry.error && <p role="alert" className="mt-1 text-xs text-error">{entry.error}</p>}

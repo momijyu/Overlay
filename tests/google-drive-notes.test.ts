@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { afterEach } from "node:test";
+import test, { afterEach, mock } from "node:test";
 import { createGoogleDriveClient } from "@/features/pdf-editor/googleDriveClient";
 import { DRIVE_NOTE_SUFFIX } from "@/features/pdf-editor/googleDriveNoteData";
 import { reserveDriveIds, sendDriveAutosave, sha256 } from "@/features/pdf-editor/driveAutosaveRemote";
@@ -19,7 +19,7 @@ const backup: NoteBackup = { schemaVersion: 1, kind: "note", name: "講義メモ
 type Stored = Record<string, unknown> & { id: string; data?: Blob; appProperties: Record<string, string> };
 type Call = { url: URL; init: RequestInit };
 const clients: ReturnType<typeof createGoogleDriveClient>[] = [];
-afterEach(() => { clients.splice(0).forEach((client) => client.dispose()); });
+afterEach(() => { clients.splice(0).forEach((client) => client.dispose()); mock.restoreAll(); });
 
 async function multipart(call: Call): Promise<{ metadata: Record<string, unknown> & { appProperties: Record<string, string> }; data: Blob }> {
   assert.ok(call.init.body instanceof Blob);
@@ -417,7 +417,8 @@ test("大きいJSONの上書きは対象IDのresumable更新を使い、元PDF�
   assert.deepEqual(loaded.notes[0].strokesByPage, large.notes[0].strokesByPage);
 });
 
-test("同時の一覧・保存先確認はルートの検索中通信だけ共有し、完了後は再検証する", async () => {
+test("同時の一覧・保存先確認はルート検索を共有し、30秒後と明示確認では再検証する", async () => {
+  let now = Date.now(); mock.method(Date, "now", () => now);
   const f = await verified();
   f.intercept(async ({ url }) => {
     if (url.searchParams.get("q")?.includes("value='root'")) await new Promise(setImmediate);
@@ -427,7 +428,12 @@ test("同時の一覧・保存先確認はルートの検索中通信だけ共�
   const roots = () => f.calls.filter(({ url }) => url.searchParams.get("q")?.includes("value='root'"));
   assert.equal(roots().length, 1);
   await f.client.listNotes("account_A", root.id);
+  assert.equal(roots().length, 1);
+  now += 30000;
+  await f.client.listNotes("account_A", root.id);
   assert.equal(roots().length, 2);
+  await f.client.findRoot("account_A");
+  assert.equal(roots().length, 3);
 });
 
 test("一括用の名前確認はPDFも編集本文も取得せず、新規・既存を判定する", async () => {

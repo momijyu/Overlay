@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { beforeEach } from "node:test";
 import { mock } from "node:test";
-import { IDBFactory } from "fake-indexeddb";
+import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { getLibraryScope, enableDriveLibrary } from "@/features/pdf-editor/driveLibraryLocal";
 import { createNoteFolder, saveLocalNote } from "@/features/pdf-editor/localNotes";
 import { listDriveBindings } from "@/features/pdf-editor/driveOutbox";
@@ -11,7 +11,7 @@ let connection: Connection | null;
 let actualAccount: string;
 let token: string;
 let accountChecks = 0;
-let syncs = 0;
+let syncs = 0; let prunes = 0;
 let loseConnection = false;
 const session = { getConnection: () => connection, auth: { getAccessToken: () => token } };
 mock.module("@/features/pdf-editor/googleDriveSession", { exports: { getGoogleDriveSession: () => session } });
@@ -21,13 +21,13 @@ mock.module("@/features/pdf-editor/googleDriveClient", { exports: { createGoogle
 }) } });
 mock.module("@/features/pdf-editor/driveAutosave", { exports: { createBrowserDriveAutosave: () => ({ async tick() {}, dispose() {} }) } });
 mock.module("@/features/pdf-editor/driveLibraryRemote", { exports: { async syncDriveLibrary() { syncs++; } } });
-mock.module("@/features/pdf-editor/driveLibraryCache", { exports: { async pruneDriveCache() {} } });
+mock.module("@/features/pdf-editor/driveLibraryCache", { exports: { async pruneDriveCache() { prunes++; } } });
 const { createBrowserDriveLibrary } = await import("@/features/pdf-editor/driveLibraryRuntime");
 beforeEach(() => {
   Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: new IDBFactory() });
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: { locks: { async request(_name: string, _options: unknown, work: (lock: object) => Promise<void>) { await work({}); } } } });
   connection = { account: { id: "account" }, root: { id: "root" } };
-  actualAccount = "account"; token = "token"; accountChecks = 0; syncs = 0; loseConnection = false;
+  actualAccount = "account"; token = "token"; accountChecks = 0; syncs = 0; prunes = 0; loseConnection = false; mock.restoreAll();
 });
 
 test("接続先確認後、ノート未選択でも全既存ノートを自動登録し、新規ノートも対象にする", async () => {
@@ -72,4 +72,18 @@ test("同じアカウントへの再接続は認可を再検証し、同じラ�
   connection = { account: { id: "account" }, root: { id: "root" } }; token = "renewed";
   await runner.tick(true);
   assert.equal((await getLibraryScope())?.deviceId, scope?.deviceId); assert.equal(accountChecks, 2); assert.equal(syncs, 2); runner.dispose();
+});
+
+
+test("待機中の時刻確認では階層全件を走査せず、キャッシュ整理は30秒ごとに制限する", async () => {
+  let now = Date.now(); mock.method(Date, "now", () => now);
+  const runner = createBrowserDriveLibrary(); await runner.tick();
+  const getAll = IDBObjectStore.prototype.getAll; const scans: string[] = [];
+  mock.method(IDBObjectStore.prototype, "getAll", function (this: IDBObjectStore, ...args: Parameters<typeof getAll>) {
+    scans.push(this.name); return getAll.apply(this, args);
+  });
+  for (let i = 0; i < 5; i++) { now += 1000; await runner.tick(); }
+  assert.deepEqual(scans, []); assert.equal(prunes, 1); assert.equal(syncs, 1);
+  now += 30000; await runner.tick(); assert.equal(prunes, 2); assert.equal(syncs, 2);
+  runner.dispose(); mock.restoreAll();
 });

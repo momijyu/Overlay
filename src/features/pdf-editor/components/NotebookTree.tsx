@@ -5,6 +5,8 @@ import type { DragEvent } from "react";
 import { noteItemKey, type NoteDragItem } from "../noteDrag";
 import type { NoteTree } from "../noteTree";
 import type { SavedNoteSummary } from "../types";
+import type { NoteDriveStatus } from "../noteDriveStatus";
+import { NotebookDriveBadge } from "./NotebookDriveBadge";
 
 export type NotebookTreeProps = {
   tree: NoteTree;
@@ -26,6 +28,7 @@ export type NotebookTreeProps = {
   selectionMode?: boolean;
   checkedItems?: Set<string>;
   onCheck?: (item: NoteDragItem) => void;
+  driveStatuses?: Record<string, NoteDriveStatus>;
 };
 
 export function NotebookTree(props: NotebookTreeProps) {
@@ -84,7 +87,8 @@ export function NotebookTree(props: NotebookTreeProps) {
               if (props.selectionMode) { props.onCheck?.({ kind: "note", id: note.id }); return; }
               props.onSelect({ kind: "note", id: note.id });
               if (note.id !== props.currentNoteId) props.onOpen(note);
-            }}><span className="notebook-label">{note.title}</span></button>
+            }}><span className="notebook-label">{note.title}</span>
+            {props.driveStatuses?.[note.id] && <NotebookDriveBadge status={props.driveStatuses[note.id]} />}</button>
         </li>
       ))}
     </>

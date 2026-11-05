@@ -1,6 +1,8 @@
 import { readRequest, withLocalTransaction } from "./localDatabase";
 import { getLibraryScope } from "./driveLibraryLocal";
 import type { LibraryEntity, LibrarySource } from "./driveLibraryData";
+import { queueDriveCacheCheck } from "./driveCacheChecks";
+import { DEFAULT_DRIVE_CACHE_MB, readDriveCacheLimit } from "./driveCacheSettings";
 import type { DriveBinding } from "./driveOutbox";
 import type { NoteBackup } from "./noteBackupData";
 import { toLocalNoteSummary } from "./localNoteSummary";
@@ -8,14 +10,25 @@ import { getGoogleDriveSession } from "./googleDriveSession";
 import { loadDriveNoteDetails } from "./googleDriveNotes";
 import { driveNoteSummary, driveObject, DRIVE_NOTE_FIELDS } from "./googleDriveNoteData";
 
-export const DRIVE_CACHE_LIMIT = 500_000_000;
-const activeNotes = new Set<string>();
+export const DRIVE_CACHE_LIMIT = DEFAULT_DRIVE_CACHE_MB * 1_000_000;
+export const DRIVE_CACHE_RETENTION_MS = 30 * 60 * 1000;
+const activeNotes = new Map<string, number>();
 // Web Locksはクラッシュでも自動解放される。別タブで開いているノートも整理対象にしない。
 export function pinDriveNote(id: string) {
-  activeNotes.add(id); let release: (() => void) | undefined; let closed = false;
+  activeNotes.set(id, (activeNotes.get(id) ?? 0) + 1); let release: (() => void) | undefined; let closed = false;
   if (typeof navigator !== "undefined" && navigator.locks) void navigator.locks.request(`overlay-note-use-${id}`, { mode: "shared" }, () =>
     new Promise<void>((resolve) => { if (closed) resolve(); else release = resolve; })).catch(() => { /* ロック失敗時もこの画面の本文は保護する。整理側はロックを取得できた場合だけ動く。 */ });
-  return () => { closed = true; activeNotes.delete(id); release?.(); };
+  return () => {
+    if (closed) return;
+    closed = true;
+    const remaining = (activeNotes.get(id) ?? 1) - 1;
+    if (remaining > 0) { activeNotes.set(id, remaining); release?.(); }
+    else {
+      activeNotes.delete(id);
+      // 長時間開いたノートも、閉じた時点から保持時間を数える。
+      void touch(id).catch(() => { /* 本文は変更しない。失敗しても既存の保存内容を残す。 */ }).finally(() => release?.());
+    }
+  };
 }
 export class DriveVersionRequired extends Error {
   noteId: string; title: string; sources: LibrarySource[];
@@ -32,10 +45,10 @@ export async function markUploadedCache(binding: DriveBinding, backup: NoteBacku
     if (!row || row.entry.deleted || !current || current.key !== binding.key || current.generation !== binding.generation) return;
     const note = await readRequest(tx.objectStore("notes").get(binding.id));
     await readRequest(store.put({ ...row, cachedSource: binding.ids!.note, cachedVersion: version,
-      cachedBytes: backup.notes[0].pdf.size + new Blob([JSON.stringify(note)]).size, lastUsed: row.lastUsed ?? Date.now() }));
+      cacheWarning: undefined, cachedBytes: backup.notes[0].pdf.size + new Blob([JSON.stringify(note)]).size, lastUsed: row.lastUsed ?? Date.now() }));
   }, false);
 }
-export async function hydrateDriveNote(id: string, sourceId?: string) {
+export async function hydrateDriveNote(id: string, sourceId?: string, preferCached = false, allowCached = false) {
   const initial = await withLocalTransaction(["driveEntities", "driveBindings", "notes", "pdfs"], "readonly", async (tx) => ({
     entity: await readRequest<LibraryEntity | undefined>(tx.objectStore("driveEntities").get(`note:${id}`)),
     binding: await readRequest<DriveBinding | undefined>(tx.objectStore("driveBindings").get(id)),
@@ -53,6 +66,8 @@ export async function hydrateDriveNote(id: string, sourceId?: string) {
     if (initial.hasBody) return;
     throw new Error("Driveへの初回保存が完了していません。");
   }
+  // 一括書き出しは、利用者が既に選んだ版を使う。未知の版を勝手に選ばない。
+  if (preferCached && !sourceId && initial.hasBody && entity.sources.some((source) => source.noteId === entity.cachedSource)) sourceId = entity.cachedSource;
   if (!sourceId && entity.sources.length > 1) {
     const scope = await getLibraryScope(); const session = getGoogleDriveSession(); const connection = session.getConnection();
     const sources = [...entity.sources];
@@ -71,6 +86,13 @@ export async function hydrateDriveNote(id: string, sourceId?: string) {
   }
   const source = sourceId ? entity.sources.find((s) => s.noteId === sourceId) : entity.sources[0];
   if (!source) throw new Error("選択したDriveの版が見つかりません。");
+  // 選択済みのキャッシュを先に返す。通信は別処理で検証し、本文を自動で置換しない。
+  if (allowCached && !sourceId && initial.hasBody && !entity.cacheWarning
+    && entity.cachedSource === source.noteId && entity.cachedVersion) {
+    await touch(id);
+    queueDriveCacheCheck(id, entity);
+    return;
+  }
   const scope = await getLibraryScope(); const session = getGoogleDriveSession(); const connection = session.getConnection();
   if (!scope || !connection?.root || connection.account.id !== scope.accountId || connection.root.id !== scope.rootId) {
     if (initial.hasBody && entity.cachedSource === source.noteId) return;
@@ -103,7 +125,7 @@ export async function hydrateDriveNote(id: string, sourceId?: string) {
     await readRequest(tx.objectStore("notes").put(stored));
     await readRequest(tx.objectStore("noteSummaries").put(toLocalNoteSummary(stored)));
     await readRequest(entities.put({ ...entity, cachedSource: source.noteId, cachedVersion: version,
-      cachedBytes: note.pdf.size + new Blob([JSON.stringify(stored)]).size, lastUsed: Date.now() }));
+      cacheWarning: undefined, cachedBytes: note.pdf.size + new Blob([JSON.stringify(stored)]).size, lastUsed: Date.now() }));
     // 別端末の版を選んだ場合も旧送信先を上書きしない。次の編集で新しい枝を作る。
     if (liveBinding && liveBinding.ids?.note !== source.noteId) await readRequest(tx.objectStore("driveBindings").delete(id));
   }, false);
@@ -117,11 +139,14 @@ async function touch(id: string) {
 
 export async function pruneDriveCache(options: { now?: number; activeIds?: Set<string>; lock?: (id: string, work: () => Promise<void>) => Promise<void> } = {}) {
   const now = options.now ?? Date.now(); let removed = 0;
-  const rows = await withLocalTransaction(["driveEntities"], "readonly", (tx) => readRequest<LibraryEntity[]>(tx.objectStore("driveEntities").getAll()));
+  const { rows, limitBytes } = await withLocalTransaction(["driveEntities", "driveSettings"], "readonly", async (tx) => ({
+    rows: await readRequest<LibraryEntity[]>(tx.objectStore("driveEntities").getAll()),
+    limitBytes: await readDriveCacheLimit(tx) * 1_000_000,
+  }));
   let bytes = rows.reduce((sum, row) => sum + (row.cachedBytes ?? 0), 0);
   for (const candidate of rows.sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0))) {
     if (!candidate.cachedBytes || !candidate.cachedSource || !candidate.sources.some((s) => s.noteId === candidate.cachedSource)
-      || bytes <= DRIVE_CACHE_LIMIT && now - (candidate.lastUsed ?? now) < 30000) continue;
+      || bytes <= limitBytes && now - (candidate.lastUsed ?? now) < DRIVE_CACHE_RETENTION_MS) continue;
     if (activeNotes.has(candidate.entry.id) || options.activeIds?.has(candidate.entry.id)) continue;
     const work = async () => {
       await withLocalTransaction(["notes", "pdfs", "driveEntities", "driveBindings"], "readwrite", async (tx) => {
@@ -138,4 +163,11 @@ export async function pruneDriveCache(options: { now?: number; activeIds?: Set<s
     else if (typeof navigator !== "undefined" && navigator.locks) await navigator.locks.request(`overlay-note-use-${candidate.entry.id}`, { ifAvailable: true }, async (lock) => { if (lock) await work(); });
   }
   return removed;
+}
+
+export async function readDriveCacheSummary() {
+  return withLocalTransaction(["driveEntities", "driveSettings"], "readonly", async (tx) => {
+    const rows = await readRequest<LibraryEntity[]>(tx.objectStore("driveEntities").getAll());
+    return { limitMB: await readDriveCacheLimit(tx), bytes: rows.reduce((sum, row) => sum + (row.entry.deleted ? 0 : row.cachedBytes ?? 0), 0) };
+  });
 }

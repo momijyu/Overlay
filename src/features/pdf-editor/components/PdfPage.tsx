@@ -170,7 +170,8 @@ export function PdfPage({
         const original = blankWidth !== undefined && blankHeight !== undefined ? { width: blankWidth, height: blankHeight } : page!.getViewport({ scale: 1 });
         // 最初に収まる大きさを100%として、その大きさに表示倍率を掛ける。
         const scale = Math.min(1, availableWidth / original.width) * zoom;
-        const viewport = page ? page.getViewport({ scale }) : { width: original.width * scale, height: original.height * scale };
+        const pdfViewport = page?.getViewport({ scale });
+        const viewport = pdfViewport ?? { width: original.width * scale, height: original.height * scale };
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
 
         // 表示中のビットマップを消さず、別キャンバスで次の倍率を描画する。
@@ -178,10 +179,10 @@ export function PdfPage({
         buffer.width = Math.ceil(viewport.width * pixelRatio);
         buffer.height = Math.ceil(viewport.height * pixelRatio);
 
-        if (page) {
+        if (page && pdfViewport) {
           renderTask = page.render({
             canvas: buffer,
-            viewport: page.getViewport({ scale }),
+            viewport: pdfViewport,
             transform: [pixelRatio, 0, 0, pixelRatio, 0, 0],
           });
           await renderTask.promise;

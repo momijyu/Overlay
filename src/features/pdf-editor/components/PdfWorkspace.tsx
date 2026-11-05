@@ -20,6 +20,7 @@ import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookDrawer } from "./NotebookDrawer";
 import { subscribeLibraryChanged } from "../driveLibraryEvents";
+import { subscribeDriveCacheIssue } from "../driveCacheChecks";
 import { DriveVersionRequired, pinDriveNote } from "../driveLibraryCache";
 import { DriveVersionDialog } from "./DriveVersionDialog";
 import { DriveAutosavePanel } from "./DriveAutosavePanel";
@@ -95,6 +96,9 @@ export function PdfWorkspace() {
   const newNoteFolderRef = useRef<string | null>(null);
   const [versionChoice, setVersionChoice] = useState<{ error: DriveVersionRequired; destination?: { pageId: number; textId: string } } | null>(null);
   useEffect(() => noteId ? pinDriveNote(noteId) : undefined, [noteId]);
+  useEffect(() => subscribeDriveCacheIssue((id, message) => {
+    if (mountedRef.current && autosaveRef.current?.getState().noteId === id) setError(message);
+  }), []);
   useEffect(() => subscribeLibraryChanged(() => {
     const id = autosaveRef.current?.getState().noteId;
     if (id) void loadNoteLibrary().then((library) => {
@@ -151,7 +155,7 @@ export function PdfWorkspace() {
       const data = await input.file.arrayBuffer();
       if (!mountedRef.current) return;
 
-      loadingTask = pdfjs.getDocument({ data: new Uint8Array(data) });
+      loadingTask = pdfjs.getDocument({ data: new Uint8Array(data), standardFontDataUrl: "/pdfjs/standard_fonts/" });
       loadingTaskRef.current = loadingTask;
       const loadedDocument = await loadingTask.promise;
       if (!mountedRef.current) return;
@@ -397,7 +401,9 @@ export function PdfWorkspace() {
       if (!mountedRef.current) return;
       downloadBackup(blob, backupDownloadName(backup.name, Array.isArray(item) ? "zip" : "overlay"));
     } catch (error) {
-      if (mountedRef.current) setError(error instanceof Error ? error.message : "バックアップを書き出せませんでした。");
+      if (mountedRef.current) setError(error instanceof DriveVersionRequired
+        ? `「${error.title}」の編集版が複数あります。ノート一覧でこのノートを開いて版を選び、バックアップを再実行してください。`
+        : error instanceof Error ? error.message : "バックアップを書き出せませんでした。");
     } finally {
       operationRef.current = false;
       if (mountedRef.current) setIsBackupWorking(false);
@@ -546,6 +552,8 @@ export function PdfWorkspace() {
             refreshVersion={refreshVersion}
             onDestinationChange={(id) => { newNoteFolderRef.current = id; }}
             currentNoteId={noteId}
+            visible={sidebarVisible}
+            currentNoteSaveState={saveError ? "warning" : isSaving ? "pending" : undefined}
             currentStickyOutline={document && file ? { id: noteId, title: noteName,
               entries: createStickyOutline(history.textsByPage, pages) } : undefined}
             currentPageId={pageId}
@@ -666,7 +674,7 @@ export function PdfWorkspace() {
                   </div>
                   <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
                     <div className="desktop-only flex flex-wrap gap-2"><button
-                      className="btn btn-primary desktop-only"
+                      className="btn btn-primary"
                       type="button"
                       disabled={isBusy}
                       onClick={() => void handleDownload()}

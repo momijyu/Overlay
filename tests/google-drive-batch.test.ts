@@ -62,11 +62,10 @@ test("一括保存もノートごとの見出しを保持し、確認前には�
   assert.equal(received[1].notes[0].headingsByPage, undefined);
 });
 
-test("同名の複数選択・重複ID・件数超過は送信前に拒否する", () => {
+test("重複ID・件数超過・不正名は送信前に拒否する", () => {
   const f = fixture();
   assert.throws(() => createDriveBatch([]), /1〜200/);
   assert.throws(() => createDriveBatch([f.sources[0], f.sources[0]]), /1〜200/);
-  assert.throws(() => createDriveBatch([f.sources[0], { ...f.sources[1], title: "A" }]), /同名/);
   assert.throws(() => createDriveBatch(Array.from({ length: 201 }, (_, i) => ({ ...f.sources[0], id: String(i), title: String(i) }))), /1〜200/);
   assert.throws(() => createDriveBatch([{ ...f.sources[0], title: "bad\nname" }]), /不正/);
   assert.deepEqual(f.events, []);
@@ -132,4 +131,36 @@ test("閉鎖後の確認結果・送信結果を反映せず次のノートへ�
   const writing = { ...f.access, saveConfirmedNote: async () => { active = false; return summary("A"); } };
   await saveDriveBatch(ready, writing, "account", "root", () => active, () => {}, () => { updated++; });
   assert.equal(updated, 0); assert.equal(f.events.filter((entry) => entry.startsWith("load:")).length, 1);
+});
+
+
+test("同名ノートは確認時に異なる保存名を割り当て、元ノートを改名せず別々に保存する", async () => {
+  const original = backup("講義");
+  const sources = ["folder-a", "folder-b"].map((id) => ({ id, title: "講義", load: async () => original }));
+  const checked: string[] = [], received: NoteBackup[] = [];
+  const access: DriveBatchAccess = {
+    async findSaveTargetByTitle(_account, _root, title) { checked.push(title); return null; },
+    async saveConfirmedNote(_account, _root, data) { received.push(data); return summary(data.notes[0].title); },
+  };
+  const entries = createDriveBatch(sources);
+  assert.deepEqual(entries.map((entry) => entry.saveTitle), ["講義 (folder-a)", "講義 (folder-b)"]);
+  const ready = await prepareDriveBatch(entries, access, "account", "root", () => true, () => {});
+  await saveDriveBatch(ready, access, "account", "root", () => true, () => {}, () => {});
+  assert.deepEqual(received.map((data) => data.notes[0].title), checked);
+  assert.deepEqual(received.map((data) => data.name), checked);
+  assert.equal(original.notes[0].title, "講義"); assert.equal(original.name, "講義");
+  assert.deepEqual(createDriveBatch(sources).map((entry) => entry.saveTitle), checked);
+});
+
+test("同名用の保存名は120文字以内で、既存の別タイトルや長い識別子とも衝突しない", () => {
+  const sources = [
+    { id: "a", title: "講義", load: async () => backup("講義") },
+    { id: "b", title: "講義", load: async () => backup("講義") },
+    { id: "c", title: "講義 (a)", load: async () => backup("講義 (a)") },
+    ...["1", "2"].map((id) => ({ id: "x".repeat(50) + id, title: "題".repeat(120), load: async () => backup("題".repeat(120)) })),
+  ];
+  const entries = createDriveBatch(sources); const titles = entries.map((entry) => entry.saveTitle ?? entry.source.title);
+  assert.equal(new Set(titles).size, sources.length);
+  assert.ok(titles.every((title) => [...title].length <= 120));
+  assert.equal(titles[2], "講義 (a)");
 });

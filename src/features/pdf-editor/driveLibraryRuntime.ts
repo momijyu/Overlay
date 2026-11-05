@@ -1,8 +1,9 @@
 import { LibraryRetry } from "./driveLibraryData";
 import { DriveHttpError } from "./driveHttpError";
 import { createBrowserDriveAutosave } from "./driveAutosave";
-import { enableDriveLibrary, getLibraryScope, readLibraryStatus } from "./driveLibraryLocal";
+import { enableDriveLibrary, getLibraryScope, readLibraryPending } from "./driveLibraryLocal";
 import { syncDriveLibrary } from "./driveLibraryRemote";
+import { checkQueuedDriveCaches, hasDriveCacheChecks } from "./driveCacheChecks";
 import { pruneDriveCache } from "./driveLibraryCache";
 import { createGoogleDriveClient } from "./googleDriveClient";
 import { getGoogleDriveSession } from "./googleDriveSession";
@@ -11,6 +12,7 @@ export function createBrowserDriveLibrary() {
   const autosave = createBrowserDriveAutosave();
   const session = getGoogleDriveSession(); const client = createGoogleDriveClient(session.auth);
   let verifiedToken: string | null = null;
+  let nextPrune = 0;
   let running = false; let disposed = false; let nextRefresh = 0; let retryAfter = 0; let paused = false; let incompleteAttempts = 0; let connectionToken: string | null = null; let queuedForce = false;
   return {
     async tick(force = false) {
@@ -18,7 +20,8 @@ export function createBrowserDriveLibrary() {
       if (running) { queuedForce ||= force; return false; }
       force ||= queuedForce; queuedForce = false;
       const live = session.getConnection();
-      const token = live ? session.auth.getAccessToken() : null;
+      if (!live?.root || !navigator.locks) return false;
+      const token = session.auth.getAccessToken();
       if (token && token !== connectionToken) { connectionToken = token; paused = false; retryAfter = 0; }
       if (!force && (paused || Date.now() < retryAfter)) return false;
       if (force) { paused = false; retryAfter = 0; }
@@ -44,7 +47,7 @@ export function createBrowserDriveLibrary() {
             scope = await getLibraryScope();
           }
           if (!scope || disposed) return;
-          const state = await readLibraryStatus();
+          const state = await readLibraryPending();
           if (force || Date.now() >= nextRefresh || state.pending) {
             nextRefresh = Date.now() + 30000;
             const access = await client.autosaveAccess(scope.accountId, scope.rootId);
@@ -52,7 +55,17 @@ export function createBrowserDriveLibrary() {
             await syncDriveLibrary(access, scope); incompleteAttempts = 0;
           }
           if (!disposed) await autosave.tick();
-          if (!disposed) { await pruneDriveCache(); completed = true; }
+          if (!disposed && hasDriveCacheChecks()) {
+            const access = await client.autosaveAccess(scope.accountId, scope.rootId);
+            await checkQueuedDriveCaches(access, scope, () => {
+              const live = session.getConnection();
+              return !disposed && live?.account.id === scope!.accountId && live.root?.id === scope!.rootId && session.auth.getAccessToken() === token;
+            });
+          }
+          if (!disposed) {
+            if (Date.now() >= nextPrune) { nextPrune = Date.now() + 30000; await pruneDriveCache(); }
+            completed = true;
+          }
         });
         return completed;
       } catch (error) {

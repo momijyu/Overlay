@@ -2,16 +2,19 @@ import assert from "node:assert/strict";
 import test, { beforeEach, afterEach, mock } from "node:test";
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { PDFDocument } from "pdf-lib";
-import { createNoteFolder, deleteEmptyNoteFolder, deleteSavedNote, loadLocalNote, loadNoteLibrary, moveNoteFolder, moveSavedItems, moveSavedNote, organizeNote, renameNoteFolder, saveLocalNote } from "@/features/pdf-editor/localNotes";
+import { captureNoteBackup, createNoteFolder, deleteEmptyNoteFolder, deleteSavedItems, deleteSavedNote, loadLocalNote, loadNoteLibrary, moveNoteFolder, moveSavedItems, moveSavedNote, organizeNote, renameNoteFolder, saveLocalNote } from "@/features/pdf-editor/localNotes";
 import { enableDriveLibrary, readLibraryState } from "@/features/pdf-editor/driveLibraryLocal";
 import { syncDriveLibrary } from "@/features/pdf-editor/driveLibraryRemote";
 import { mergeLibraryEvents, type LibraryEvent } from "@/features/pdf-editor/driveLibraryData";
 import { createDriveAutosave } from "@/features/pdf-editor/driveAutosave";
 import { listDriveBindings } from "@/features/pdf-editor/driveOutbox";
+import { checkQueuedDriveCaches, hasDriveCacheChecks, subscribeDriveCacheIssue } from "@/features/pdf-editor/driveCacheChecks";
+import { driveManifestContent } from "@/features/pdf-editor/driveAutosaveRemote";
 import { sha256 } from "@/features/pdf-editor/driveAutosaveRemote";
 import { DriveHttpError } from "@/features/pdf-editor/driveHttpError";
-import { DRIVE_CACHE_LIMIT, DriveVersionRequired, pruneDriveCache } from "@/features/pdf-editor/driveLibraryCache";
+import { DRIVE_CACHE_LIMIT, DRIVE_CACHE_RETENTION_MS, DriveVersionRequired, pinDriveNote, pruneDriveCache } from "@/features/pdf-editor/driveLibraryCache";
 import { readRequest, withLocalTransaction } from "@/features/pdf-editor/localDatabase";
+import { saveDriveCacheLimit } from "@/features/pdf-editor/driveCacheSettings";
 import { getGoogleDriveSession } from "@/features/pdf-editor/googleDriveSession";
 import type { DriveNoteAccess } from "@/features/pdf-editor/googleDriveNotes";
 import { DriveVersionDialog } from "@/features/pdf-editor/components/DriveVersionDialog";
@@ -202,7 +205,7 @@ test("PDF未取得ノートの一括移動も本文を取得せず、同じIDの
 
 test("同期済みの未使用本文だけを整理し、一覧・階層・Driveの実体は維持する", async () => {
   const f = await fixture(); const remoteCount = f.files.size;
-  const count = await pruneDriveCache({ now: Date.now() + 60000, lock: async (_id, work) => work() });
+  const count = await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() });
   assert.equal(count, 1); assert.deepEqual(await bodyCount(), [0, 0]);
   assert.equal((await loadNoteLibrary()).notes[0].id, f.note); assert.equal(f.files.size, remoteCount);
   await sync(f); assert.ok(!(await readLibraryState()).entities.some((r) => r.entry.deleted));
@@ -210,19 +213,39 @@ test("同期済みの未使用本文だけを整理し、一覧・階層・Drive
 });
 
 test("未送信・保存失敗・編集中のノートはキャッシュ整理で削除しない", async () => {
-  const f = await fixture(); const locked = { now: Date.now() + 60000, lock: async (_id: string, work: () => Promise<void>) => work() };
+  const f = await fixture(); const locked = { now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id: string, work: () => Promise<void>) => work() };
   assert.equal(await pruneDriveCache({ ...locked, activeIds: new Set([f.note]) }), 0);
   await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 1, strokesByPage: {} });
   assert.equal(await pruneDriveCache(locked), 0); assert.deepEqual(await bodyCount(), [1, 1]);
 });
 
-test("500MBを超える再取得可能キャッシュは猶予時間内でも整理する", async () => {
+test("初期上限250MBを超える再取得可能キャッシュは猶予時間内でも整理する", async () => {
   const f = await fixture();
   await withLocalTransaction(["driveEntities"], "readwrite", async (tx) => {
     const store = tx.objectStore("driveEntities"); const row = await readRequest<Record<string, unknown>>(store.get(`note:${f.note}`));
     await readRequest(store.put({ ...row, cachedBytes: DRIVE_CACHE_LIMIT + 1, lastUsed: Date.now() }));
   }, false);
   assert.equal(await pruneDriveCache({ lock: async (_id, work) => work() }), 1);
+});
+
+test("利用者の容量設定を整理処理へ反映し、上限を下げても未送信・使用中の内容は残す", async () => {
+  const f = await fixture();
+  await withLocalTransaction(["driveEntities"], "readwrite", async (tx) => {
+    const store = tx.objectStore("driveEntities"); const row = await readRequest<Record<string, unknown>>(store.get(`note:${f.note}`));
+    await readRequest(store.put({ ...row, cachedBytes: 300_000_000, lastUsed: Date.now() }));
+  }, false);
+  const lock = async (_id: string, work: () => Promise<void>) => work();
+  await saveDriveCacheLimit(400); assert.equal(await pruneDriveCache({ lock }), 0);
+  await saveDriveCacheLimit(100);
+  assert.equal(await pruneDriveCache({ lock, activeIds: new Set([f.note]) }), 0);
+  await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 1, strokesByPage: {} });
+  assert.equal(await pruneDriveCache({ lock }), 0); assert.deepEqual(await bodyCount(), [1, 1]);
+  await send(f); await sync(f);
+  await withLocalTransaction(["driveEntities"], "readwrite", async (tx) => {
+    const store = tx.objectStore("driveEntities"); const row = await readRequest<Record<string, unknown>>(store.get(`note:${f.note}`));
+    await readRequest(store.put({ ...row, cachedBytes: 300_000_000 }));
+  }, false);
+  assert.equal(await pruneDriveCache({ lock }), 1); assert.deepEqual(await bodyCount(), [0, 0]);
 });
 
 test("一覧から削除した項目は別端末でも復活せず、DriveのPDF自体は自動削除しない", async () => {
@@ -312,7 +335,7 @@ test("キャッシュの削除途中で失敗しても元PDF・本文・一覧�
     if (this.name === "pdfs") throw new DOMException("failed", "UnknownError");
     return remove.apply(this, args);
   });
-  await assert.rejects(pruneDriveCache({ now: Date.now() + 60000, lock: async (_id, work) => work() }), /保存場所へアクセス/);
+  await assert.rejects(pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() }), /保存場所へアクセス/);
   assert.deepEqual(await bodyCount(), [1, 1]); assert.equal((await loadNoteLibrary()).notes[0].id, f.note);
 });
 
@@ -327,4 +350,177 @@ test("競合の確認後にさらに移動した場合は、古い選択で上�
   assert.ok(conflict); await moveSavedNote(f.note, f.folder);
   await assert.rejects(resolveLibraryPlacement(conflict.conflicts[0], conflict.conflicts[0].versions[0].head), /確認後に階層が変わりました/);
   assert.equal((await loadNoteLibrary()).notes[0].folderId, f.folder);
+});
+
+
+test("閲覧用キャッシュは他ノートの保存・復元や再接続では送信対象にせず、編集した1件だけ登録する", async () => {
+  const f = await fixture(); useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
+  const opened = await loadLocalNote(f.note);
+  const other = await saveLocalNote({ file: f.file, noteId: null, strokesByPage: {} });
+  await enableDriveLibrary(connection.accountId, connection.rootId);
+  assert.deepEqual((await listDriveBindings()).map((row) => row.id), [other]);
+  await saveLocalNote({ file: opened.file, noteId: f.note, expectedRevision: opened.revision, strokesByPage: {} });
+  assert.deepEqual(new Set((await listDriveBindings()).map((row) => row.id)), new Set([other, f.note]));
+});
+
+test("複数版から選んで開いた内容をフォルダバックアップへ含め、未選択の版は勝手に選ばない", async () => {
+  const f = await fixture(); const source = (await listDriveBindings())[0].ids!.note;
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
+  const opened = await loadLocalNote(f.note);
+  await saveLocalNote({ file: opened.file, noteId: f.note, expectedRevision: opened.revision, strokesByPage: { 1: [{ width: 2, points: [{ x: .4, y: .4 }] }] } });
+  await sync(f); await send(f); await sync(f);
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  await assert.rejects(captureNoteBackup({ kind: "folder", id: f.parent }), DriveVersionRequired);
+  await loadLocalNote(f.note, { sourceId: source });
+  const backup = await captureNoteBackup({ kind: "folder", id: f.parent });
+  assert.equal(backup.notes.length, 1); assert.deepEqual(backup.notes[0].strokesByPage, {});
+  assert.equal((await listDriveBindings()).length, 0);
+});
+
+test("初回本文送信待ちの子を持つフォルダは単独・一括どちらも削除せず、同期を継続できる", async () => {
+  const deviceA = indexedDB as IDBFactory; const folder = await createNoteFolder("講義", null);
+  const note = await saveLocalNote({ file: await pdf(), noteId: null, initialFolderId: folder, strokesByPage: {} });
+  await enableDriveLibrary(connection.accountId, connection.rootId); const f = remote(); await sync(f);
+  const deviceB = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  assert.equal((await loadNoteLibrary()).notes.length, 0);
+  const before = await readLibraryState();
+  await assert.rejects(deleteEmptyNoteFolder(folder), /初回送信中/);
+  await assert.rejects(deleteSavedItems([{ kind: "folder", id: folder }]), /初回送信中/);
+  assert.deepEqual(await readLibraryState(), before); await sync(f);
+  useDevice(deviceA); await sync(f); await send(f); await sync(f);
+  useDevice(deviceB); await sync(f);
+  assert.equal((await loadNoteLibrary()).notes[0].id, note);
+  assert.ok((await loadNoteLibrary()).folders.some((row) => row.id === folder));
+});
+
+test("通常の本文更新では全ノート・階層を走査せず、対象1件の保存と送信待ちを更新する", async () => {
+  const f = await fixture(); const getAll = IDBObjectStore.prototype.getAll; const scanned: string[] = [];
+  mock.method(IDBObjectStore.prototype, "getAll", function (this: IDBObjectStore, ...args: Parameters<typeof getAll>) {
+    scanned.push(this.name); return getAll.apply(this, args);
+  });
+  await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 1, strokesByPage: {} });
+  assert.deepEqual(scanned, []);
+  assert.equal((await listDriveBindings())[0].generation, 2);
+});
+
+
+test("キャッシュのある通常オープンはGoogle通信を待たず、裏の確認はまとめて1回だけ行う", async () => {
+  const f = await fixture(); authorize(f); f.calls.length = 0;
+  const scope = (await readLibraryState()).scope!;
+  await loadLocalNote(f.note); await loadLocalNote(f.note);
+  assert.equal(f.calls.length, 0); assert.equal(hasDriveCacheChecks(), true);
+  await checkQueuedDriveCaches(f.access, scope, () => true);
+  assert.equal(f.calls.length, 1); assert.ok(f.calls[0].startsWith("GET files/"));
+  assert.equal(hasDriveCacheChecks(), false);
+  await loadLocalNote(f.note); assert.equal(hasDriveCacheChecks(), false);
+  assert.equal(f.calls.length, 1);
+});
+
+async function remoteEdit(f: Awaited<ReturnType<typeof fixture>>, sourceId: string) {
+  const remote = f.files.get(sourceId)!;
+  const manifest = JSON.parse(await remote.data!.text());
+  manifest.strokesByPage = { 1: [{ width: 2, points: [{ x: .9, y: .8 }] }] };
+  manifest.sync.generation++;
+  manifest.sync.hash = await sha256(new Blob([JSON.stringify(driveManifestContent(manifest))]));
+  const data = new Blob([JSON.stringify(manifest)], { type: "application/json" });
+  await f.access.replace!(sourceId, data, {});
+  return manifest.strokesByPage;
+}
+
+test("裏の更新確認で異なる版を見つけても本文・更新番号を変えず、次に開く時だけ新版を取得する", async () => {
+  const f = await fixture(); const sourceId = (await listDriveBindings())[0].ids!.note;
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
+  const original = await loadLocalNote(f.note); await loadLocalNote(f.note);
+  const changed = await remoteEdit(f, sourceId);
+  const notices: string[] = []; const unsubscribe = subscribeDriveCacheIssue((id, message) => { assert.equal(id, f.note); notices.push(message); });
+  try {
+    await checkQueuedDriveCaches(f.access, (await readLibraryState()).scope!, () => true);
+    assert.match(notices[0], /表示中の内容は保持/);
+    const stored = await withLocalTransaction(["notes"], "readonly", (tx) => readRequest<{ revision: number; strokesByPage: unknown }>(tx.objectStore("notes").get(f.note)));
+    assert.equal(stored.revision, original.revision); assert.deepEqual(stored.strokesByPage, original.strokesByPage);
+    const refreshed = await loadLocalNote(f.note);
+    assert.deepEqual(refreshed.strokesByPage, changed); assert.equal(refreshed.revision, original.revision! + 1);
+    assert.equal((await listDriveBindings()).length, 0);
+  } finally { unsubscribe(); }
+});
+
+test("自端末の保存先が外部変更されても、高速オープン後の編集で相手の内容を上書きしない", async () => {
+  const f = await fixture(); authorize(f);
+  const sourceId = (await listDriveBindings())[0].ids!.note;
+  const original = await loadLocalNote(f.note); const changed = await remoteEdit(f, sourceId);
+  await checkQueuedDriveCaches(f.access, (await readLibraryState()).scope!, () => true);
+  await saveLocalNote({ file: original.file, noteId: f.note, expectedRevision: original.revision, strokesByPage: { 1: [{ width: 3, points: [{ x: .1, y: .1 }] }] } });
+  await send(f);
+  assert.match((await listDriveBindings())[0].error!, /競合/);
+  assert.deepEqual(JSON.parse(await f.files.get(sourceId)!.data!.text()).strokesByPage, changed);
+  assert.deepEqual((await loadLocalNote(f.note)).strokesByPage, { 1: [{ width: 3, points: [{ x: .1, y: .1 }] }] });
+});
+
+test("裏の確認中に編集・送信番号が進んだ場合、遅い応答で内容や警告を巻き戻さない", async () => {
+  const f = await fixture(); authorize(f); const original = await loadLocalNote(f.note);
+  const scope = (await readLibraryState()).scope!; const json = f.access.json.bind(f.access);
+  let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+  let entered!: () => void; const started = new Promise<void>((resolve) => { entered = resolve; });
+  const access = { ...f.access, json: async (...args: Parameters<typeof json>) => {
+    const result = await json(...args); entered(); await gate;
+    return { ...result as Record<string, unknown>, version: "changed" };
+  } };
+  const verifying = checkQueuedDriveCaches(access, scope, () => true); await started;
+  await saveLocalNote({ file: original.file, noteId: f.note, expectedRevision: original.revision, strokesByPage: { 1: [{ width: 4, points: [{ x: .2, y: .3 }] }] } });
+  release(); await verifying;
+  assert.equal((await readLibraryState()).entities.find((row) => row.entry.id === f.note)!.cacheWarning, undefined);
+  assert.equal((await loadLocalNote(f.note)).strokesByPage[1][0].width, 4);
+});
+
+test("裏の確認中に接続先が変わっても、元のノートへ確認結果を書き込まない", async () => {
+  const f = await fixture(); authorize(f); await loadLocalNote(f.note);
+  const scope = (await readLibraryState()).scope!; let active = true;
+  const access = { ...f.access, json: async () => { active = false; return {}; } };
+  const before = await readLibraryState(); await checkQueuedDriveCaches(access, scope, () => active);
+  assert.deepEqual(await readLibraryState(), before);
+});
+
+test("直前のノートは1分後も保持し、30分経過後に未使用の同期済み本文だけ整理する", async () => {
+  await fixture();
+  const lock = async (_id: string, work: () => Promise<void>) => work();
+  assert.equal(await pruneDriveCache({ now: Date.now()+60000, lock }), 0);
+  assert.deepEqual(await bodyCount(), [1, 1]);
+  assert.equal(await pruneDriveCache({ now: Date.now()+DRIVE_CACHE_RETENTION_MS+1000, lock }), 1);
+  assert.deepEqual(await bodyCount(), [0, 0]);
+});
+
+test("変わっていない階層の定期確認では全ノート本文の読み書きを行わない", async () => {
+  const f = await fixture(); const get = IDBObjectStore.prototype.get, put = IDBObjectStore.prototype.put; const touched: string[] = [];
+  mock.method(IDBObjectStore.prototype, "get", function (this: IDBObjectStore, ...args: Parameters<typeof get>) {
+    if (this.name === "notes") touched.push("get"); return get.apply(this, args);
+  });
+  mock.method(IDBObjectStore.prototype, "put", function (this: IDBObjectStore, ...args: Parameters<typeof put>) {
+    if (this.name === "notes") touched.push("put"); return put.apply(this, args);
+  });
+  await sync(f); assert.deepEqual(touched, []);
+});
+
+
+test("長く開いたノートも閉じた時点から30分保持し、重複したピンを1つ外しても保護する", async () => {
+  const f = await fixture(); let now = Date.now(); mock.method(Date, "now", () => now);
+  const a = pinDriveNote(f.note), b = pinDriveNote(f.note);
+  const lock = async (_id: string, work: () => Promise<void>) => work();
+  now += DRIVE_CACHE_RETENTION_MS + 1000; a(); a();
+  assert.equal(await pruneDriveCache({ now, lock }), 0);
+  b(); await new Promise(setImmediate);
+  assert.equal(await pruneDriveCache({ now: now + 60000, lock }), 0);
+  assert.equal(await pruneDriveCache({ now: now + DRIVE_CACHE_RETENTION_MS + 1000, lock }), 1);
+});
+
+test("裏の確認が通信失敗しても本文を捨てず、キャッシュからの編集を続けられる", async () => {
+  const f = await fixture(); authorize(f); const original = await loadLocalNote(f.note);
+  const notices: string[] = []; const unsubscribe = subscribeDriveCacheIssue((_id, message) => { notices.push(message); });
+  try {
+    const access = { ...f.access, json: async () => { throw new DriveHttpError(0, "offline"); } };
+    await checkQueuedDriveCaches(access, (await readLibraryState()).scope!, () => true);
+    assert.match(notices[0], /端末の内容は保持/);
+    assert.deepEqual((await loadLocalNote(f.note)).strokesByPage, original.strokesByPage);
+    await saveLocalNote({ file: original.file, noteId: f.note, expectedRevision: original.revision, strokesByPage: {} });
+    assert.ok((await listDriveBindings())[0].generation > (await listDriveBindings())[0].uploadedGeneration);
+  } finally { unsubscribe(); }
 });

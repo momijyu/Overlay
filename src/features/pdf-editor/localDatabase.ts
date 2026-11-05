@@ -107,7 +107,6 @@ export async function withLocalTransaction<T>(
   work: (transaction: IDBTransaction) => Promise<T>,
   trackLibrary = true,
 ): Promise<T> {
-  const enrollNotes = stores.includes("notes");
   const track = trackLibrary && mode === "readwrite" && stores.some((name) => ["notes", "folders", "noteSummaries"].includes(name));
   if (track) stores = [...new Set([...stores, ...LIBRARY_STORES])];
   let database = await openDatabase();
@@ -137,7 +136,7 @@ export async function withLocalTransaction<T>(
       reject(storageError(error));
     };
     transaction.onerror = () => { /* 要求の失敗はonabortでまとめて扱う。 */ };
-    void work(transaction).then(async (value) => { if (track) await recordDriveLibrary(transaction, enrollNotes); result = value; }).catch((error: unknown) => {
+    void work(transaction).then(async (value) => { if (track) await recordDriveLibrary(transaction, false); result = value; }).catch((error: unknown) => {
       failure = error;
       try { transaction.abort(); } catch { reject(storageError(error)); }
     });

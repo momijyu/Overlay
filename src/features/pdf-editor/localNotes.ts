@@ -10,6 +10,7 @@ import { readTextNotes } from "./textData";
 import type { HeadingsByPage, NotePage, LoadedNote, NoteFolder, NoteLibrary, PenStroke, SavedNoteSummary, TextNotesByPage } from "./types";
 import { BACKUP_LIMITS, readNoteBackup, type NoteBackup } from "./noteBackupData";
 import { toLocalNoteSummary } from "./localNoteSummary";
+import { checkDriveFolderDeletion, enrollDriveNote, LIBRARY_STORES, recordDriveLibrary } from "./driveLibraryLocal";
 
 type LocalNote = SavedNoteSummary & { strokesByPage: Record<number, PenStroke[]>; textsByPage?: TextNotesByPage; pages?: NotePage[]; headingsByPage?: HeadingsByPage; revision?: number };
 type LocalPdf = { id: string; blob: Blob };
@@ -51,7 +52,7 @@ async function captureBackup(items: NoteDragItem[], selection: boolean): Promise
   const { hydrateDriveNote, pinDriveNote } = await import("./driveLibraryCache");
   const release = targets.map((note) => pinDriveNote(note.id));
   try {
-    for (const note of targets) await hydrateDriveNote(note.id);
+    for (const note of targets) await hydrateDriveNote(note.id, undefined, true);
   const snapshot = await withLocalTransaction(["notes", "pdfs", "folders", "noteSummaries"], "readonly", async (transaction) => {
     const library = await readLibrary(transaction);
     const keys = new Set(items.map(noteItemKey));
@@ -130,6 +131,7 @@ export async function restoreNoteBackup(input: NoteBackup, options: { skipDuplic
       await writeLocalNote(transaction, { id: note.id, title: note.title, fileName: note.fileName,
         folderId: note.folderId === null ? null : folderIds.get(note.folderId)!, updatedAt, revision: 1,
         strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, ...(note.headingsByPage ? { headingsByPage: note.headingsByPage } : {}), ...(note.pages ? { pages: note.pages } : {}) }, "add");
+      await enrollDriveNote(transaction, note.id);
     }
     return false;
   });
@@ -190,7 +192,7 @@ export async function saveLocalNote(input: {
   const headingsByPage = input.headingsByPage === undefined ? undefined : readPageHeadings(input.headingsByPage);
   checkPageBindings(pages, [strokesByPage, textsByPage ?? {}, headingsByPage ?? {}]);
   const id = input.noteId ?? crypto.randomUUID();
-  return withLocalTransaction(["notes", "pdfs", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
+  return withLocalTransaction([...LIBRARY_STORES], "readwrite", async (transaction) => {
     const notes = transaction.objectStore("notes");
     const pdfs = transaction.objectStore("pdfs");
     const updatedAt = new Date().toISOString();
@@ -221,12 +223,14 @@ export async function saveLocalNote(input: {
       await readRequest(pdfs.add({ id, blob: input.file.slice(0, input.file.size, "application/pdf") } satisfies LocalPdf));
       await writeLocalNote(transaction, note, "add");
     }
+    await enrollDriveNote(transaction, id);
+    if (!input.noteId) await recordDriveLibrary(transaction, false);
     return id;
-  });
+  }, false);
 }
 
-export async function loadLocalNote(noteId: string, options: { sourceId?: string } = {}): Promise<LoadedNote> {
-  await (await import("./driveLibraryCache")).hydrateDriveNote(noteId, options.sourceId);
+export async function loadLocalNote(noteId: string, options: { sourceId?: string; refresh?: boolean } = {}): Promise<LoadedNote> {
+  await (await import("./driveLibraryCache")).hydrateDriveNote(noteId, options.sourceId, false, !options.refresh);
   return withLocalTransaction(["notes", "pdfs"], "readonly", async (transaction) => {
     const [note, pdf] = await Promise.all([
       readRequest<LocalNote | undefined>(transaction.objectStore("notes").get(noteId)),
@@ -256,6 +260,7 @@ export async function deleteSavedItems(items: NoteDragItem[]): Promise<void> {
   const confirmed = items.map((item) => ({ ...item }));
   await withLocalTransaction(["notes", "pdfs", "folders", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
     const targets = checkedDeletion(confirmed, await readLibrary(transaction));
+    await checkDriveFolderDeletion(transaction, new Set(targets.filter((item) => item.kind === "folder").map((item) => item.id)), new Set(targets.map(noteItemKey)));
     for (const item of targets) {
       if (item.kind === "note") {
         await deleteLocalNote(transaction, item.id);
@@ -354,6 +359,7 @@ export async function renameNoteFolder(folderId: string, name: string): Promise<
 export async function deleteEmptyNoteFolder(folderId: string): Promise<void> {
   await withLocalTransaction(["noteSummaries", "folders"], "readwrite", async (transaction) => {
     if (!canDeleteEmptyFolder(folderId, await readLibrary(transaction))) throw new Error("空のフォルダだけ削除できます。中のノートやフォルダを先に移動してください。");
+    await checkDriveFolderDeletion(transaction, new Set([folderId]), new Set([`folder:${folderId}`]));
     await readRequest(transaction.objectStore("folders").delete(folderId));
   });
 }
