@@ -87,14 +87,13 @@ test("入口を表示するだけではSDK準備も認証もAPI通信も開始�
   assert.equal(elements(disabled).find((entry) => entry.type === "button")!.props.disabled, true);
 });
 
-test("開いた時だけ準備し、保存先は変わらないことを表示して、接続はクリックを待つ", async () => {
+test("開いた時だけ準備し、接続後の全件自動保存を案内して認可はクリックを待つ", async () => {
   const cleanup = await mount();
   assert.equal(dialog.open, true);
   assert.equal(prepared, 1);
   assert.equal(connected + accounts + creates, 0);
   const { html } = render();
-  assert.match(html, /自動保存はノート一覧でノートごとに有効/);
-  assert.match(html, /手動保存・読み込み/);
+  assert.match(html, /接続後、全ノート・フォルダをDriveへ自動保存/);
   assert.match(html, /Googleで接続確認/);
   assert.ok(!html.includes("専用フォルダを作成</button>"));
   cleanup();

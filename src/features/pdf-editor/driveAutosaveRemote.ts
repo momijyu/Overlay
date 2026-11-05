@@ -32,7 +32,7 @@ async function createOnce(access: DriveNoteAccess, id: string, create: () => Pro
   }
 }
 
-function content(manifest: DriveNoteManifest) {
+export function driveManifestContent(manifest: DriveNoteManifest) {
   // 項目順も固定し、検証後に同じハッシュを再計算できるようにする。
   return { kind: "overlay-drive-note", noteKey: manifest.noteKey, title: manifest.title, fileName: manifest.fileName,
     pdfId: manifest.pdfId, pdfBytes: manifest.pdfBytes, strokesByPage: manifest.strokesByPage, textsByPage: manifest.textsByPage,
@@ -49,12 +49,18 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
   }
   const properties = (role: string) => ({ overlayApp: "overlay", overlaySchema: "1", overlayRole: role,
     overlayRootId: binding.rootId, overlayNoteKey: binding.key, overlayDeviceId: binding.deviceId });
-  const folder = await metadata(access, container) ?? await createOnce(access, container, () => access.json("files", { fields: DRIVE_NOTE_FIELDS }, {
+  const [folderMetadata, pdfMetadata, noteMetadata] = await Promise.all([metadata(access, container), metadata(access, pdf), metadata(access, noteId)]);
+  if (binding.uploadedGeneration > 0 && (!folderMetadata || !pdfMetadata || !noteMetadata)) {
+    throw new Error("保存済みのDriveファイルが見つかりません。作り直さず停止しました。端末の内容は残っています。");
+  }
+  const parentId = binding.parentId ?? binding.rootId;
+  const folder = folderMetadata ?? await createOnce(access, container, () => access.json("files", { fields: DRIVE_NOTE_FIELDS }, {
     id: container, name: `${source.title} (${binding.deviceId.slice(0, 8)})`, mimeType: "application/vnd.google-apps.folder",
-    parents: [binding.rootId], appProperties: properties("note-container"),
+    parents: [parentId], appProperties: properties("note-container"),
   }));
-  if (driveFile(folder, "note-container", binding.rootId, binding.key, binding.rootId).id !== container) throw new Error("Driveの保存先が一致しません。");
-  const original = driveFile(await metadata(access, pdf) ?? await createOnce(access, pdf, () => access.upload({ id: pdf,
+  if (driveFile(folder, "note-container", binding.rootId, binding.key, parentId).id !== container) throw new Error("Driveの保存先が一致しません。");
+  if (parentId !== binding.rootId) await (await import("./driveLibraryRemote")).verifyLibraryAncestry(access, driveObject(folder), binding.rootId);
+  const original = driveFile(pdfMetadata ?? await createOnce(access, pdf, () => access.upload({ id: pdf,
     name: source.fileName, mimeType: "application/pdf", parents: [container], appProperties: properties("pdf") }, source.pdf)),
   "pdf", binding.rootId, binding.key, container);
   if (original.id !== pdf || Number(original.size) !== source.pdf.size || typeof original.sha256Checksum !== "string" || original.sha256Checksum.toLowerCase() !== binding.pdfHash) {
@@ -64,7 +70,7 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
     title: source.title, fileName: source.fileName, pdfId: pdf, pdfBytes: source.pdf.size,
     strokesByPage: source.strokesByPage, textsByPage: source.textsByPage,
     ...(source.pages ? { pages: source.pages } : {}), ...(source.headingsByPage ? { headingsByPage: source.headingsByPage } : {}) };
-  const hash = await sha256(new Blob([JSON.stringify(content(draft))]));
+  const hash = await sha256(new Blob([JSON.stringify(driveManifestContent(draft))]));
   const manifest = { ...draft, sync: { deviceId: binding.deviceId, generation: binding.generation, hash } };
   const data = new Blob([JSON.stringify(manifest)], { type: "application/json" });
   if (data.size > BACKUP_LIMITS.jsonBytes) throw new Error("編集情報が16MiBを超えたため、Drive自動保存を停止しました。");
@@ -81,7 +87,7 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
     const saved = readDriveManifest(raw, binding.key);
     const sync = saved.sync;
     if (!sync || sync.deviceId !== binding.deviceId || saved.pdfId !== pdf || saved.pdfBytes !== source.pdf.size
-      || sync.hash !== await sha256(new Blob([JSON.stringify(content(saved))]))
+      || sync.hash !== await sha256(new Blob([JSON.stringify(driveManifestContent(saved))]))
       || sync.generation > binding.generation || sync.generation < binding.uploadedGeneration
       || (sync.generation === binding.uploadedGeneration && binding.uploadedHash !== undefined && sync.hash !== binding.uploadedHash)
       || (sync.generation === binding.generation && sync.hash !== hash)) {
@@ -89,13 +95,13 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
     }
     return sync.generation === binding.generation && sync.hash === hash;
   }
-  const existing = await metadata(access, noteId);
-  if (existing && await checkExisting(existing)) return hash; // 保存成功の応答を失った場合も再送しない。
+  const existing = noteMetadata;
+  if (existing && await checkExisting(existing)) return { hash, version: String(driveObject(existing).version) }; // 保存成功の応答を失った場合も再送しない。
   const saved = existing ? await access.replace(noteId, data, { name: `${source.title}${DRIVE_NOTE_SUFFIX}` })
     : await createOnce(access, noteId, () => access.upload({ id: noteId, name: `${source.title}${DRIVE_NOTE_SUFFIX}`,
       mimeType: "application/json", parents: [container], appProperties: properties("sync-note") }, data));
   const summary = driveNoteSummary(saved, binding.rootId);
   if (summary.id !== noteId || summary.noteKey !== binding.key || summary.deviceId !== binding.deviceId || summary.containerId !== container
     || !await checkExisting(saved)) throw new Error("Drive自動保存の結果を確認できませんでした。");
-  return hash;
+  return { hash, version: String(driveObject(saved).version) };
 }

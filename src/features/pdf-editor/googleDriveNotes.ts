@@ -8,6 +8,7 @@ export type DriveNoteAccess = {
   json(path: string, parameters: Record<string, string>, body?: unknown): Promise<unknown>;
   upload(metadata: Record<string, unknown>, data: Blob): Promise<unknown>;
   download(fileId: string, maximumBytes: number): Promise<Blob>;
+  updateMetadata?: (fileId: string, metadata: Record<string, unknown>, parameters?: Record<string, string>) => Promise<unknown>;
   replace?: (fileId: string, data: Blob, metadata?: Record<string, unknown>) => Promise<unknown>;
 };
 
@@ -81,12 +82,13 @@ export async function listDriveNotes(access: DriveNoteAccess, rootId: string, pa
   return { notes, ...(value.nextPageToken ? { nextPageToken: value.nextPageToken as string } : {}) };
 }
 
-async function readDriveSource(access: DriveNoteAccess, rootId: string, noteId: string) {
+export async function readDriveSource(access: DriveNoteAccess, rootId: string, noteId: string) {
   driveId(rootId); driveId(noteId);
   const metadata = await access.json(`files/${noteId}`, { fields: DRIVE_NOTE_FIELDS });
   const summary = driveNoteSummary(metadata, rootId);
   if (summary.id !== noteId) throw new Error("Driveノートの識別情報が一致しません。");
-  const container = driveFile(await access.json(`files/${summary.containerId}`, { fields: DRIVE_NOTE_FIELDS }), "note-container", rootId, summary.noteKey, rootId);
+  const container = driveFile(await access.json(`files/${summary.containerId}`, { fields: DRIVE_NOTE_FIELDS }), "note-container", rootId, summary.noteKey);
+  await (await import("./driveLibraryRemote")).verifyLibraryAncestry(access, container, rootId);
   if (container.id !== summary.containerId) throw new Error("Driveノートの保存場所が一致しません。");
   const size = Number(driveObject(metadata).size);
   if (!Number.isSafeInteger(size) || size <= 0 || size > BACKUP_LIMITS.jsonBytes) throw new Error("Driveノートの編集情報は16MiB以下である必要があります。");
@@ -95,6 +97,10 @@ async function readDriveSource(access: DriveNoteAccess, rootId: string, noteId: 
   let raw: unknown;
   try { raw = JSON.parse(await data.text()); } catch { throw new Error("Driveノートの編集情報を読み取れませんでした。"); }
   const manifest = readDriveManifest(raw, summary.noteKey);
+  if (manifest.sync) {
+    const { sha256, driveManifestContent } = await import("./driveAutosaveRemote");
+    if (manifest.sync.hash !== await sha256(new Blob([JSON.stringify(driveManifestContent(manifest))]))) throw new Error("Driveの編集内容の検証に失敗しました。");
+  }
   if (summary.deviceId !== manifest.sync?.deviceId) throw new Error("Driveノートの端末情報が一致しません。");
   const pdfMetadata = driveFile(await access.json(`files/${manifest.pdfId}`, { fields: DRIVE_NOTE_FIELDS }), "pdf", rootId, summary.noteKey, summary.containerId);
   if (pdfMetadata.id !== manifest.pdfId || Number(pdfMetadata.size) !== manifest.pdfBytes) throw new Error("DriveノートのPDF情報が一致しません。");
@@ -102,18 +108,25 @@ async function readDriveSource(access: DriveNoteAccess, rootId: string, noteId: 
 }
 
 export async function loadDriveNote(access: DriveNoteAccess, rootId: string, noteId: string): Promise<NoteBackup> {
-  const { manifest } = await readDriveSource(access, rootId, noteId);
+  return (await loadDriveNoteDetails(access, rootId, noteId)).backup;
+}
+
+export async function loadDriveNoteDetails(access: DriveNoteAccess, rootId: string, noteId: string) {
+  const { manifest, metadata, summary, pdfMetadata } = await readDriveSource(access, rootId, noteId);
   const pdf = await access.download(manifest.pdfId, BACKUP_LIMITS.bytes);
   if (pdf.size !== manifest.pdfBytes || !((await pdf.slice(0, 1024).text()).includes("%PDF-"))) throw new Error("DriveノートのPDFが不正です。");
+  const pdfHash = await (await import("./driveAutosaveRemote")).sha256(pdf);
+  if (pdfMetadata.sha256Checksum !== undefined && pdfMetadata.sha256Checksum !== pdfHash) throw new Error("DriveのPDFの取得結果が一致しません。");
   if (manifest.pages || manifest.headingsByPage) {
     const { PDFDocument } = await import("pdf-lib");
     const original = await PDFDocument.load(await pdf.arrayBuffer(), { updateMetadata: false });
     checkPageBindings(manifest.pages, [manifest.strokesByPage, manifest.textsByPage, manifest.headingsByPage ?? {}], original.getPageCount());
   }
-  return readNoteBackup({ schemaVersion: manifest.headingsByPage ? 4 : manifest.pages ? 3 : 1, kind: "note", name: manifest.title, folders: [], notes: [{
+  const backup = readNoteBackup({ schemaVersion: manifest.headingsByPage ? 4 : manifest.pages ? 3 : 1, kind: "note", name: manifest.title, folders: [], notes: [{
     id: manifest.noteKey, title: manifest.title, fileName: manifest.fileName, folderId: null, pdf,
     ...(manifest.pages ? { pages: manifest.pages } : {}), ...(manifest.headingsByPage ? { headingsByPage: manifest.headingsByPage } : {}), strokesByPage: manifest.strokesByPage, textsByPage: manifest.textsByPage,
   }] });
+  return { backup, manifest, metadata, summary, pdfHash };
 }
 
 // 利用者が指定した1件の手動上書き。事前のversion比較は原子的な条件付き更新ではない。

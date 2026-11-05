@@ -256,6 +256,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
       download: async (fileId, maximumBytes) => await noteRequest(`files/${fileId}`, { alt: "media" }, token, undefined,
         { read: (response) => boundedBlob(response, maximumBytes) }) as Blob,
       upload,
+      updateMetadata: (fileId, metadata, parameters = {}) => noteRequest(`files/${fileId}`, { ...parameters, fields: "id,name,mimeType,ownedByMe,trashed,parents,appProperties,size,modifiedTime,version,sha256Checksum" }, token, metadata, { method: "PATCH" }),
       replace: (fileId, data, metadata) => upload({ ...metadata, mimeType: "application/json" }, data, fileId),
     };
   }

@@ -8,7 +8,7 @@ import { canDeleteEmptyFolder, hasFolderNameConflict } from "./noteTree";
 import { readStrokes } from "./strokeData";
 import { readTextNotes } from "./textData";
 import type { HeadingsByPage, NotePage, LoadedNote, NoteFolder, NoteLibrary, PenStroke, SavedNoteSummary, TextNotesByPage } from "./types";
-import { readNoteBackup, type NoteBackup } from "./noteBackupData";
+import { BACKUP_LIMITS, readNoteBackup, type NoteBackup } from "./noteBackupData";
 import { toLocalNoteSummary } from "./localNoteSummary";
 
 type LocalNote = SavedNoteSummary & { strokesByPage: Record<number, PenStroke[]>; textsByPage?: TextNotesByPage; pages?: NotePage[]; headingsByPage?: HeadingsByPage; revision?: number };
@@ -39,6 +39,19 @@ export async function captureSelectedNoteBackup(items: NoteDragItem[]): Promise<
 }
 
 async function captureBackup(items: NoteDragItem[], selection: boolean): Promise<NoteBackup> {
+  const library = await loadNoteLibrary();
+  const included = new Set(items.filter((i) => i.kind === "folder").map((i) => i.id));
+  if (!selection) for (let size = -1; size !== included.size;) {
+    size = included.size;
+    for (const folder of library.folders) if (folder.parentId && included.has(folder.parentId)) included.add(folder.id);
+  }
+  const selectedIds = new Set(items.filter((i) => i.kind === "note").map((i) => i.id));
+  const targets = library.notes.filter((note) => selectedIds.has(note.id) || note.folderId && included.has(note.folderId));
+  if (targets.length > BACKUP_LIMITS.notes || included.size > BACKUP_LIMITS.folders) throw new Error("バックアップの項目数が上限を超えています。");
+  const { hydrateDriveNote, pinDriveNote } = await import("./driveLibraryCache");
+  const release = targets.map((note) => pinDriveNote(note.id));
+  try {
+    for (const note of targets) await hydrateDriveNote(note.id);
   const snapshot = await withLocalTransaction(["notes", "pdfs", "folders", "noteSummaries"], "readonly", async (transaction) => {
     const library = await readLibrary(transaction);
     const keys = new Set(items.map(noteItemKey));
@@ -82,6 +95,7 @@ async function captureBackup(items: NoteDragItem[], selection: boolean): Promise
       name: selection ? "Overlay-選択項目" : "title" in selected ? selected.title : selected.name, folders, notes };
   });
   return readNoteBackup(snapshot);
+  } finally { for (const unpin of release) unpin(); }
 }
 
 // 解析済みバックアップを新しいIDで追加する。途中の失敗では全件ロールバックする。
@@ -164,6 +178,7 @@ export async function loadNoteLibrary(): Promise<NoteLibrary> {
 export async function saveLocalNote(input: {
   file: File; strokesByPage: Record<number, PenStroke[]>; noteId: string | null;
   expectedRevision?: number;
+  initialFolderId?: string | null;
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
   headingsByPage?: HeadingsByPage;
@@ -180,6 +195,8 @@ export async function saveLocalNote(input: {
     const pdfs = transaction.objectStore("pdfs");
     const updatedAt = new Date().toISOString();
     if (input.noteId) {
+      const linked = await readRequest<{ entry: { deleted?: boolean } } | undefined>(transaction.objectStore("driveEntities").get(`note:${id}`));
+      if (linked?.entry.deleted) throw new Error("このノートは別端末で一覧から削除されています。未保存の内容は書き出してください。");
       const [existing, pdf] = await Promise.all([
         readRequest<LocalNote | undefined>(notes.get(id)),
         readRequest<LocalPdf | undefined>(pdfs.get(id)),
@@ -196,7 +213,9 @@ export async function saveLocalNote(input: {
     } else {
       if (input.file.size === 0) throw new Error("空のPDFは保存できません。");
       const title = (input.file.name.replace(/\.pdf$/i, "") || input.file.name).slice(0, 120);
-      const note: LocalNote = { id, title, fileName: input.file.name, folderId: null, updatedAt, strokesByPage,
+      const folderId = input.initialFolderId ?? null;
+      if (folderId !== null && !await readRequest(transaction.objectStore("folders").getKey(folderId))) throw new Error("追加先のフォルダが削除されています。保存先を確認してください。");
+      const note: LocalNote = { id, title, fileName: input.file.name, folderId, updatedAt, strokesByPage,
         textsByPage: textsByPage ?? {}, ...(pages ? { pages } : {}), ...(headingsByPage ? { headingsByPage } : {}), revision: 1 };
       // 元PDFと線は別ストアだが、片方だけ保存されないよう同じトランザクションにする。
       await readRequest(pdfs.add({ id, blob: input.file.slice(0, input.file.size, "application/pdf") } satisfies LocalPdf));
@@ -206,7 +225,8 @@ export async function saveLocalNote(input: {
   });
 }
 
-export async function loadLocalNote(noteId: string): Promise<LoadedNote> {
+export async function loadLocalNote(noteId: string, options: { sourceId?: string } = {}): Promise<LoadedNote> {
+  await (await import("./driveLibraryCache")).hydrateDriveNote(noteId, options.sourceId);
   return withLocalTransaction(["notes", "pdfs"], "readonly", async (transaction) => {
     const [note, pdf] = await Promise.all([
       readRequest<LocalNote | undefined>(transaction.objectStore("notes").get(noteId)),
@@ -225,8 +245,7 @@ export async function loadLocalNote(noteId: string): Promise<LoadedNote> {
 
 export async function deleteSavedNote(noteId: string): Promise<void> {
   await withLocalTransaction(["notes", "pdfs", "noteSummaries", "driveBindings"], "readwrite", async (transaction) => {
-    const notes = transaction.objectStore("notes");
-    if (!await readRequest(notes.get(noteId))) throw new Error("削除するノートが見つかりません。一覧を更新してください。");
+    if (!await readRequest(transaction.objectStore("noteSummaries").getKey(noteId))) throw new Error("削除するノートが見つかりません。一覧を更新してください。");
     // 片方の削除に失敗したら両方取り消す。元PDFが欠けたノートも削除できる。
     await deleteLocalNote(transaction, noteId);
   });
@@ -267,8 +286,10 @@ export async function organizeNote(noteId: string, title: string, folderId: stri
     checkParent(folderId, await readLibrary(transaction));
     const notes = transaction.objectStore("notes");
     const note = await readRequest<LocalNote | undefined>(notes.get(noteId));
-    if (!note) throw new Error("変更するノートが見つかりません。");
-    await writeLocalNote(transaction, { ...note, title: trimmedTitle, folderId, updatedAt: new Date().toISOString() });
+    const summary = await readRequest<SavedNoteSummary | undefined>(transaction.objectStore("noteSummaries").get(noteId));
+    if (!summary) throw new Error("変更するノートが見つかりません。");
+    if (note) await writeLocalNote(transaction, { ...note, title: trimmedTitle, folderId, updatedAt: new Date().toISOString() });
+    else await readRequest(transaction.objectStore("noteSummaries").put({ ...summary, title: trimmedTitle, folderId }));
   });
 }
 
@@ -277,8 +298,10 @@ export async function moveSavedNote(noteId: string, folderId: string | null): Pr
     checkParent(folderId, await readLibrary(transaction));
     const notes = transaction.objectStore("notes");
     const note = await readRequest<LocalNote | undefined>(notes.get(noteId));
-    if (!note) throw new Error("移動するノートが見つかりません。");
-    await writeLocalNote(transaction, { ...note, folderId, updatedAt: new Date().toISOString() });
+    const summary = await readRequest<SavedNoteSummary | undefined>(transaction.objectStore("noteSummaries").get(noteId));
+    if (!summary) throw new Error("移動するノートが見つかりません。");
+    if (note) await writeLocalNote(transaction, { ...note, folderId, updatedAt: new Date().toISOString() });
+    else await readRequest(transaction.objectStore("noteSummaries").put({ ...summary, folderId }));
   });
 }
 
@@ -306,9 +329,11 @@ export async function moveSavedItems(items: NoteDragItem[], parentId: string | n
         if (folder.parentId !== parentId) await readRequest(transaction.objectStore("folders").put({ ...folder, parentId }));
       } else {
         const notes = transaction.objectStore("notes");
-        const note = await readRequest<LocalNote>(notes.get(item.id));
-        if (note.folderId !== parentId) {
-          await writeLocalNote(transaction, { ...note, folderId: parentId, updatedAt: new Date().toISOString() });
+        const note = await readRequest<LocalNote | undefined>(notes.get(item.id));
+        const summary = library.notes.find((n) => n.id === item.id)!;
+        if (summary.folderId !== parentId) {
+          if (note) await writeLocalNote(transaction, { ...note, folderId: parentId, updatedAt: new Date().toISOString() });
+          else await readRequest(transaction.objectStore("noteSummaries").put({ ...summary, folderId: parentId }));
         }
       }
     }

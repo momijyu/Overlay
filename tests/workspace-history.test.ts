@@ -724,7 +724,7 @@ test("編集中はファイル選択枠を隠し、保管案内を出力付近�
     && "data-pdf-backup-notice" in (element.props as Record<string, unknown>)));
 });
 
-test("メニューからのPDF選択はキャンセル・失敗で内容を維持し、成功時だけ切り替えて一覧を閉じる", async () => {
+test("メニューからのPDF選択はキャンセル・失敗で内容を維持し、成功後も一覧を開いたままにする", async () => {
   const { autosave } = setup();
   props(PdfPage).onStrokeComplete(red);
   await autosave.flush();
@@ -752,13 +752,13 @@ test("メニューからのPDF選択はキャンセル・失敗で内容を維�
   select([nextFile]); await settle();
   assert.deepEqual(props(PdfPage).strokes, []);
   assert.equal(props(HistoryControls).canUndo, false);
-  assert.equal(props(NotebookDrawer).open, false);
+  assert.equal(props(NotebookDrawer).open, true);
   assert.equal(savedInputs.length, 0); // 開いただけでは新しいPDFを保存しない。
   assert.ok(find(render(), (element) => element.type === "p"
     && (element.props as { title?: string }).title === "次の授業"));
 });
 
-test("別ノートを読み込めた時だけ一覧を閉じ、失敗時は一覧とエラーを残す", async () => {
+test("別ノートを読み込んだ後も一覧を維持し、失敗時は一覧とエラーを残す", async () => {
   setup();
   (button("ノート一覧を開く")!.props as { onClick: () => void }).onClick();
   openFails = true;
@@ -769,7 +769,7 @@ test("別ノートを読み込めた時だけ一覧を閉じ、失敗時は一�
     && (element.props as { role?: string }).role === "alert"));
   openFails = false;
   await openOther();
-  assert.equal(props(NotebookDrawer).open, false);
+  assert.equal(props(NotebookDrawer).open, true);
 });
 
 test("一覧を閉じても整理中の編集ロックを解除しない", () => {
@@ -1064,59 +1064,51 @@ test("白紙追加失敗・整理中は内容と履歴を変えず、読込済�
 });
 
 
-test("見出しの確定は自動保存・履歴・バックアップ・Drive単体／選択保存へ渡る", async () => {
-  setup(); await openOther(); const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
-  props(PageHeadingsPanel).onChange(2, "重要な公式"); await autosave.flush();
-  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, { 2: "重要な公式" });
-  assert.deepEqual(savedInputs.at(-1)!.strokesByPage, openedStrokes);
+test("見出しUIを外しても既存の見出しを通常保存・バックアップ・Driveへ保持する", async () => {
+  setup(); openedHeadings = { 2: "重要な公式" }; await openOther();
+  assert.equal(find(render(), (element) => element.type === PageHeadingsPanel), undefined);
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
+  props(PdfPage).onStrokeComplete(red); await autosave.flush();
+  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
   const captured = props(NotebookDrawer).captureDriveNote!();
-  assert.equal(captured.schemaVersion, 4); assert.deepEqual(captured.notes[0].headingsByPage, { 2: "重要な公式" });
+  assert.equal(captured.schemaVersion, 4); assert.deepEqual(captured.notes[0].headingsByPage, openedHeadings);
   props(NotebookSidebar).onSaveToDrive!("other"); await new Promise(setImmediate);
   const request = props(NotebookDrawer).driveSaveRequest!; assert.ok("backup" in request);
-  assert.deepEqual(request.backup.notes[0].headingsByPage, { 2: "重要な公式" });
+  assert.deepEqual(request.backup.notes[0].headingsByPage, openedHeadings);
   props(NotebookDrawer).onDriveSaveRequestClose!();
   props(NotebookSidebar).onSaveItemsToDrive!([{ id: "other", title: "授業メモ" } as SavedNoteSummary]);
   const batch = props(NotebookDrawer).driveSaveRequest!; assert.ok("sources" in batch);
-  assert.deepEqual((await batch.sources[0].load()).notes[0].headingsByPage, { 2: "重要な公式" });
+  assert.deepEqual((await batch.sources[0].load()).notes[0].headingsByPage, openedHeadings);
   props(NotebookDrawer).onDriveSaveRequestClose!();
   (button("ノートのバックアップ")!.props as { onClick: () => void }).onClick(); await new Promise(setImmediate);
-  assert.deepEqual(backups.at(-1)!.notes[0].headingsByPage, { 2: "重要な公式" });
+  assert.deepEqual(backups.at(-1)!.notes[0].headingsByPage, openedHeadings);
   props(HistoryControls).onUndo(); await autosave.flush();
-  assert.equal(props(PdfPage).pageNumber, 2); assert.deepEqual(props(PageHeadingsPanel).headings, {});
+  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
   props(HistoryControls).onRedo(); await autosave.flush();
-  assert.deepEqual(props(PageHeadingsPanel).headings, { 2: "重要な公式" });
-  props(PageHeadingsPanel).onChange(2, ""); await autosave.flush();
-  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, {});
+  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
 });
 
-test("白紙挿入後も元ページの見出しを保持し、目次から新しい表示番号へ移動する", async () => {
+test("白紙挿入後も旧見出しのページIDと内容を維持する", async () => {
   setup(); openedHeadings = { 2: "公式", 3: "演習" }; await openOther();
-  assert.equal(savedInputs.length, 0); // 読み込んだだけでは保存しない。
+  assert.equal(savedInputs.length, 0);
   await (button("次に空白ページを追加")!.props as { onClick: () => Promise<void> }).onClick(); await new Promise(setImmediate);
-  assert.deepEqual(props(PageHeadingsPanel).headings, openedHeadings);
-  (button("ノート一覧を開く")!.props as { onClick: () => void }).onClick();
-  props(PageHeadingsPanel).onNavigate(2);
-  assert.equal(props(PdfPage).pageNumber, 3); assert.equal(props(PdfPage).notePage!.id, 2);
-  assert.equal(props(NotebookDrawer).open, false);
-  assert.deepEqual(props(PdfPage).strokes, openedStrokes[2]);
-  const count = savedInputs.length;
-  props(NotebookSidebar).onMutationChange(true);
-  assert.equal(props(PageHeadingsPanel).disabled, true);
-  props(PageHeadingsPanel).onChange(2, "停止中"); props(PageHeadingsPanel).onNavigate(3);
-  assert.equal(props(PdfPage).pageNumber, 3); assert.equal(savedInputs.length, count);
-  assert.deepEqual(props(PageHeadingsPanel).headings, openedHeadings);
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
+  await autosave.flush();
+  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
+  assert.equal(find(render(), (element) => element.type === PageHeadingsPanel), undefined);
+  props(HistoryControls).onUndo(); await autosave.flush();
+  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
 });
 
-test("見出し保存失敗では画面に変更を残し、再試行後に保存する", async () => {
-  setup(); await openOther(); persistFails = true;
-  props(PageHeadingsPanel).onChange(1, "試験範囲");
+test("通常編集の保存失敗・再試行でも旧見出しを失わない", async () => {
+  setup(); openedHeadings = { 1: "試験範囲" }; await openOther(); persistFails = true;
+  props(PdfPage).onStrokeComplete(red);
   const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
   assert.equal(await autosave.flush(), false);
-  assert.deepEqual(props(PageHeadingsPanel).headings, { 1: "試験範囲" });
   assert.ok(button("保存を再試行")); persistFails = false;
   (button("保存を再試行")!.props as { onClick: () => void }).onClick(); await new Promise(setImmediate);
   assert.equal(autosave.hasPendingChanges(), false);
-  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, { 1: "試験範囲" });
+  assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
 });
 
 test("付箋一覧から別資料の該当ページを直接開き、白紙追加後も安定IDで移動する", async () => {

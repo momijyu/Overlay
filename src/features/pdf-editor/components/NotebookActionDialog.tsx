@@ -16,6 +16,7 @@ export type NotebookAction =
 
 type DialogProps = {
   action: NotebookAction;
+  driveLinked?: boolean;
   library: NoteLibrary;
   busy: boolean;
   error: string | null;
@@ -23,7 +24,7 @@ type DialogProps = {
   onSubmit: (name: string, folderId: string | null) => Promise<void>;
 };
 
-export function NotebookActionDialog({ action, library, busy, error, onClose, onSubmit }: DialogProps) {
+export function NotebookActionDialog({ action, library, busy, error, onClose, onSubmit, driveLinked }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const initialParent = action.kind === "edit-note" || action.kind === "delete-note" ? action.note.folderId
     : action.kind === "create-folder" ? action.parentId : action.folder.parentId;
@@ -103,6 +104,7 @@ export function NotebookActionDialog({ action, library, busy, error, onClose, on
               : canSubmit ? "この空フォルダを削除します。元に戻せません。"
               : "空のフォルダだけ削除できます。中のノートやフォルダを先に移動してください。"}
           </p>}
+          {deleting && driveLinked && <p className="text-xs text-error">※ 他端末の連携一覧からも削除します。Drive内の元データは残ります。</p>}
           {error && <p className="text-error" role="alert">{error}</p>}
           <div className="modal-action mt-2">
             <button type="button" className="btn" disabled={busy} onClick={onClose}>キャンセル</button>

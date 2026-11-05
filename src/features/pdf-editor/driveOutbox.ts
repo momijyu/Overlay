@@ -6,6 +6,7 @@ export type DriveBinding = {
   id: string; key: string; deviceId: string; accountId: string; rootId: string; enabled: boolean;
   generation: number; uploadedGeneration: number; dirtySince: number; changedAt: number;
   ids?: { container: string; pdf: string; note: string }; error?: string; retryAt?: number;
+  parentId?: string;
   pdfHash?: string;
   uploadedHash?: string;
   failures?: number;

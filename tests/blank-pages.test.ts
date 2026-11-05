@@ -190,7 +190,7 @@ test("回転PDFの直後に同じ表示寸法の白紙を出力し、日本語�
   } finally { await displayed.loadingTask.destroy(); }
 });
 
-test("旧DB版2の元PDFと本文を変えず版6へ移行し、旧版での再接続は拒否する", async () => {
+test("旧DB版2の元PDFと本文を変えず版7へ移行し、旧版での再接続は拒否する", async () => {
   const opening = indexedDB.open("overlay-local-notes", 2);
   opening.onupgradeneeded = () => { for (const name of ["notes", "pdfs", "folders", "noteSummaries"]) opening.result.createObjectStore(name, { keyPath: "id" }); };
   const legacy = await readRequest(opening);
@@ -201,6 +201,6 @@ test("旧DB版2の元PDFと本文を変えず版6へ移行し、旧版での再�
   const loaded = await loadLocalNote("legacy");
   assert.equal(loaded.pages, undefined); assert.deepEqual(loaded.strokesByPage, { 2: [stroke] });
   assert.deepEqual(await loaded.file.arrayBuffer(), await file.arrayBuffer());
-  assert.equal(await withLocalTransaction(["notes"], "readonly", async (tx) => tx.db.version), 6);
+  assert.equal(await withLocalTransaction(["notes"], "readonly", async (tx) => tx.db.version), 7);
   await assert.rejects(readRequest(indexedDB.open("overlay-local-notes", 2)), { name: "VersionError" });
 });

@@ -5,13 +5,12 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import { AppHeader } from "@/components/layout/AppHeader";
 
 import { readPageHeadings } from "../pageHeadings";
-import { PageHeadingsPanel } from "./PageHeadingsPanel";
 import { createStickyOutline, stickyDestination } from "../stickyOutline";
 import { checkPageBindings, resolveNotePages, insertBlankPage, MAX_NOTE_PAGES } from "../notePages";
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { pdfDownloadName } from "../pdfDownloadName";
 import { DEFAULT_ERASER_WIDTH, DEFAULT_MARKER_WIDTH, DEFAULT_PEN_WIDTH, isPenColor, MARKER_COLOR, PEN_COLOR } from "../penStyle";
-import { captureNoteBackup, captureSelectedNoteBackup, restoreNoteBackup, deleteSavedNote, deleteSavedItems, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
+import { captureNoteBackup, captureSelectedNoteBackup, restoreNoteBackup, deleteSavedNote, deleteSavedItems, loadNoteLibrary, loadLocalNote as loadSavedNote, saveLocalNote as saveNote } from "../localNotes";
 import { backupDownloadName, readNoteBackup, type NoteBackup } from "../noteBackupData";
 import { NotebookRestoreDialog } from "./NotebookRestoreDialog";
 import type { NoteDragItem } from "../noteDrag";
@@ -20,6 +19,9 @@ import type { HeadingsByPage, NotePage, PenStroke, EditorTool, TextNote, TextNot
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookDrawer } from "./NotebookDrawer";
+import { subscribeLibraryChanged } from "../driveLibraryEvents";
+import { DriveVersionRequired, pinDriveNote } from "../driveLibraryCache";
+import { DriveVersionDialog } from "./DriveVersionDialog";
 import { DriveAutosavePanel } from "./DriveAutosavePanel";
 import type { DriveSaveRequest } from "./GoogleDriveSetup";
 import { EraserSizeControl } from "./EraserSizeControl";
@@ -27,7 +29,7 @@ import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
 import { ZoomControl } from "./ZoomControl";
 import { EditorIcon } from "./EditorIcon";
-import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordPageInsertion, recordHeadingEdit, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
+import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordPageInsertion, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
 
 type PdfInput = {
   file: File;
@@ -38,6 +40,7 @@ type PdfInput = {
   pages?: NotePage[];
   headingsByPage?: HeadingsByPage;
   revision?: number;
+  initialFolderId?: string | null;
 };
 
 const editorTools: { tool: EditorTool; label: string }[] = [
@@ -89,6 +92,16 @@ export function PdfWorkspace() {
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
   const autosaveRef = useRef<LocalAutosave | null>(null);
   const historyRef = useRef(history);
+  const newNoteFolderRef = useRef<string | null>(null);
+  const [versionChoice, setVersionChoice] = useState<{ error: DriveVersionRequired; destination?: { pageId: number; textId: string } } | null>(null);
+  useEffect(() => noteId ? pinDriveNote(noteId) : undefined, [noteId]);
+  useEffect(() => subscribeLibraryChanged(() => {
+    const id = autosaveRef.current?.getState().noteId;
+    if (id) void loadNoteLibrary().then((library) => {
+      const note = library.notes.find((entry) => entry.id === id);
+      if (note && mountedRef.current && autosaveRef.current?.getState().noteId === id) setNoteName(note.title);
+    }).catch(() => { /* 同期側でエラーを表示する。編集中の名前・内容は保持する。 */ });
+  }), []);
   // 自動保存中も描画・ページ切り替え・PDF出力を止めない。
   // ノートを開き直すときだけ、openPdfで保存完了を待つ。
   const isBusy = isLoading || isExporting || isOrganizing || isBackupWorking || pendingBackup !== null;
@@ -164,7 +177,7 @@ export function PdfWorkspace() {
       setDocumentVersion((value) => value + 1);
       const autosave = createLocalAutosave({
         file: input.file, noteId: input.id, strokesByPage: input.strokesByPage, textsByPage: nextHistory.textsByPage,
-        pages: input.pages, headingsByPage: nextHistory.headingsByPage, revision: input.revision, persist: saveNote,
+        pages: input.pages, headingsByPage: nextHistory.headingsByPage, revision: input.revision, persist: (value) => saveNote({ ...value, initialFolderId: input.initialFolderId }),
         onChange: (state) => {
           // 古いノートの保存結果が、新しく開いた画面に混ざらないようにする。
           if (!mountedRef.current || autosaveRef.current !== autosave) return;
@@ -175,9 +188,9 @@ export function PdfWorkspace() {
         },
       });
       autosaveRef.current = autosave;
-      setSidebarVisible(false);
       // 開いただけのPDFは未変更。最初の描画完了でupdateから保存を開始する。
     } catch (openError) {
+      if (openError instanceof DriveVersionRequired) setVersionChoice({ error: openError, destination });
       void loadingTask?.destroy();
       if (mountedRef.current) {
         setError(
@@ -206,7 +219,8 @@ export function PdfWorkspace() {
       return;
     }
 
-    void openPdf(async () => ({ file: selectedFile, id: null, strokesByPage: {} }));
+    const initialFolderId = newNoteFolderRef.current;
+    void openPdf(async () => ({ file: selectedFile, id: null, strokesByPage: {}, initialFolderId }));
   }
 
   async function handleRetrySave() {
@@ -234,17 +248,6 @@ export function PdfWorkspace() {
     }
     // Undo / Redoも通常の編集として保存係へ渡し、保存中の古い結果で上書きしない。
     autosaveRef.current?.update(next.strokesByPage, next.textsByPage, next.pages, next.headingsByPage);
-  }
-
-  function updatePageHeading(pageId: number, heading: string) {
-    if (operationRef.current || !document || !pages.some((page) => page.id === pageId)) return;
-    applyHistory(recordHeadingEdit(historyRef.current, pageId, heading));
-  }
-
-  function navigateToHeading(pageId: number) {
-    if (operationRef.current || !document) return;
-    const index = resolveNotePages(historyRef.current.pages, document.numPages).findIndex((page) => page.id === pageId);
-    if (index >= 0) { setPageNumber(index + 1); setSidebarVisible(false); }
   }
 
   function openStickyPage(note: SavedNoteSummary | null, targetPageId: number, textId: string) {
@@ -520,6 +523,11 @@ export function PdfWorkspace() {
           </details>
         </>}
       </AppHeader>
+      {versionChoice && <DriveVersionDialog choice={versionChoice.error} onClose={() => setVersionChoice(null)}
+        onChoose={(sourceId) => {
+          const selected = versionChoice; setVersionChoice(null);
+          void openPdf(async () => ({ ...await loadSavedNote(selected.error.noteId, { sourceId }), name: selected.error.title }), selected.destination);
+        }} />}
       <NotebookDrawer open={sidebarVisible} busy={isOrganizing || isBackupWorking || !!pendingBackup}
         driveSaveRequest={driveSaveRequest}
         onDriveSaveRequestClose={() => setDriveSaveRequest(null)}
@@ -534,10 +542,9 @@ export function PdfWorkspace() {
           {isBackupWorking && <p role="status" className="px-4 pt-3 text-sm">バックアップ処理中…</p>}
           {backupMessage && <p role="status" className="px-4 pt-3 text-sm">{backupMessage}</p>}
           {isLoading && <p role="status" className="px-4 pt-3">PDFを読み込んでいます…</p>}
-          {document && file && <PageHeadingsPanel key={documentVersion} pages={pages} headings={history.headingsByPage}
-            currentPageId={pageId} disabled={isBusy} onChange={updatePageHeading} onNavigate={navigateToHeading} />}
           <NotebookSidebar
             refreshVersion={refreshVersion}
+            onDestinationChange={(id) => { newNoteFolderRef.current = id; }}
             currentNoteId={noteId}
             currentStickyOutline={document && file ? { id: noteId, title: noteName,
               entries: createStickyOutline(history.textsByPage, pages) } : undefined}
@@ -561,7 +568,8 @@ export function PdfWorkspace() {
               setIsOrganizing(busy);
             }}
           />
-          <DriveAutosavePanel noteId={noteId} title={noteName} disabled={isBusy} drawerOpen={sidebarVisible} />
+          <DriveAutosavePanel disabled={isBusy} drawerOpen={sidebarVisible}
+            onMutationChange={(busy) => { operationRef.current = busy; setIsOrganizing(busy); }} />
           {pendingBackup && <NotebookRestoreDialog backup={pendingBackup} skipDuplicates={isDriveRestore} busy={isBackupWorking} error={backupError}
             onRestore={() => void handleRestoreBackup()}
             onClose={() => { if (!operationRef.current) { setPendingBackup(null); setBackupError(null); } }} />}

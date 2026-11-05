@@ -316,9 +316,10 @@ test("DB版5→6は既存PDF・編集・付箋参照を保持し、既存ノー�
   assert.deepEqual(await withLocalTransaction(["notes"], "readonly", (t) => readRequest(t.objectStore("notes").get("old"))), note);
 });
 
-test("未選択の画面ではGoogle認証・送信を開始せず、保存済みノートの選択を案内する", () => {
-  const html = renderToStaticMarkup(createElement(DriveAutosavePanel, { noteId: null, title: "", disabled: false, drawerOpen: true }));
-  assert.match(html, /保存済みのノートを開いてください/);
+test("未選択でも全ノートの自動保存を案内し、個別の有効化ボタンを表示しない", () => {
+  const html = renderToStaticMarkup(createElement(DriveAutosavePanel, { disabled: false, drawerOpen: true }));
+  assert.match(html, /Drive接続後、全ノート・フォルダを自動保存します/);
+  assert.ok(!html.includes("フォルダ構造をDriveと連携"));
   assert.ok(!html.includes("このノートで有効にする"));
   assert.ok(!html.includes("Driveに保存済み"));
 });

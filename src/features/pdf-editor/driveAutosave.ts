@@ -1,5 +1,7 @@
 import { captureDriveJob, driveJobDue, getDriveBinding, listDriveBindings, updateDriveBinding } from "./driveOutbox";
 import { reserveDriveIds, sendDriveAutosave, sha256 } from "./driveAutosaveRemote";
+import { registerLibrarySource } from "./driveLibraryLocal";
+import { markUploadedCache } from "./driveLibraryCache";
 import { DriveHttpError } from "./driveHttpError";
 import { createGoogleDriveClient } from "./googleDriveClient";
 import { getGoogleDriveSession } from "./googleDriveSession";
@@ -52,12 +54,14 @@ export function createDriveAutosave(options: DriveAutosaveOptions) {
               }
               const latest = await getDriveBinding(candidate.id);
               if (!latest?.enabled || latest.key !== candidate.key || disposed) return;
-              const uploadedHash = await sendDriveAutosave(access, { ...job.binding, pdfHash: hash }, job.backup);
+              const uploaded = await sendDriveAutosave(access, { ...job.binding, pdfHash: hash }, job.backup);
               const sentGeneration = job.binding.generation;
               await updateDriveBinding(candidate.id, candidate.key, (row) => ({ ...row,
                 uploadedGeneration: Math.max(row.uploadedGeneration, sentGeneration),
-                uploadedHash: row.uploadedGeneration > sentGeneration ? row.uploadedHash : uploadedHash,
+                uploadedHash: row.uploadedGeneration > sentGeneration ? row.uploadedHash : uploaded.hash,
                 error: undefined, retryAt: undefined, failures: 0 }));
+              await registerLibrarySource(job.binding, job.backup.notes[0].fileName);
+              await markUploadedCache(job.binding, job.backup, uploaded.version);
               // 送信中の新しい編集は番号が大きいまま残る。現在画面の内容を古い応答で戻さない。
             } catch (error) {
               if (disposed) return;

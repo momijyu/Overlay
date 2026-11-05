@@ -154,6 +154,6 @@ test("DB版3のページと編集本文を保持して版5へ更新し、古い�
   const loaded = await loadLocalNote("old");
   assert.deepEqual(loaded.pages, pages); assert.deepEqual(loaded.strokesByPage, { 3: [stroke] }); assert.equal(loaded.headingsByPage, undefined);
   assert.deepEqual(await loaded.file.arrayBuffer(), await file.arrayBuffer());
-  assert.equal(await withLocalTransaction(["notes"], "readonly", async (tx) => tx.db.version), 6);
+  assert.equal(await withLocalTransaction(["notes"], "readonly", async (tx) => tx.db.version), 7);
   await assert.rejects(readRequest(indexedDB.open("overlay-local-notes", 3)), { name: "VersionError" });
 });

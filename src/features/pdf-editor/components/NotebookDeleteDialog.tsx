@@ -6,7 +6,8 @@ import { checkedDeletion } from "../noteSelection";
 import { buildNoteTree, folderChoices } from "../noteTree";
 import type { NoteLibrary } from "../types";
 
-export function NotebookDeleteDialog({ items, library, busy, error, onClose, onSubmit }: {
+export function NotebookDeleteDialog({ items, library, busy, error, onClose, onSubmit, driveLinked }: {
+  driveLinked?: boolean;
   items: NoteDragItem[]; library: NoteLibrary; busy: boolean; error: string | null;
   onClose: () => void; onSubmit: () => Promise<void>;
 }) {
@@ -41,6 +42,7 @@ export function NotebookDeleteDialog({ items, library, busy, error, onClose, onS
           })}
         </ul>
         <p className="text-xs leading-relaxed text-red-600 dark:text-red-400" data-bulk-delete-warning>※ 表示したノートの元PDF・書き込みとフォルダを、このブラウザから削除します。元に戻せません。開いているノートが含まれる場合は未保存の変更も失われます。</p>
+        {driveLinked && <p className="text-xs text-error">※ 他端末の連携一覧からも削除します。Drive内の元データは残ります。</p>}
         {(error || validationError) && <p role="alert" className="text-error">{error || validationError}</p>}
         <div className="modal-action mt-2">
           <button type="button" className="btn" disabled={busy} onClick={onClose}>キャンセル</button>

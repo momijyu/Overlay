@@ -99,7 +99,7 @@ test("DB版4の本文・PDF・見出しを変更せず版5で参照だけ追加�
   });
   assert.deepEqual((await loadNoteLibrary()).notes[0].stickyNotes, createStickyOutline(texts, pages)); guarded.mock.restore();
   const stored = await withLocalTransaction(["notes"], "readonly", async (tx) => {
-    assert.equal(tx.db.version, 6); return readRequest(tx.objectStore("notes").get("old"));
+    assert.equal(tx.db.version, 7); return readRequest(tx.objectStore("notes").get("old"));
   });
   assert.deepEqual(stored, original);
   assert.deepEqual(await (await loadLocalNote("old")).file.arrayBuffer(), await file.arrayBuffer());

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
 
+import { getLibraryScope } from "../driveLibraryLocal";
+import { subscribeLibraryChanged } from "../driveLibraryEvents";
 import { createNoteFolder, deleteEmptyNoteFolder, loadNoteLibrary, moveNoteFolder, moveSavedNote, moveSavedItems, organizeNote, renameNoteFolder } from "../localNotes";
 import { canMoveItem, canMoveItems, libraryItems, noteItemKey, NOTE_DRAG_TYPE, readNoteDrag, type NoteDragItem } from "../noteDrag";
 import { attachNotebookTouchDrag, notebookDropAt } from "../notebookTouchDrag";
@@ -17,6 +19,7 @@ import type { CurrentStickyOutline } from "../stickyOutline";
 
 type SidebarProps = {
   refreshVersion: number;
+  onDestinationChange?: (id: string | null) => void;
   currentNoteId: string | null;
   disabled: boolean;
   onOpen: (note: SavedNoteSummary) => void;
@@ -66,6 +69,8 @@ export function NotebookSidebar(props: SidebarProps) {
   const touchCallbacks = useRef<Parameters<typeof attachNotebookTouchDrag>[1] | null>(null);
   const touchFrame = useRef<number | null>(null);
   const [deleting, setDeleting] = useState<{ items: NoteDragItem[]; library: NoteLibrary } | null>(null);
+  const [driveLinked, setDriveLinked] = useState(false);
+  const { onDestinationChange } = props;
   const isLoading = result.key !== requestKey;
   const selected = selection === "root" ? null : selection ?? (
     props.currentNoteId ? { kind: "note" as const, id: props.currentNoteId } : null
@@ -82,6 +87,10 @@ export function NotebookSidebar(props: SidebarProps) {
   const allItems = libraryItems(result.library);
   const checked = allItems.filter((item) => checkedItems.has(noteItemKey(item)));
   const checkedNotes = result.library.notes.filter((note) => checkedItems.has(`note:${note.id}`));
+
+  useEffect(() => subscribeLibraryChanged(() => setRetry((value) => value + 1)), []);
+
+  useEffect(() => { onDestinationChange?.(selectedFolder?.id ?? selectedNote?.folderId ?? null); }, [onDestinationChange, selectedFolder?.id, selectedNote?.folderId]);
 
   // listenerは毎描画で張り替えず、最新の一覧・展開状態だけを参照する。
   useEffect(() => {
@@ -154,6 +163,8 @@ export function NotebookSidebar(props: SidebarProps) {
     async function refresh() {
       try {
         const library = await loadNoteLibrary();
+        const linked = await getLibraryScope();
+        if (active) setDriveLinked(!!linked);
         const tree = buildNoteTree(library.folders, library.notes);
         if (active) setResult({ key: requestKey, library, tree, error: null });
       } catch (error) {
@@ -578,7 +589,7 @@ export function NotebookSidebar(props: SidebarProps) {
             </>
           )}
       </div>
-      {action && <NotebookActionDialog action={action} library={result.library}
+      {action && <NotebookActionDialog action={action} library={result.library} driveLinked={driveLinked}
         busy={props.disabled || isMutating} error={moveError} onSubmit={handleSubmit}
         onClose={() => {
           if (!mutationRef.current) { setAction(null); setMoveError(null); }
@@ -586,7 +597,7 @@ export function NotebookSidebar(props: SidebarProps) {
       {bulkMoving && <NotebookMoveDialog items={checked} library={result.library}
         busy={props.disabled || isMutating} error={moveError} onSubmit={moveChecked}
         onClose={() => { if (!mutationRef.current) { setBulkMoving(false); setMoveError(null); } }} />}
-      {deleting && <NotebookDeleteDialog items={deleting.items} library={deleting.library}
+      {deleting && <NotebookDeleteDialog items={deleting.items} library={deleting.library} driveLinked={driveLinked}
         busy={props.disabled || isMutating} error={moveError} onSubmit={deleteChecked}
         onClose={() => { if (!mutationRef.current) { setDeleting(null); setMoveError(null); } }} />}
       {touchPreview && <div aria-hidden="true" className="pointer-events-none fixed z-20 max-w-48 truncate rounded-box border border-base-300 bg-base-100 px-3 py-2 text-sm shadow-lg"
