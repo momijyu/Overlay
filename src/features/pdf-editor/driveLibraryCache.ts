@@ -105,7 +105,7 @@ export async function hydrateDriveNote(id: string, sourceId?: string, preferCach
   if (initial.hasBody && entity.cachedSource === source.noteId && entity.cachedVersion === version) {
     await touch(id); return;
   }
-  const result = await loadDriveNoteDetails(access, scope.rootId, source.noteId);
+  const result = await loadDriveNoteDetails(access, scope.rootId, source.noteId, metadata);
   if (result.summary.noteKey !== source.noteKey || result.summary.containerId !== source.containerId || result.summary.deviceId !== source.deviceId
     || String(result.metadata.version) !== version) throw new Error("取得中にDriveノートが変わりました。再度開いてください。");
   if (source.pdfHash && result.pdfHash !== source.pdfHash || binding?.ids?.note === source.noteId && binding.pdfHash && result.pdfHash !== binding.pdfHash) throw new Error("Driveの元PDFが変更されています。端末の内容を残して停止しました。");

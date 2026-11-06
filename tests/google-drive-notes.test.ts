@@ -568,7 +568,7 @@ test("専用フォルダの変更や別アカウントの指定では新規保�
   assert.ok(f.calls.every(({ init }) => init.method === "GET"));
 });
 
-test("他人のノート・別の保存場所・目印のないファイルは本文取得前に拒否する", async () => {
+test("他人のノート・別の保存場所・目印のないファイルではPDF本文を取得しない", async () => {
   for (const mutation of ["owner", "root", "role", "parent"] as const) {
     const f = await verified(); const saved = await save(f);
     const file = f.files.get(saved.id)!;
@@ -578,7 +578,9 @@ test("他人のノート・別の保存場所・目印のないファイルは�
     if (mutation === "parent") f.files.get(saved.containerId)!.parents = ["another_root"];
     f.calls.length = 0;
     await assert.rejects(f.client.loadNote("account_A", root.id, saved.id));
-    assert.equal(f.calls.filter(({ url }) => url.searchParams.get("alt") === "media").length, 0);
+    const downloads = f.calls.filter(({ url }) => url.searchParams.get("alt") === "media");
+    assert.ok(downloads.every(({ url }) => url.pathname.endsWith(`/${saved.id}`)));
+    if (mutation !== "parent") assert.equal(downloads.length, 0);
   }
 });
 

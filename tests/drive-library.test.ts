@@ -96,6 +96,64 @@ async function bodyCount() {
   return withLocalTransaction(["notes", "pdfs"], "readonly", async (tx) => [await readRequest(tx.objectStore("notes").count()), await readRequest(tx.objectStore("pdfs").count())]);
 }
 
+test("未取得ノートは階層確認とJSON取得を並行し、確認前にPDFを取得しない", async () => {
+  const f = await fixture(); authorize(f);
+  await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() });
+  const source = (await readLibraryState()).entities.find((row) => row.entry.id === f.note)!.sources[0];
+  const originalJson = f.access.json.bind(f.access); const originalDownload = f.access.download.bind(f.access);
+  let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+  let jsonStarted!: () => void; const started = new Promise<void>((resolve) => { jsonStarted = resolve; });
+  let locationPending = false; let pdfStarted = false; let metadataReads = 0;
+  f.access.json = async (...args) => {
+    if (args[0] === `files/${source.noteId}`) metadataReads++;
+    if (args[0] === `files/${source.containerId}`) { locationPending = true; await gate; }
+    return originalJson(...args);
+  };
+  f.access.download = async (...args) => {
+    if (args[0] === source.noteId) jsonStarted(); else pdfStarted = true;
+    return originalDownload(...args);
+  };
+  const loading = loadLocalNote(f.note);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([started, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("JSON取得が階層確認を待っている")), 2000); })]);
+    assert.equal(locationPending, true); assert.equal(pdfStarted, false);
+  } finally { clearTimeout(timer); release(); await loading; }
+  assert.equal(pdfStarted, true);
+  // 最初の情報を同じ操作内で共有し、2回目はPDF取得時の変更検出に使う。
+  assert.equal(metadataReads, 2); assert.deepEqual(await bodyCount(), [1, 1]);
+});
+
+test("JSON取得中のDriveの版変更をPDF取得時に検出し、キャッシュを書き込まない", async () => {
+  const f = await fixture(); authorize(f);
+  await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() });
+  const source = (await readLibraryState()).entities.find((row) => row.entry.id === f.note)!.sources[0];
+  const originalDownload = f.access.download.bind(f.access);
+  f.access.download = async (...args) => {
+    const data = await originalDownload(...args);
+    if (args[0] === source.noteId) {
+      const row = f.files.get(source.noteId)!;
+      f.files.set(source.noteId, { ...row, version: String(Number(row.version) + 1) });
+    }
+    return data;
+  };
+  await assert.rejects(loadLocalNote(f.note), /取得中にDriveノートが変わりました/);
+  assert.deepEqual(await bodyCount(), [0, 0]);
+});
+
+test("並行取得の階層検証失敗ではPDFとキャッシュを取得せず、次回の再取得は成功する", async () => {
+  const f = await fixture(); authorize(f);
+  await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() });
+  const source = (await readLibraryState()).entities.find((row) => row.entry.id === f.note)!.sources[0];
+  const container = f.files.get(source.containerId)!;
+  f.files.set(container.id, { ...container, parents: ["outside"] }); f.calls.length = 0;
+  await assert.rejects(loadLocalNote(f.note));
+  assert.ok(f.calls.filter((call) => call.startsWith("download ")).every((call) => call === `download ${source.noteId}`));
+  assert.deepEqual(await bodyCount(), [0, 0]);
+  f.files.set(container.id, container);
+  await loadLocalNote(f.note); assert.deepEqual(await bodyCount(), [1, 1]);
+});
+
 test("全ノートと空フォルダを固定IDで連携し、初回PDF送信後も通常編集では元PDFを増やさない", async () => {
   const f = await fixture(); const before = (await readLibraryState()).entities;
   assert.equal(before.length, 3); assert.ok(before.every((e) => e.entry.remoteId));

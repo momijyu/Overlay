@@ -82,38 +82,56 @@ export async function listDriveNotes(access: DriveNoteAccess, rootId: string, pa
   return { notes, ...(value.nextPageToken ? { nextPageToken: value.nextPageToken as string } : {}) };
 }
 
-export async function readDriveSource(access: DriveNoteAccess, rootId: string, noteId: string) {
+// 取得済みメタデータは同じ読み込み操作内だけで渡す。永続キャッシュとして再利用しない。
+export async function readDriveSource(access: DriveNoteAccess, rootId: string, noteId: string, initialMetadata?: unknown) {
   driveId(rootId); driveId(noteId);
-  const metadata = await access.json(`files/${noteId}`, { fields: DRIVE_NOTE_FIELDS });
+  const metadata = { ...driveObject(initialMetadata ?? await access.json(`files/${noteId}`, { fields: DRIVE_NOTE_FIELDS })) };
   const summary = driveNoteSummary(metadata, rootId);
   if (summary.id !== noteId) throw new Error("Driveノートの識別情報が一致しません。");
-  const container = driveFile(await access.json(`files/${summary.containerId}`, { fields: DRIVE_NOTE_FIELDS }), "note-container", rootId, summary.noteKey);
-  await (await import("./driveLibraryRemote")).verifyLibraryAncestry(access, container, rootId);
-  if (container.id !== summary.containerId) throw new Error("Driveノートの保存場所が一致しません。");
-  const size = Number(driveObject(metadata).size);
+  const size = Number(metadata.size);
   if (!Number.isSafeInteger(size) || size <= 0 || size > BACKUP_LIMITS.jsonBytes) throw new Error("Driveノートの編集情報は16MiB以下である必要があります。");
-  const data = await access.download(noteId, BACKUP_LIMITS.jsonBytes);
-  if (data.size !== size) throw new Error("Driveノートの編集中または破損の可能性があります。再読み込みしてください。");
-  let raw: unknown;
-  try { raw = JSON.parse(await data.text()); } catch { throw new Error("Driveノートの編集情報を読み取れませんでした。"); }
-  const manifest = readDriveManifest(raw, summary.noteKey);
-  if (manifest.sync) {
-    const { sha256, driveManifestContent } = await import("./driveAutosaveRemote");
-    if (manifest.sync.hash !== await sha256(new Blob([JSON.stringify(driveManifestContent(manifest))]))) throw new Error("Driveの編集内容の検証に失敗しました。");
-  }
-  if (summary.deviceId !== manifest.sync?.deviceId) throw new Error("Driveノートの端末情報が一致しません。");
-  const pdfMetadata = driveFile(await access.json(`files/${manifest.pdfId}`, { fields: DRIVE_NOTE_FIELDS }), "pdf", rootId, summary.noteKey, summary.containerId);
-  if (pdfMetadata.id !== manifest.pdfId || Number(pdfMetadata.size) !== manifest.pdfBytes) throw new Error("DriveノートのPDF情報が一致しません。");
-  return { metadata: driveObject(metadata), summary, manifest, pdfMetadata };
+  const verifyLocation = async () => {
+    const container = driveFile(await access.json(`files/${summary.containerId}`, { fields: DRIVE_NOTE_FIELDS }), "note-container", rootId, summary.noteKey);
+    if (container.id !== summary.containerId) throw new Error("Driveノートの保存場所が一致しません。");
+    await (await import("./driveLibraryRemote")).verifyLibraryAncestry(access, container, rootId);
+  };
+  const readContent = async () => {
+    const data = await access.download(noteId, BACKUP_LIMITS.jsonBytes);
+    if (data.size !== size) throw new Error("Driveノートの編集中または破損の可能性があります。再読み込みしてください。");
+    let raw: unknown;
+    try { raw = JSON.parse(await data.text()); } catch { throw new Error("Driveノートの編集情報を読み取れませんでした。"); }
+    const manifest = readDriveManifest(raw, summary.noteKey);
+    if (manifest.sync) {
+      const { sha256, driveManifestContent } = await import("./driveAutosaveRemote");
+      if (manifest.sync.hash !== await sha256(new Blob([JSON.stringify(driveManifestContent(manifest))]))) throw new Error("Driveの編集内容の検証に失敗しました。");
+    }
+    if (summary.deviceId !== manifest.sync?.deviceId) throw new Error("Driveノートの端末情報が一致しません。");
+    const pdfMetadata = driveFile(await access.json(`files/${manifest.pdfId}`, { fields: DRIVE_NOTE_FIELDS }), "pdf", rootId, summary.noteKey, summary.containerId);
+    if (pdfMetadata.id !== manifest.pdfId || Number(pdfMetadata.size) !== manifest.pdfBytes) throw new Error("DriveノートのPDF情報が一致しません。");
+    return { manifest, pdfMetadata };
+  };
+  // 独立した読み取りだけを並行化する。両方の検証成功まではPDF本文を取得しない。
+  const [, { manifest, pdfMetadata }] = await Promise.all([verifyLocation(), readContent()]);
+  return { metadata, summary, manifest, pdfMetadata };
 }
 
 export async function loadDriveNote(access: DriveNoteAccess, rootId: string, noteId: string): Promise<NoteBackup> {
   return (await loadDriveNoteDetails(access, rootId, noteId)).backup;
 }
 
-export async function loadDriveNoteDetails(access: DriveNoteAccess, rootId: string, noteId: string) {
-  const { manifest, metadata, summary, pdfMetadata } = await readDriveSource(access, rootId, noteId);
-  const pdf = await access.download(manifest.pdfId, BACKUP_LIMITS.bytes);
+export async function loadDriveNoteDetails(access: DriveNoteAccess, rootId: string, noteId: string, initialMetadata?: unknown) {
+  const { manifest, metadata, summary, pdfMetadata } = await readDriveSource(access, rootId, noteId, initialMetadata);
+  const expectedVersion = version(metadata.version);
+  // 早期の二重取得をやめ、PDF取得と並行して後段の版を確認する。
+  const [pdf, latestValue] = await Promise.all([
+    access.download(manifest.pdfId, BACKUP_LIMITS.bytes),
+    access.json(`files/${noteId}`, { fields: DRIVE_NOTE_FIELDS }),
+  ]);
+  const latest = driveNoteSummary(latestValue, rootId);
+  if (latest.id !== noteId || latest.noteKey !== summary.noteKey || latest.containerId !== summary.containerId
+    || latest.deviceId !== summary.deviceId || version(driveObject(latestValue).version) !== expectedVersion) {
+    throw new Error("取得中にDriveノートが変わりました。再度開いてください。");
+  }
   if (pdf.size !== manifest.pdfBytes || !((await pdf.slice(0, 1024).text()).includes("%PDF-"))) throw new Error("DriveノートのPDFが不正です。");
   const pdfHash = await (await import("./driveAutosaveRemote")).sha256(pdf);
   if (pdfMetadata.sha256Checksum !== undefined && pdfMetadata.sha256Checksum !== pdfHash) throw new Error("DriveのPDFの取得結果が一致しません。");
