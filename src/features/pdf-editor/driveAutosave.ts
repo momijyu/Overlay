@@ -59,6 +59,8 @@ export function createDriveAutosave(options: DriveAutosaveOptions) {
               await updateDriveBinding(candidate.id, candidate.key, (row) => ({ ...row,
                 uploadedGeneration: Math.max(row.uploadedGeneration, sentGeneration),
                 uploadedHash: row.uploadedGeneration > sentGeneration ? row.uploadedHash : uploaded.hash,
+                uploadedChecksum: row.uploadedGeneration > sentGeneration ? row.uploadedChecksum : uploaded.checksum,
+                uploadedJsonBytes: row.uploadedGeneration > sentGeneration ? row.uploadedJsonBytes : uploaded.bytes,
                 error: undefined, retryAt: undefined, failures: 0 }));
               await registerLibrarySource(job.binding, job.backup.notes[0].fileName);
               await markUploadedCache(job.binding, job.backup, uploaded.version);

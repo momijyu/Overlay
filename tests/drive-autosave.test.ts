@@ -55,24 +55,108 @@ function remote() {
       calls.push(`replace ${id}`);
       await beforeReplace?.();
       const previous = files.get(id)!;
-      files.set(id, { ...previous, ...details, data, size: String(data.size) });
+      files.set(id, { ...previous, ...details, data, size: String(data.size), sha256Checksum: await sha256(data),
+        version: String(BigInt(String(previous.version)) + BigInt(1)) });
       if (unknownResult === "replace") { unknownResult = ""; throw new DriveHttpError(0, "通信断"); }
       return files.get(id)!;
     },
   };
   return { access, files, calls, failAfterSave(role: string) { unknownResult = role; }, onReplace(work: () => Promise<void>) { beforeReplace = work; } };
 }
-async function setup() {
+async function setup(delayMs = 0) {
   const id = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
   await enableDriveAutosave(id, connection.accountId, connection.rootId);
   const f = remote();
   let current: typeof connection | null = connection;
   let time = Date.now() + 20000;
-  const runner = createDriveAutosave({ connection: () => current, access: async () => f.access, now: () => time,
+  const delay = async <T>(work: () => Promise<T>) => { if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs)); return work(); };
+  const access: DriveNoteAccess = {
+    json: (...args) => delay(() => f.access.json(...args)), upload: (...args) => delay(() => f.access.upload(...args)),
+    download: (...args) => delay(() => f.access.download(...args)), replace: (...args) => delay(() => f.access.replace!(...args)),
+  };
+  const runner = createDriveAutosave({ connection: () => current, access: async () => access, now: () => time,
     lock: async (_name, work) => work() });
   return { ...f, id, runner, advance() { time += 120000; }, reconnect(value: typeof current) { current = value; } };
 }
 async function row() { return (await listDriveBindings())[0]; }
+
+test("仮APIで通常更新の通信回数・JSON読み戻し量・待機時間を記録する", async (t) => {
+  const f = await setup(50); await f.runner.tick();
+  await saveLocalNote({ file, noteId: f.id, expectedRevision: 1, strokesByPage: {
+    1: [{ width: 2, points: Array.from({ length: 20_000 }, (_, i) => ({ x: i / 20_000, y: .5 })) }],
+  } });
+  f.advance(); f.calls.length = 0;
+  const oldJson = f.files.get((await row()).ids!.note)!.data!;
+  const start = performance.now(); await f.runner.tick(); const elapsed = performance.now() - start;
+  const binding = await row(); const newJson = f.files.get(binding.ids!.note)!.data!;
+  assert.equal(binding.uploadedGeneration, binding.generation); assert.equal(binding.error, undefined);
+  assert.equal(JSON.parse(await newJson.text()).strokesByPage[1][0].points.length, 20_000);
+  const downloads = f.calls.filter((call) => call.startsWith("download ")).length;
+  assert.equal(downloads, 0); assert.equal(f.calls.length, 5);
+  assert.equal(binding.uploadedChecksum, await sha256(newJson));
+  assert.equal(binding.uploadedJsonBytes, newJson.size);
+  t.diagnostic(JSON.stringify({ delayMs: 50, requests: f.calls.length, jsonDownloads: downloads,
+    jsonBytes: newJson.size, downloadedBytes: downloads ? oldJson.size + newJson.size : 0, elapsedMs: Math.round(elapsed) }));
+});
+
+test("旧送信情報にJSONチェックサムがなくても本文を検証し、次の保存から共有できる", async () => {
+  const f = await setup(); await f.runner.tick(); const before = await row();
+  await updateDriveBinding(f.id, before.key, (r) => ({ ...r, uploadedChecksum: undefined }));
+  await saveLocalNote({ file, noteId: f.id, expectedRevision: 1, strokesByPage: {} }); f.advance(); f.calls.length = 0;
+  await f.runner.tick();
+  assert.equal((await row()).error, undefined);
+  assert.equal(f.calls.filter((call) => call.startsWith("download ")).length, 1);
+  assert.equal((await row()).uploadedChecksum, await sha256(f.files.get(before.ids!.note)!.data!));
+});
+
+test("GoogleがJSONチェックサムを返さない場合は送信前後とも本文検証へ戻す", async () => {
+  const f = await setup(); await f.runner.tick();
+  const json = f.access.json;
+  f.access.json = async (...args) => {
+    const value = await json(...args) as Record<string, unknown>;
+    return args[0] === `files/${(await row()).ids!.note}` ? { ...value, sha256Checksum: undefined } : value;
+  };
+  await saveLocalNote({ file, noteId: f.id, expectedRevision: 1, strokesByPage: {} }); f.advance(); f.calls.length = 0;
+  await f.runner.tick();
+  assert.equal((await row()).error, undefined);
+  assert.equal((await row()).uploadedGeneration, 2);
+  assert.equal(f.calls.filter((call) => call.startsWith("download ")).length, 2);
+});
+
+test("送信後の再確認で本文の改変が見つかったら送信済みにせず端末の内容を残す", async () => {
+  const f = await setup(); await f.runner.tick(); const before = await row();
+  const replace = f.access.replace!;
+  f.access.replace = async (...args) => {
+    const result = { ...await replace(...args) as Record<string, unknown> };
+    const stored = f.files.get(before.ids!.note)!;
+    const manifest = JSON.parse(await stored.data!.text()); manifest.title = "外部変更";
+    stored.data = new Blob([JSON.stringify(manifest)]); stored.size = String(stored.data.size);
+    stored.sha256Checksum = await sha256(stored.data);
+    return result;
+  };
+  await saveLocalNote({ file, noteId: f.id, expectedRevision: 1, strokesByPage: {} }); f.advance();
+  await f.runner.tick();
+  assert.match((await row()).error!, /競合/); assert.equal((await row()).uploadedGeneration, 1);
+  assert.deepEqual((await loadLocalNote(f.id)).strokesByPage, {});
+  assert.equal(JSON.parse(await f.files.get(before.ids!.note)!.data!.text()).title, "外部変更");
+});
+
+test("既知のJSONチェックサムがあっても所有者・場所・端末・サイズ・実体の異常を省略しない", async () => {
+  for (const change of ["owner", "parent", "device", "size", "missing"] as const) {
+    const f = await setup(); await f.runner.tick(); const binding = await row();
+    const stored = f.files.get(binding.ids!.note)!;
+    if (change === "owner") stored.ownedByMe = false;
+    if (change === "parent") stored.parents = ["other_container"];
+    if (change === "device") stored.appProperties = { ...stored.appProperties, overlayDeviceId: "other_device" };
+    if (change === "size") stored.size = String(Number(stored.size) + 1);
+    if (change === "missing") f.files.delete(stored.id);
+    await saveLocalNote({ file, noteId: f.id, expectedRevision: 1, strokesByPage: {} }); f.advance(); f.calls.length = 0;
+    await f.runner.tick();
+    assert.ok((await row()).error, change); assert.equal((await row()).uploadedGeneration, 1);
+    assert.equal(f.calls.some((call) => call.startsWith("replace ") || call.startsWith("upload ")), false);
+    assert.deepEqual((await loadLocalNote(f.id)).strokesByPage, {});
+  }
+});
 
 test("有効化は選んだノートだけ。本文・PDFを複製せず端末IDと送信待ちを永続化する", async () => {
   const f = await setup();
@@ -230,6 +314,7 @@ test("外部変更・同じ世代の内容改変は停止し、端末の最新�
   const content = { ...json }; delete content.schemaVersion; delete content.sync;
   json.sync.hash = await sha256(new Blob([JSON.stringify(content)]));
   stored.data = new Blob([JSON.stringify(json)]); stored.size = String(stored.data.size);
+  stored.sha256Checksum = await sha256(stored.data); // 実Driveも内容変更後はチェックサムを更新する。
   await saveLocalNote({ file, noteId: f.id, expectedRevision: 1, strokesByPage: {} }); f.advance(); await f.runner.tick();
   assert.match((await row()).error!, /競合/);
   assert.equal((await row()).uploadedGeneration, 1);

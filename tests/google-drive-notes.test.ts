@@ -406,7 +406,7 @@ test("大きいJSONの上書きは対象IDのresumable更新を使い、元PDF�
   const f = await verified(); const saved = await save(f);
   const target = await f.client.findSaveTarget("account_A", root.id, backup);
   const large: NoteBackup = { ...backup, notes: [{ ...backup.notes[0], strokesByPage: {
-    1: [{ width: 2, points: Array.from({ length: 70_000 }, (_, index) => ({ x: index / 70_000, y: 0.5 })) }],
+    1: [{ width: 2, points: Array.from({ length: 150_000 }, (_, index) => ({ x: index / 150_000, y: 0.5 })) }],
   } }] };
   f.calls.length = 0;
   await f.client.saveConfirmedNote("account_A", root.id, large, target);
@@ -499,7 +499,7 @@ test("大きいJSON更新の再開URLが別ファイルなら本文も認証情�
   const f = await verified(); await save(f);
   const target = await f.client.findSaveTarget("account_A", root.id, backup);
   const large: NoteBackup = { ...backup, notes: [{ ...backup.notes[0], strokesByPage: {
-    1: [{ width: 2, points: Array.from({ length: 70_000 }, (_, index) => ({ x: index / 70_000, y: 0.5 })) }],
+    1: [{ width: 2, points: Array.from({ length: 150_000 }, (_, index) => ({ x: index / 150_000, y: 0.5 })) }],
   } }] };
   f.calls.length = 0;
   f.intercept(async ({ init }) => init.method === "PATCH" ? new Response(null, {
@@ -509,17 +509,30 @@ test("大きいJSON更新の再開URLが別ファイルなら本文も認証情�
   assert.equal(f.calls.filter(({ init }) => init.method === "PUT").length, 0);
 });
 
-test("1MiBを超える編集JSONは従来の2段階送信を使い、読み戻せる", async () => {
+test("1〜4MiBの編集JSONも1回で送り、PDFの2段階送信と読み戻しを維持する", async () => {
   const f = await verified();
   const large: NoteBackup = { ...backup, notes: [{ ...backup.notes[0], strokesByPage: {
     1: [{ width: 2, points: Array.from({ length: 70_000 }, (_, index) => ({ x: index / 70_000, y: 0.5 })) }],
   } }] };
   f.calls.length = 0;
   const saved = await save(f, large);
-  assert.equal(f.calls.length, 6);
-  assert.equal(f.calls.filter(({ url }) => url.searchParams.get("uploadType") === "multipart").length, 0);
+  assert.equal(f.calls.length, 5);
+  assert.equal(f.calls.filter(({ url }) => url.searchParams.get("uploadType") === "multipart").length, 1);
+  const json = f.files.get(saved.id)!.data!; assert.ok(json.size > 1024 * 1024 && json.size <= 4 * 1024 * 1024);
   const loaded = await f.client.loadNote("account_A", root.id, saved.id);
   assert.deepEqual(loaded.notes[0].strokesByPage, large.notes[0].strokesByPage);
+});
+
+test("4MiBを超える編集JSONは新規保存でも2段階送信を使い、読み戻せる", async () => {
+  const f = await verified();
+  const large: NoteBackup = { ...backup, notes: [{ ...backup.notes[0], strokesByPage: {
+    1: [{ width: 2, points: Array.from({ length: 150_000 }, (_, i) => ({ x: i / 150_000, y: .5 })) }],
+  } }] };
+  const saved = await save(f, large);
+  assert.ok(f.files.get(saved.id)!.data!.size > 4 * 1024 * 1024);
+  assert.equal(f.calls.filter(({ url }) => url.searchParams.get("uploadType") === "multipart").length, 0);
+  assert.equal(f.calls.filter(({ init }) => init.method === "PUT").length, 2);
+  assert.deepEqual((await f.client.loadNote("account_A", root.id, saved.id)).notes[0].strokesByPage, large.notes[0].strokesByPage);
 });
 
 test("一括JSON送信の失効・アカウント変更・通信失敗で成功扱いや自動再送をしない", async () => {

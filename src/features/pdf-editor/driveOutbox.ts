@@ -9,6 +9,9 @@ export type DriveBinding = {
   parentId?: string;
   pdfHash?: string;
   uploadedHash?: string;
+  // Googleのsha256Checksumと比較する、送信済みJSON全バイトのハッシュ。旧データでは未設定。
+  uploadedChecksum?: string;
+  uploadedJsonBytes?: number;
   failures?: number;
 };
 export const DRIVE_DEBOUNCE_MS = 2000;

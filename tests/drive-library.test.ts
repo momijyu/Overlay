@@ -502,8 +502,21 @@ test("自分が保存した本文のままDriveの版番号だけが変わって
     assert.equal((await loadLocalNote(f.note)).revision, original.revision);
     assert.deepEqual((await listDriveBindings())[0], binding);
     assert.equal(f.calls.includes(`download ${binding.ids!.pdf}`), false);
+    assert.equal(f.calls.includes(`download ${sourceId}`), false);
     assert.equal(hasDriveCacheChecks(), false);
   } finally { unsubscribe(); }
+});
+
+test("旧ノートの版番号差もチェックサムの保存情報なしで本文を検証して追従する", async () => {
+  const f = await fixture(); authorize(f);
+  const binding = (await listDriveBindings())[0];
+  await withLocalTransaction(["driveBindings"], "readwrite", (tx) => readRequest(tx.objectStore("driveBindings").put({ ...binding, uploadedChecksum: undefined })));
+  await loadLocalNote(f.note);
+  f.files.set(binding.ids!.note, { ...f.files.get(binding.ids!.note)!, version: "2" }); f.calls.length = 0;
+  await checkQueuedDriveCaches(f.access, (await readLibraryState()).scope!, () => true);
+  const entity = (await readLibraryState()).entities.find((row) => row.entry.id === f.note)!;
+  assert.equal(entity.cacheWarning, undefined); assert.equal(entity.cachedVersion, "2");
+  assert.equal(f.calls.filter((call) => call.startsWith("download ")).length, 1);
 });
 
 test("通常の自動保存後は最新の送信版を使い、再選択でも更新警告を出さない", async () => {
@@ -545,7 +558,7 @@ test("同じ端末・送信番号・ハッシュの自己申告でも実際の�
 test("版差分の本文確認中にローカル編集が進んでも、古い結果で確認版を進めない", async () => {
   const f = await fixture(); authorize(f); const original = await loadLocalNote(f.note);
   const sourceId = (await listDriveBindings())[0].ids!.note;
-  f.files.set(sourceId, { ...f.files.get(sourceId)!, version: "2" });
+  f.files.set(sourceId, { ...f.files.get(sourceId)!, version: "2", sha256Checksum: undefined });
   let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
   let entered!: () => void; const started = new Promise<void>((resolve) => { entered = resolve; });
   const access = { ...f.access, download: async (...args: Parameters<typeof f.access.download>) => {
@@ -565,7 +578,7 @@ test("版差分の本文確認中にローカル編集が進んでも、古い�
 test("版差分の本文確認中に接続先が変わった場合は確認版・警告・本文を変更しない", async () => {
   const f = await fixture(); authorize(f); await loadLocalNote(f.note);
   const sourceId = (await listDriveBindings())[0].ids!.note;
-  f.files.set(sourceId, { ...f.files.get(sourceId)!, version: "2" });
+  f.files.set(sourceId, { ...f.files.get(sourceId)!, version: "2", sha256Checksum: undefined });
   let active = true;
   const access = { ...f.access, download: async (...args: Parameters<typeof f.access.download>) => {
     const result = await f.access.download(...args); active = false; return result;

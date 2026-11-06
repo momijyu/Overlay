@@ -14,6 +14,8 @@ const ROOT_QUERY = "trashed = false and mimeType = 'application/vnd.google-apps.
   + " and appProperties has { key='overlayApp' and value='overlay' }"
   + " and appProperties has { key='overlayRole' and value='root' }";
 const INVALID_RESPONSE = "Google Driveの応答を確認できませんでした。接続確認をやり直してください。";
+// multipartのメタデータ分も含め、Googleの小さいファイル向け5MBの目安を下回る範囲。
+const SINGLE_JSON_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 async function boundedBlob(response: Response, maximumBytes: number): Promise<Blob> {
   const length = response.headers.get("Content-Length");
@@ -229,14 +231,14 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     async function upload(metadata: Record<string, unknown>, data: Blob, fileId?: string) {
         const { DRIVE_NOTE_FIELDS } = await import("./googleDriveNoteData");
         const path = fileId ? `files/${fileId}` : "files";
-        if (fileId && !metadata.name && metadata.mimeType === "application/json" && data.size <= 1024 * 1024) {
+        if (fileId && !metadata.name && metadata.mimeType === "application/json" && data.size <= SINGLE_JSON_UPLOAD_BYTES) {
           return noteRequest(path, { uploadType: "media", fields: DRIVE_NOTE_FIELDS }, token, undefined, {
             upload: true, method: "PATCH", rawBody: data, headers: { "Content-Type": "application/json" },
           });
         }
         // 小さい編集JSONだけはメタデータと本文を1回で送る。元PDF・大きいJSONは従来の方式を維持する。
         // 手動保存の応答不明は一覧で確認する。自動保存だけは予約IDで結果を再検証する。
-        if (metadata.mimeType === "application/json" && data.size <= 1024 * 1024) {
+        if (metadata.mimeType === "application/json" && data.size <= SINGLE_JSON_UPLOAD_BYTES) {
           const boundary = `overlay_${crypto.randomUUID()}`;
           const body = new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
             JSON.stringify(metadata), `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`,

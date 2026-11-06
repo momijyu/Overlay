@@ -74,11 +74,19 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
   const manifest = { ...draft, sync: { deviceId: binding.deviceId, generation: binding.generation, hash } };
   const data = new Blob([JSON.stringify(manifest)], { type: "application/json" });
   if (data.size > BACKUP_LIMITS.jsonBytes) throw new Error("編集情報が16MiBを超えたため、Drive自動保存を停止しました。");
+  const checksum = await sha256(data);
 
-  async function checkExisting(value: unknown) {
+  async function checkExisting(value: unknown): Promise<{ current: false } | { current: true; checksum: string; bytes: number }> {
     const file = driveFile(value, "sync-note", binding.rootId, binding.key, container);
+    const size = Number(file.size);
     if (file.id !== noteId || driveObject(file.appProperties).overlayDeviceId !== binding.deviceId
-      || Number(file.size) > BACKUP_LIMITS.jsonBytes || Number(file.size) <= 0) throw new Error("自動保存先の端末情報・サイズが一致しません。");
+      || !Number.isSafeInteger(size) || size > BACKUP_LIMITS.jsonBytes || size <= 0) throw new Error("自動保存先の端末情報・サイズが一致しません。");
+    // 本文を持たないメタデータだけで、検証済みの同一バイト列だと確認できる場合に限って省略する。
+    const remoteChecksum = typeof file.sha256Checksum === "string" ? file.sha256Checksum.toLowerCase() : undefined;
+    if (remoteChecksum === checksum && size === data.size) return { current: true, checksum, bytes: size };
+    if (binding.uploadedGeneration > 0 && binding.uploadedHash && /^[a-f0-9]{64}$/.test(binding.uploadedChecksum ?? "")
+      && remoteChecksum === binding.uploadedChecksum && size === binding.uploadedJsonBytes) return { current: false };
+    // チェックサム未提供・旧保存情報・未知の本文は、従来どおり取得して世代と内容を検証する。
     const downloaded = await access.download(noteId, BACKUP_LIMITS.jsonBytes);
     if (downloaded.size !== Number(file.size)) throw new Error("Driveノートの取得中に内容が変わりました。");
     let raw: unknown;
@@ -93,15 +101,25 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
       || (sync.generation === binding.generation && sync.hash !== hash)) {
       throw new Error("Driveの保存内容に競合があります。自動保存を停止し、両方の内容を残しました。");
     }
-    return sync.generation === binding.generation && sync.hash === hash;
+    return sync.generation === binding.generation && sync.hash === hash
+      ? { current: true, checksum: await sha256(downloaded), bytes: downloaded.size } : { current: false };
   }
   const existing = noteMetadata;
-  if (existing && await checkExisting(existing)) return { hash, version: String(driveObject(existing).version) }; // 保存成功の応答を失った場合も再送しない。
+  if (existing) {
+    const checked = await checkExisting(existing);
+    if (checked.current) return { hash, checksum: checked.checksum, bytes: checked.bytes, version: String(driveObject(existing).version) }; // 応答消失後も同じ内容を再送しない。
+  }
   const saved = existing ? await access.replace(noteId, data, { name: `${source.title}${DRIVE_NOTE_SUFFIX}` })
     : await createOnce(access, noteId, () => access.upload({ id: noteId, name: `${source.title}${DRIVE_NOTE_SUFFIX}`,
       mimeType: "application/json", parents: [container], appProperties: properties("sync-note") }, data));
   const summary = driveNoteSummary(saved, binding.rootId);
-  if (summary.id !== noteId || summary.noteKey !== binding.key || summary.deviceId !== binding.deviceId || summary.containerId !== container
-    || !await checkExisting(saved)) throw new Error("Drive自動保存の結果を確認できませんでした。");
-  return { hash, version: String(driveObject(saved).version) };
+  if (summary.id !== noteId || summary.noteKey !== binding.key || summary.deviceId !== binding.deviceId || summary.containerId !== container) {
+    throw new Error("Drive自動保存の結果を確認できませんでした。");
+  }
+  // アップロード応答だけを信用せず、更新後の実体を再確認する。通常は小さいメタデータだけで済む。
+  const latest = await metadata(access, noteId);
+  if (!latest) throw new Error("Drive自動保存の結果を確認できませんでした。");
+  const checked = await checkExisting(latest);
+  if (!checked.current) throw new Error("Drive自動保存の結果を確認できませんでした。");
+  return { hash, checksum: checked.checksum, bytes: checked.bytes, version: String(driveObject(latest).version) };
 }

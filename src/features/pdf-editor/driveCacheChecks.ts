@@ -36,6 +36,8 @@ async function matchesUploadedContent(access: DriveNoteAccess, scope: LibrarySco
     || binding.deviceId !== source.deviceId || binding.generation !== binding.uploadedGeneration) return false;
   const size = Number(metadata.size);
   if (!Number.isSafeInteger(size) || size <= 0 || size > BACKUP_LIMITS.jsonBytes) throw new Error("Driveの編集情報のサイズが不正です。");
+  if (/^[a-f0-9]{64}$/.test(binding.uploadedChecksum ?? "") && typeof metadata.sha256Checksum === "string"
+    && metadata.sha256Checksum.toLowerCase() === binding.uploadedChecksum && size === binding.uploadedJsonBytes) return true;
   const data = await access.download(source.noteId, BACKUP_LIMITS.jsonBytes);
   if (data.size !== size) throw new Error("確認中にDriveの編集情報が変わりました。");
   const manifest = readDriveManifest(JSON.parse(await data.text()), binding.key);
