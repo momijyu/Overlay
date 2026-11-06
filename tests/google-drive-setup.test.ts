@@ -77,7 +77,7 @@ async function mount() {
 
 test("入口を表示するだけではSDK準備も認証もAPI通信も開始しない", () => {
   const node = GoogleDriveSetup({ disabled: false });
-  assert.match(renderToStaticMarkup(node), /Google Driveの接続確認/);
+  assert.match(renderToStaticMarkup(node), /Google Drive/);
   assert.equal(prepared + connected + accounts + creates, 0);
   const button = elements(node).find((entry) => entry.type === "button")!;
   (button.props.onClick as () => void)();
@@ -94,7 +94,7 @@ test("開いた時だけ準備し、接続後の全件自動保存を案内し�
   assert.equal(connected + accounts + creates, 0);
   const { html } = render();
   assert.match(html, /接続後、全ノート・フォルダをDriveへ自動保存/);
-  assert.match(html, /Googleで接続確認/);
+  assert.match(html, /Googleで接続/);
   assert.ok(!html.includes("専用フォルダを作成</button>"));
   cleanup();
   assert.equal(disconnected, 1); assert.equal(disposed, 0); assert.equal(cancelled, 1); assert.equal(dialog.open, false);
@@ -104,10 +104,10 @@ test("ユーザーのクリック内で認証を開始し、本人確認と検�
   const cleanup = await mount();
   let resolve!: () => void;
   authReply = () => new Promise((done) => { resolve = done; });
-  click("Googleで接続確認");
+  click("Googleで接続");
   assert.equal(connected, 1); assert.equal(accounts, 0);
   assert.match(render().html, /接続確認中/);
-  assert.ok(!render().html.includes("Googleで接続確認</button>"));
+  assert.ok(!render().html.includes("Googleで接続</button>"));
   resolve(); await settle();
   const { html } = render();
   assert.equal(accounts, 1); assert.equal(searches, 1); assert.equal(creates, 0);
@@ -118,7 +118,7 @@ test("ユーザーのクリック内で認証を開始し、本人確認と検�
 });
 
 test("フォルダ作成は追加の明示操作でのみ行い、完了後に作成ボタンを消す", async () => {
-  const cleanup = await mount(); click("Googleで接続確認"); await settle();
+  const cleanup = await mount(); click("Googleで接続"); await settle();
   assert.equal(creates, 0);
   click("専用フォルダを作成"); await settle();
   assert.equal(creates, 1);
@@ -129,7 +129,7 @@ test("フォルダ作成は追加の明示操作でのみ行い、完了後に�
 
 test("既存フォルダの確認後は作成を提案せず、別アカウントの選択時に以前の表示を消す", async () => {
   rootReply = { id: "folder_A", name: "大学ノート" };
-  const cleanup = await mount(); click("Googleで接続確認"); await settle();
+  const cleanup = await mount(); click("Googleで接続"); await settle();
   assert.match(render().html, /大学ノート/);
   assert.ok(!render().html.includes("専用フォルダを作成</button>"));
   let reject!: (error: Error) => void;
@@ -149,13 +149,13 @@ test("未設定などの準備失敗はエラーと再試行を表示し、認�
   assert.equal(connected + creates, 0);
   preparationReply = async () => {};
   click("接続準備をやり直す"); await settle();
-  assert.match(render().html, /Googleで接続確認/);
+  assert.match(render().html, /Googleで接続/);
   assert.equal(prepared, 2);
   cleanup();
 });
 
 test("作成失敗で再認可を案内し、成功済みやローカル保存への切替を偽装しない", async () => {
-  const cleanup = await mount(); click("Googleで接続確認"); await settle();
+  const cleanup = await mount(); click("Googleで接続"); await settle();
   createFailure = true; click("専用フォルダを作成"); await settle();
   assert.match(render().html, /再接続してください/);
   assert.ok(!render().html.includes("確認したアカウント"));
@@ -168,7 +168,7 @@ test("通信待ちでも閉じられ、遅れた認証応答で画面やフォ�
   const cleanup = await mount();
   let resolve!: () => void;
   authReply = () => new Promise((done) => { resolve = done; });
-  click("Googleで接続確認");
+  click("Googleで接続");
   const { entries } = render(() => { closed++; });
   const close = entries.find((entry) => entry.type === "button" && entry.props.children === "閉じる")!;
   assert.equal(close.props.disabled, undefined);
@@ -181,7 +181,7 @@ test("通信待ちでも閉じられ、遅れた認証応答で画面やフォ�
 
 test("有効な接続は閉じて開き直しても認証・本人確認を繰り返さず、期限切れ時だけ再接続する", async () => {
   rootReply = { id: "folder_A", name: "Overlay" };
-  const close = await mount(); click("Googleで接続確認"); await settle(); close();
+  const close = await mount(); click("Googleで接続"); await settle(); close();
   assert.equal(disconnected, 0); assert.equal(disposed, 0);
   states = []; references = []; effects = []; initialRender = true; stateIndex = refIndex = 0;
   const again = await mount();
@@ -191,7 +191,7 @@ test("有効な接続は閉じて開き直しても認証・本人確認を繰�
   again(); authorized = false;
   states = []; references = []; effects = []; initialRender = true; stateIndex = refIndex = 0;
   const expired = await mount();
-  assert.match(render().html, /Googleで接続確認/);
+  assert.match(render().html, /Googleで接続/);
   assert.doesNotMatch(render().html, /test@example.com/);
   assert.equal(connected, 1); expired();
 });
@@ -214,7 +214,7 @@ test("複数ノートの取得口を接続後の一覧へ渡し、認証前にPD
   const sources = [{ id: "note_A", title: "授業", load: async () => { throw new Error("事前に本文を取得しない"); } }];
   const request = { id: "batch_request", sources };
   rootReply = { id: "folder_A", name: "Overlay" };
-  const cleanup = await mount(); click("Googleで接続確認"); await settle();
+  const cleanup = await mount(); click("Googleで接続"); await settle();
   const entries = render(() => {}, { saveRequest: request }).entries;
   const notes = entries.find((entry) => entry.type === GoogleDriveNotes)!;
   assert.equal(notes.props.batchSources, sources);

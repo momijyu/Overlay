@@ -1,8 +1,10 @@
 import { libraryScope } from "./driveLibraryLocal";
-import type { LibraryEntity, LibraryScope } from "./driveLibraryData";
+import type { LibraryEntity, LibraryScope, LibrarySource } from "./driveLibraryData";
 import type { DriveBinding } from "./driveOutbox";
+import { driveManifestContent, sha256 } from "./driveAutosaveRemote";
+import { BACKUP_LIMITS } from "./noteBackupData";
 import { readRequest, withLocalTransaction } from "./localDatabase";
-import { driveNoteSummary, driveObject, DRIVE_NOTE_FIELDS } from "./googleDriveNoteData";
+import { driveNoteSummary, driveObject, readDriveManifest, DRIVE_NOTE_FIELDS } from "./googleDriveNoteData";
 import type { DriveNoteAccess } from "./googleDriveNotes";
 import { notifyDriveQueue } from "./driveQueueEvents";
 
@@ -26,6 +28,22 @@ export function queueDriveCacheCheck(id: string, row: LibraryEntity) {
 }
 export function hasDriveCacheChecks() { return typeof indexedDB !== "undefined" && state().pending.size > 0; }
 
+// Driveのversionは本文以外でも増える。自端末の送信済み本文と一致する場合だけ、版番号を追従する。
+async function matchesUploadedContent(access: DriveNoteAccess, scope: LibraryScope, source: LibrarySource,
+  binding: DriveBinding | undefined, metadata: Record<string, unknown>) {
+  if (!binding?.ids || !binding.uploadedHash || binding.accountId !== scope.accountId || binding.rootId !== scope.rootId
+    || binding.ids.note !== source.noteId || binding.ids.container !== source.containerId || binding.key !== source.noteKey
+    || binding.deviceId !== source.deviceId || binding.generation !== binding.uploadedGeneration) return false;
+  const size = Number(metadata.size);
+  if (!Number.isSafeInteger(size) || size <= 0 || size > BACKUP_LIMITS.jsonBytes) throw new Error("Driveの編集情報のサイズが不正です。");
+  const data = await access.download(source.noteId, BACKUP_LIMITS.jsonBytes);
+  if (data.size !== size) throw new Error("確認中にDriveの編集情報が変わりました。");
+  const manifest = readDriveManifest(JSON.parse(await data.text()), binding.key);
+  return manifest.sync?.deviceId === binding.deviceId && manifest.sync.generation === binding.uploadedGeneration
+    && manifest.pdfId === binding.ids.pdf && manifest.sync.hash === binding.uploadedHash
+    && await sha256(new Blob([JSON.stringify(driveManifestContent(manifest))])) === binding.uploadedHash;
+}
+
 // 表示後の更新確認だけを行う。PDF取得・本文置換・送信先の変更はしない。
 export async function checkQueuedDriveCaches(access: DriveNoteAccess, scope: LibraryScope, active: () => boolean) {
   const current = state();
@@ -46,7 +64,9 @@ export async function checkQueuedDriveCaches(access: DriveNoteAccess, scope: Lib
       const summary = driveNoteSummary(metadata, scope.rootId);
       if (summary.id !== source.noteId || summary.noteKey !== source.noteKey || summary.containerId !== source.containerId
         || summary.deviceId !== source.deviceId) throw new Error("Driveノートの取得先を確認できませんでした。");
+      let checkedRow = row;
       if (String(metadata.version) !== row.cachedVersion) {
+        const matches = await matchesUploadedContent(access, scope, source, binding, metadata);
         const message = "Drive上でこのノートが更新されています。表示中の内容は保持しています。ノート一覧から開き直して確認してください。";
         const changed = await withLocalTransaction(["driveEntities", "driveBindings", "driveSettings"], "readwrite", async (tx) => {
           const liveScope = await libraryScope(tx);
@@ -56,12 +76,13 @@ export async function checkQueuedDriveCaches(access: DriveNoteAccess, scope: Lib
           if (!active() || liveScope?.accountId !== scope.accountId || liveScope.rootId !== scope.rootId
             || !live || live.entry.deleted || signature(live) !== signature(row)
             || JSON.stringify(liveBinding) !== JSON.stringify(binding)) return false;
-          await readRequest(store.put({ ...live, cacheWarning: message })); return true;
+          checkedRow = matches ? { ...live, cachedVersion: String(metadata.version) } : { ...live, cacheWarning: message };
+          await readRequest(store.put(checkedRow)); return true;
         }, false);
-        if (changed) for (const listener of listeners) listener(id, message);
+        if (changed && !matches) for (const listener of listeners) listener(id, message);
       }
       // 検証済みの版だけを短期間共有する。新しい版の取得は利用者の再選択時。
-      current.checked.set(id, { signature: signature(row), at: Date.now() });
+      current.checked.set(id, { signature: signature(checkedRow), at: Date.now() });
     } catch {
       if (active()) for (const listener of listeners) listener(id, "Driveの更新を確認できませんでした。端末の内容は保持しています。");
     }

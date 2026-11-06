@@ -683,11 +683,12 @@ export function PdfWorkspace() {
                     </button>
                     <button type="button" className="btn" disabled={isBusy} onClick={() => void handleBackup()}>ノートのバックアップ</button></div>
                     <div className="join shrink-0" role="group" aria-label="ページ切り替え">
-                      <button type="button" className="btn btn-square join-item" aria-label="次に空白ページを追加" title="次に空白ページを追加"
+                      <button type="button" className="btn join-item gap-1 px-2" aria-label="次に空白ページを追加" title="次に空白ページを追加"
                         disabled={isBusy || pages.length >= MAX_NOTE_PAGES} onClick={() => void handleInsertBlankPage()}>
                         <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <rect x="4" y="3" width="16" height="18" rx="2" /><path d="M12 8v8M8 12h8" />
+                          <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M12 12v6M9 15h6" />
                         </svg>
+                        <span className="desktop-only">白紙追加</span>
                       </button>
                       <button
                         className="btn btn-square join-item"

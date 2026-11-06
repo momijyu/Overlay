@@ -1,8 +1,6 @@
-# Google Drive連携の事前設定
+# Google Drive連携の設定
 
-2026年11月4日、利用者の確認でブラウザ完結のGoogle Identity Services（GIS）token modelを採用した。続く実装で、ノート一覧にアカウント確認と専用フォルダ準備の画面を追加した。Google CloudプロジェクトとWebアプリ用のOAuthクライアントIDが必要。今回の確認操作ではOverlayの保存先は変わらず、既存データも送信されない。
-
-続くユーザー操作で、Chrome・localhost:3000の認可・本人表示・専用フォルダ確認は成功した。次の単位として同じ画面へ手動新規保存・コピー読み込みを追加した。接続確認だけでは送信せず、ノートの対象確認後にだけ送る。[ノートの保存・読み込み手順](./google-drive-notes.md)を参照。通常の自動保存先はまだブラウザであり、今回の送信・コピーは実Googleでは未検証。
+ローカル保存だけなら設定不要。Drive連携を使う開発者はGoogle CloudでOAuthクライアントIDを作成する。利用者はアプリの「Google Drive」から自分のGoogleアカウントで接続する。接続先の確認後、このブラウザの全ローカルノート・フォルダが自動保存対象になる。[保存・容量・競合の仕様](drive-storage.md)
 
 ## 1. プロジェクトとDrive API
 
@@ -35,13 +33,13 @@ https://overlay-virid.vercel.app
 
 別ポートや別の公開URLを実際に使う場合だけ、そのoriginも追加する。開発サーバーのポートはこの作業で変更しない。
 
-今回はGIS token modelのポップアップを使うため、「Authorized redirect URIs」へのコールバックURLの追加は不要。架空のURLやSupabase用のコールバックを入れない。クライアントIDの作成手順は[Google公式Setup](https://developers.google.com/identity/oauth2/web/guides/get-google-api-clientid)を参照。
+今回はGIS token modelのポップアップを使うため、「Authorized redirect URIs」へのコールバックURLの追加は不要。架空のコールバックURLを入れない。クライアントIDの作成手順は[Google公式Setup](https://developers.google.com/identity/oauth2/web/guides/get-google-api-clientid)を参照。
 
 作成後、末尾が`.apps.googleusercontent.com`のクライアントIDだけを控える。これはブラウザで使用するアプリ識別子。クライアントシークレット、アクセストークン、Googleパスワード、認証情報JSONはチャット・Git・`NEXT_PUBLIC_`変数へ入れない。
 
 ## 4. アプリ側の設定
 
-作成したクライアントIDを、ルートの`.env.local`へ追加する。既存のSupabase用設定を削除する必要はない。
+作成したクライアントIDを、ルートの`.env.local`へ追加する。Supabaseの設定は使用しない。
 
 ```dotenv
 NEXT_PUBLIC_GOOGLE_CLIENT_ID=作成したクライアントID.apps.googleusercontent.com
@@ -53,10 +51,10 @@ Vercelでは同じ名前の環境変数を対象の環境へ設定し、再デ�
 
 ## 5. 接続確認の操作
 
-1. 左上の三本線からノート一覧を開き、下部の「Google Driveの接続確認」を押す。この時だけGoogle SDKの準備を始める。
-2. 準備完了後に「Googleで接続確認」を押し、Googleの画面でテストユーザーのアカウントを選んで許可する。
+1. 左上の三本線からノート一覧を開き、下部の「Google Drive」を押す。この時だけGoogle SDKの準備を始める。
+2. 準備完了後に「Googleで接続」を押し、Googleの画面でテストユーザーのアカウントを選んで許可する。
 3. メールアドレスとOverlay専用フォルダの有無を確認する。氏名は表示しない。アカウントが違う場合は「アカウントを選び直す」。
-4. 未作成の場合、作成するなら「専用フォルダを作成」を押す。本人のDriveのルートに`Overlay`を作る。フォルダ以外のノート・PDF・編集情報はまだ送信しない。
+4. 未作成の場合、作成するなら「専用フォルダを作成」を押す。本人のDriveのルートに`Overlay`を作る。確認後は自動連携が始まり、既存のローカルノート・フォルダも送信対象になる。
 5. 「閉じる」で進行中の操作・通信を中断する。有効な認可と確認済みアカウントは同じページのメモリで再利用し、次に開くときの認証を省く。ページ再読み込み・期限切れ・失効後は再接続する。DB等へトークンを保存せず、Google側の権限取消・フォルダ削除は行わない。
 
 専用の`appProperties`でOverlayが作成したフォルダを識別する。同名の一般フォルダを流用しない。改名した専用フォルダは目印で見つけ、複数見つかった場合は自動選択・統合・削除を行わず停止する。作成中の通信断は結果不明として再検索を案内する。検索直後の同時作成を完全には防げないため、作成後も重複を確認する。[アプリ専用プロパティ](https://developers.google.com/workspace/drive/api/guides/properties)、[フォルダ作成](https://developers.google.com/workspace/drive/api/guides/folder)に基づく。
@@ -73,4 +71,13 @@ Vercelでは同じ名前の環境変数を対象の環境へ設定し、再デ�
 
 期限切れ時にはユーザー操作で再接続する。[Google公式説明](https://developers.google.com/identity/oauth2/web/guides/use-token-model)。トークンは有効期限の最大30秒前から使用を止め、API側で失効が分かった場合にも破棄できる。認証操作が2分応答しなければ失敗として再試行できるようにする。再接続開始時に古いトークンを捨て、切断・時間切れ後に遅れて届く古い応答は採用しない。`disconnect()`はメモリの認可情報を捨てる操作であり、Google側の全権限取消やノート削除ではない。
 
-`authorized`はGoogle APIの認可成功であって、「Driveへ保存済み」「同期準備完了」ではない。アカウント・フォルダ確認と、明示的な新規保存／確認付き同名上書き／コピー読み込みを接続済み。通常の自動保存先の切り替え・未送信データとの照合・確実な競合保護・キャッシュ整理は後続。認証だけ成功した状態で保存先を切り替えたり、未送信データを別アカウントへ送ったりしない。
+認可成功・専用フォルダ確認と、ノートのDrive送信完了は別。ノート一覧の「Drive自動保存」に未送信・停止状態を表示し、期限切れは同じアカウントへ再接続する。未送信内容を別アカウントへ送らない。詳細は[Drive設計](drive-storage.md)。
+
+## 公開前の確認（未完了）
+
+- 実際の公開URLとAuthorized JavaScript origins、Vercelの対象環境のクライアントIDを一致させ、再ビルドされた版で確認する。VercelのAI Gateway API Keyは使用しない。公開IDはConfigとして登録する。
+- Google Auth PlatformのAudience・公開状態と、利用できるアカウントの範囲を確認する。テストユーザーの成功だけで一般利用可能と判断しない。
+- Branding・必要なドメイン確認・プライバシー説明・連絡先と、要求権限の説明を用意する。独自コードのライセンスと公開素材は利用者と確認する。
+- Chrome・スマホ・iPadから接続し、通常保存・再接続・未送信保護を公開URLで確認する。
+
+実際のGoogle Cloud設定変更・デプロイは、この資料の整理だけでは実施しない。アプリのクライアントIDとシークレットは別。シークレットを公開変数へ設定しない。過去にシークレットを共有した場合はGoogle Cloud側で再発行し、古いものを無効化する。

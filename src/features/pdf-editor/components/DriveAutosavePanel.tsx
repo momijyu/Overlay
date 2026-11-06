@@ -116,11 +116,11 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
       {connected?.root && <button type="button" className="btn btn-sm mt-2" disabled={disabled || busy || !supported || !matchingConnection}
         onClick={() => void retryLibrary()}>Drive一覧を更新・再試行</button>}
       {!supported && <p className="mt-2 text-xs">自動保存にはHTTPSまたはlocalhostの対応ブラウザが必要です。</p>}
-      {!matchingConnection && <p className="mt-2 text-xs">下の「Google Driveの接続確認」から接続してください。</p>}
+      {!matchingConnection && <p className="mt-2 text-xs">下の「Google Drive」から接続してください。</p>}
       <p className="mt-2 text-xs text-base-content/70">端末ごとに別の保存先を作ります。未送信の間はこのブラウザに保管します。</p>
       {status && <p role="status" className="mt-2 text-xs">{status}</p>}
       {(error || rows.some((row) => row.enabled && row.error)) && <p role="alert" className="mt-2 text-xs text-error">{error || rows.find((row) => row.enabled && row.error)?.error}</p>}
-      <DriveCacheSettings />
+      <DriveCacheSettings visible={drawerOpen} />
     </section>
     {!drawerOpen && status && typeof document !== "undefined" && createPortal(
       <div className="pointer-events-none fixed bottom-3 right-3 z-30 max-w-[calc(100vw-1.5rem)] rounded-box border border-base-300 bg-base-100 px-3 py-2 text-xs shadow-sm" role="status">{status}</div>, document.body)}

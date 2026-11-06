@@ -485,6 +485,96 @@ async function remoteEdit(f: Awaited<ReturnType<typeof fixture>>, sourceId: stri
   return manifest.strokesByPage;
 }
 
+test("自分が保存した本文のままDriveの版番号だけが変わっても更新警告を出さない", async () => {
+  const f = await fixture(); authorize(f);
+  const binding = (await listDriveBindings())[0]; const sourceId = binding.ids!.note;
+  const original = await loadLocalNote(f.note);
+  const remote = f.files.get(sourceId)!;
+  f.files.set(sourceId, { ...remote, version: "2" });
+  f.calls.length = 0;
+  const notices: string[] = []; const unsubscribe = subscribeDriveCacheIssue((_id, message) => notices.push(message));
+  try {
+    await checkQueuedDriveCaches(f.access, (await readLibraryState()).scope!, () => true);
+    assert.deepEqual(notices, []);
+    const entity = (await readLibraryState()).entities.find((row) => row.entry.id === f.note)!;
+    assert.equal(entity.cacheWarning, undefined); assert.equal(entity.cachedVersion, "2");
+    assert.deepEqual((await loadLocalNote(f.note)).strokesByPage, original.strokesByPage);
+    assert.equal((await loadLocalNote(f.note)).revision, original.revision);
+    assert.deepEqual((await listDriveBindings())[0], binding);
+    assert.equal(f.calls.includes(`download ${binding.ids!.pdf}`), false);
+    assert.equal(hasDriveCacheChecks(), false);
+  } finally { unsubscribe(); }
+});
+
+test("通常の自動保存後は最新の送信版を使い、再選択でも更新警告を出さない", async () => {
+  const f = await fixture(); authorize(f);
+  const original = await loadLocalNote(f.note);
+  const strokes = { 1: [{ width: 3, points: [{ x: .2, y: .4 }] }] };
+  await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: original.revision, strokesByPage: strokes });
+  await send(f);
+  const binding = (await listDriveBindings())[0];
+  assert.equal(binding.generation, binding.uploadedGeneration);
+  f.calls.length = 0;
+  const notices: string[] = []; const unsubscribe = subscribeDriveCacheIssue((_id, message) => notices.push(message));
+  try {
+    await loadLocalNote(f.note);
+    await checkQueuedDriveCaches(f.access, (await readLibraryState()).scope!, () => true);
+    assert.deepEqual(notices, []);
+    assert.equal(f.calls.filter((call) => call.startsWith("download ")).length, 0);
+    assert.deepEqual((await loadLocalNote(f.note)).strokesByPage, strokes);
+  } finally { unsubscribe(); }
+});
+
+test("同じ端末・送信番号・ハッシュの自己申告でも実際の本文が違えば更新警告を残す", async () => {
+  const f = await fixture(); authorize(f); const original = await loadLocalNote(f.note);
+  const sourceId = (await listDriveBindings())[0].ids!.note;
+  const manifest = JSON.parse(await f.files.get(sourceId)!.data!.text());
+  manifest.strokesByPage = { 1: [{ width: 7, points: [{ x: .8, y: .1 }] }] };
+  await f.access.replace!(sourceId, new Blob([JSON.stringify(manifest)]), {});
+  const notices: string[] = []; const unsubscribe = subscribeDriveCacheIssue((_id, message) => notices.push(message));
+  try {
+    await checkQueuedDriveCaches(f.access, (await readLibraryState()).scope!, () => true);
+    assert.match(notices[0], /Drive上でこのノートが更新/);
+    const entity = (await readLibraryState()).entities.find((row) => row.entry.id === f.note)!;
+    assert.equal(entity.cachedVersion, "1"); assert.match(entity.cacheWarning!, /内容は保持/);
+    const stored = await withLocalTransaction(["notes"], "readonly", (tx) => readRequest<{ revision: number; strokesByPage: unknown }>(tx.objectStore("notes").get(f.note)));
+    assert.equal(stored.revision, original.revision); assert.deepEqual(stored.strokesByPage, original.strokesByPage);
+  } finally { unsubscribe(); }
+});
+
+test("版差分の本文確認中にローカル編集が進んでも、古い結果で確認版を進めない", async () => {
+  const f = await fixture(); authorize(f); const original = await loadLocalNote(f.note);
+  const sourceId = (await listDriveBindings())[0].ids!.note;
+  f.files.set(sourceId, { ...f.files.get(sourceId)!, version: "2" });
+  let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+  let entered!: () => void; const started = new Promise<void>((resolve) => { entered = resolve; });
+  const access = { ...f.access, download: async (...args: Parameters<typeof f.access.download>) => {
+    const result = await f.access.download(...args); entered(); await gate; return result;
+  } };
+  const notices: string[] = []; const unsubscribe = subscribeDriveCacheIssue((_id, message) => notices.push(message));
+  try {
+    const verifying = checkQueuedDriveCaches(access, (await readLibraryState()).scope!, () => true); await started;
+    await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: original.revision, strokesByPage: { 1: [{ width: 4, points: [{ x: .2, y: .3 }] }] } });
+    release(); await verifying;
+    const entity = (await readLibraryState()).entities.find((row) => row.entry.id === f.note)!;
+    assert.equal(entity.cachedVersion, "1"); assert.equal(entity.cacheWarning, undefined); assert.deepEqual(notices, []);
+    assert.equal((await loadLocalNote(f.note)).strokesByPage[1][0].width, 4);
+  } finally { release(); unsubscribe(); }
+});
+
+test("版差分の本文確認中に接続先が変わった場合は確認版・警告・本文を変更しない", async () => {
+  const f = await fixture(); authorize(f); await loadLocalNote(f.note);
+  const sourceId = (await listDriveBindings())[0].ids!.note;
+  f.files.set(sourceId, { ...f.files.get(sourceId)!, version: "2" });
+  let active = true;
+  const access = { ...f.access, download: async (...args: Parameters<typeof f.access.download>) => {
+    const result = await f.access.download(...args); active = false; return result;
+  } };
+  const before = await readLibraryState();
+  await checkQueuedDriveCaches(access, before.scope!, () => active);
+  assert.deepEqual(await readLibraryState(), before);
+});
+
 test("裏の更新確認で異なる版を見つけても本文・更新番号を変えず、次に開く時だけ新版を取得する", async () => {
   const f = await fixture(); const sourceId = (await listDriveBindings())[0].ids!.note;
   useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);

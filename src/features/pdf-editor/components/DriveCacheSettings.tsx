@@ -5,7 +5,7 @@ import { DEFAULT_DRIVE_CACHE_MB, MIN_DRIVE_CACHE_MB, MAX_DRIVE_CACHE_MB, saveDri
 import { readDriveCacheSummary } from "../driveLibraryCache";
 import { subscribeDriveQueue } from "../driveQueueEvents";
 
-export function DriveCacheSettings() {
+export function DriveCacheSettings({ visible = true }: { visible?: boolean } = {}) {
   const [open, setOpen] = useState(false);
   const [limit, setLimit] = useState(DEFAULT_DRIVE_CACHE_MB);
   const [draft, setDraft] = useState(String(DEFAULT_DRIVE_CACHE_MB));
@@ -15,6 +15,9 @@ export function DriveCacheSettings() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   useEffect(() => {
+    // 一覧を閉じた編集画面では、非表示の容量表示のために全キャッシュを走査しない。
+    // 自動保存・未送信の監視とキャッシュ整理は別のrunnerが継続する。
+    if (!visible) return;
     let active = true; let reading = false;
     async function refresh() {
       if (reading) return;
@@ -32,7 +35,7 @@ export function DriveCacheSettings() {
     const unsubscribe = open ? subscribeDriveQueue(() => { void refresh(); }) : () => {};
     const interval = open ? setInterval(() => { void refresh(); }, 5000) : undefined;
     return () => { active = false; unsubscribe(); clearInterval(interval); };
-  }, [open, limit]);
+  }, [open, limit, visible]);
   const value = Number(draft);
   const valid = draft.trim() !== "" && Number.isInteger(value) && value >= MIN_DRIVE_CACHE_MB && value <= MAX_DRIVE_CACHE_MB;
   async function apply() {

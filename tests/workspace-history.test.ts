@@ -111,7 +111,6 @@ mock.module("@/features/pdf-editor/exportAnnotatedPdf", { exports: {
   },
 } });
 const { PdfWorkspace } = await import("@/features/pdf-editor/components/PdfWorkspace");
-const { PageHeadingsPanel } = await import("@/features/pdf-editor/components/PageHeadingsPanel");
 const { PdfPage } = await import("@/features/pdf-editor/components/PdfPage");
 const { HistoryControls } = await import("@/features/pdf-editor/components/HistoryControls");
 const { ZoomControl } = await import("@/features/pdf-editor/components/ZoomControl");
@@ -1068,7 +1067,7 @@ test("白紙追加失敗・整理中は内容と履歴を変えず、読込済�
 
 test("見出しUIを外しても既存の見出しを通常保存・バックアップ・Driveへ保持する", async () => {
   setup(); openedHeadings = { 2: "重要な公式" }; await openOther();
-  assert.equal(find(render(), (element) => element.type === PageHeadingsPanel), undefined);
+  assert.equal(find(render(), (element) => (element.props as { "aria-label"?: string })["aria-label"] === "ページ見出し"), undefined);
   const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
   props(PdfPage).onStrokeComplete(red); await autosave.flush();
   assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
@@ -1097,7 +1096,7 @@ test("白紙挿入後も旧見出しのページIDと内容を維持する", asy
   const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
   await autosave.flush();
   assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
-  assert.equal(find(render(), (element) => element.type === PageHeadingsPanel), undefined);
+  assert.equal(find(render(), (element) => (element.props as { "aria-label"?: string })["aria-label"] === "ページ見出し"), undefined);
   props(HistoryControls).onUndo(); await autosave.flush();
   assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
 });

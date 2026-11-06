@@ -19,7 +19,7 @@ export function GoogleDriveSetup({ disabled = false, captureNote, onImportNote, 
   const [closedRequest, setClosedRequest] = useState<string | null>(null);
   const activeRequest = saveRequest && saveRequest.id !== closedRequest ? saveRequest : null;
   return <div className="border-t border-base-300 p-4">
-    <button type="button" className="btn btn-sm" disabled={disabled} onClick={() => setOpen(true)}>Google Driveの接続確認</button>
+    <button type="button" className="btn btn-sm" disabled={disabled} onClick={() => setOpen(true)}>Google Drive</button>
     {(open || activeRequest) && <GoogleDriveSetupDialog captureNote={activeRequest && "backup" in activeRequest ? () => activeRequest.backup : captureNote}
       saveRequest={activeRequest} onImportNote={onImportNote} onClose={() => {
         setClosedRequest(saveRequest?.id ?? null); setOpen(false); onSaveRequestClose?.();
@@ -103,7 +103,7 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, onImportNote, sav
       if (event.target === event.currentTarget && !event.currentTarget.open) onClose();
     }}>
     <div className="modal-box max-w-md rounded-box space-y-4">
-      <h2 id="google-drive-setup-title" className="text-lg font-bold">Google Driveの接続確認</h2>
+      <h2 id="google-drive-setup-title" className="text-lg font-bold">Google Drive</h2>
       <p className="text-sm">接続後、全ノート・フォルダをDriveへ自動保存します。</p>
       {state.account && <dl className="space-y-1 text-sm break-words">
         <dt className="font-semibold">確認したアカウント</dt>
@@ -129,11 +129,11 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, onImportNote, sav
           void prepare(runtime);
         }}>接続準備をやり直す</button>}
         {!busy && state.stage !== "error" && <button type="button" className="btn btn-sm"
-          onClick={() => { void checkConnection(); }}>{state.account ? "アカウントを選び直す" : "Googleで接続確認"}</button>}
+          onClick={() => { void checkConnection(); }}>{state.account ? "アカウントを選び直す" : "Googleで接続"}</button>}
         {state.stage === "checked" && !state.root && <button type="button" className="btn btn-sm btn-primary"
           onClick={() => { void createFolder(); }}>専用フォルダを作成</button>}
       </div>
     </div>
-    <div className="modal-backdrop"><button type="button" tabIndex={-1} aria-label="接続確認を閉じる" onClick={onClose} /></div>
+    <div className="modal-backdrop"><button type="button" tabIndex={-1} aria-label="Google Driveを閉じる" onClick={onClose} /></div>
   </dialog>;
 }

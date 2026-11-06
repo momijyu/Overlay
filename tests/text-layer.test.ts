@@ -39,7 +39,6 @@ mock.module("react", { exports: {
   useRef: (initial: unknown) => refs[refCursor++] ??= { current: initial },
 } });
 const { TextLayer } = await import("@/features/pdf-editor/components/TextLayer");
-const { TextNoteDialog } = await import("@/features/pdf-editor/components/TextNoteDialog");
 const { TextBoxEditor } = await import("@/features/pdf-editor/components/TextBoxEditor");
 beforeEach(() => { states = []; refs = []; stateCursor = 0; refCursor = 0; portalTargets.length = 0; });
 
@@ -158,7 +157,7 @@ test("付箋の追加ボタンと既存付箋は同じ直接入力を使い、�
   f.handlers().onPointerDown(event);
   assert.equal(event.prevented, true);
   assert.equal(f.editor().openedByPointer, true);
-  assert.equal(find(f.render(), (element) => element.type === TextNoteDialog), undefined);
+  assert.equal(find(f.render(), (element) => element.type === "dialog"), undefined);
   f.editor().onCommit(sticky);
   assert.equal(f.getUpdates(), 0);
   assert.equal(f.getNotes()[0].width, sticky.width);
@@ -232,7 +231,7 @@ test("テキストはモーダルでなくページ内で入力し、移動枠�
   const f = fixture("text", [note]);
   f.handlers().onPointerDown(f.event(50, 80, note.id));
   assert.ok(find(f.render(), (element) => element.type === TextBoxEditor));
-  assert.equal(find(f.render(), (element) => element.type === TextNoteDialog), undefined);
+  assert.equal(find(f.render(), (element) => element.type === "dialog"), undefined);
   f.editor().onCommit(note);
   const markup = renderToStaticMarkup(f.render());
   assert.doesNotMatch(markup, /aria-label="サイズ変更 /);
