@@ -32,7 +32,7 @@ export type TextNote = {
 };
 export type TextNotesByPage = Record<number, TextNote[]>;
 export type HeadingsByPage = Record<number, string>;
-export type StickyPageLink = { pageId: number; pageNumber: number; textId: string; label: string };
+export type StickyPageLink = { pageId: number; pageNumber: number; textId: string; label: string; sourceId?: string };
 
 // idは書き込みのキー。配列の位置（表示順）とは独立させる。
 export type NotePage =
@@ -47,6 +47,7 @@ export type SavedNoteSummary = {
   folderId: string | null;
   // 付箋一覧用の派生情報。本文・PDF・座標は含めない。
   stickyNotes?: StickyPageLink[];
+  stickyNotesPending?: boolean;
 };
 
 export type NoteFolder = {

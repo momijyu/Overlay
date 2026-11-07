@@ -1,8 +1,9 @@
 import { LibraryRetry } from "./driveLibraryData";
+import { DriveStickyIndexError } from "./driveStickyIndexData";
 import { DriveHttpError } from "./driveHttpError";
 import { createBrowserDriveAutosave } from "./driveAutosave";
 import { enableDriveLibrary, getLibraryScope, readLibraryPending } from "./driveLibraryLocal";
-import { syncDriveLibrary } from "./driveLibraryRemote";
+import { syncDriveLibrary, syncDriveStickyIndexes } from "./driveLibraryRemote";
 import { checkQueuedDriveCaches, hasDriveCacheChecks } from "./driveCacheChecks";
 import { pruneDriveCache } from "./driveLibraryCache";
 import { createGoogleDriveClient } from "./googleDriveClient";
@@ -13,6 +14,8 @@ export function createBrowserDriveLibrary() {
   const session = getGoogleDriveSession(); const client = createGoogleDriveClient(session.auth);
   let verifiedToken: string | null = null;
   let nextPrune = 0;
+  let stickyFailure: DriveStickyIndexError | null = null;
+  let stickyRunning = false;
   let running = false; let disposed = false; let nextRefresh = 0; let retryAfter = 0; let paused = false; let incompleteAttempts = 0; let connectionToken: string | null = null; let queuedForce = false;
   return {
     async tick(force = false) {
@@ -52,7 +55,24 @@ export function createBrowserDriveLibrary() {
             nextRefresh = Date.now() + 30000;
             const access = await client.autosaveAccess(scope.accountId, scope.rootId);
             if (disposed) return;
-            await syncDriveLibrary(access, scope); incompleteAttempts = 0;
+            await syncDriveLibrary(access, scope, { stickyIndexes: false });
+            // 大きな旧JSONの初回索引生成も本文の送信・次のハートビートを待たせない。
+            // 別タブの索引更新だけを専用ロックで排他し、通常の階層・本文ロックと分ける。
+            if (!stickyRunning && !disposed) {
+              stickyRunning = true;
+              const indexScope = scope;
+              const current = () => {
+                const live = session.getConnection();
+                return !disposed && live?.account.id === indexScope.accountId && live.root?.id === indexScope.rootId && session.auth.getAccessToken() === token;
+              };
+              void navigator.locks.request(`overlay-sticky-index-${root.id}`, { ifAvailable: true }, async (lock) => {
+                if (!lock || !current()) return;
+                try { await syncDriveStickyIndexes(access, indexScope, current); if (current()) stickyFailure = null; }
+                catch (error) { if (current()) stickyFailure = error instanceof DriveStickyIndexError ? error : new DriveStickyIndexError(error); }
+              }).catch((error: unknown) => { if (current()) stickyFailure = new DriveStickyIndexError(error); })
+                .finally(() => { stickyRunning = false; });
+            }
+            incompleteAttempts = 0;
           }
           if (!disposed) await autosave.tick();
           if (!disposed && hasDriveCacheChecks()) {
@@ -66,9 +86,12 @@ export function createBrowserDriveLibrary() {
             if (Date.now() >= nextPrune) { nextPrune = Date.now() + 30000; await pruneDriveCache(); }
             completed = true;
           }
+          // 派生索引の失敗で本文の待ち行列を止めない。案内は次の索引成功まで保持する。
+          if (stickyFailure) throw stickyFailure;
         });
         return completed;
       } catch (error) {
+        if (error instanceof DriveStickyIndexError) throw error;
         if (error instanceof LibraryRetry) { retryAfter = Date.now() + Math.min(60000, 3000 * 2 ** Math.min(incompleteAttempts++, 5)); return false; }
         if (error instanceof DriveHttpError && (error.status === 0 || error.status === 429 || error.status >= 500)) retryAfter = Date.now() + 5000;
         else paused = true;

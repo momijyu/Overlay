@@ -254,9 +254,9 @@ export function PdfWorkspace() {
     autosaveRef.current?.update(next.strokesByPage, next.textsByPage, next.pages, next.headingsByPage);
   }
 
-  function openStickyPage(note: SavedNoteSummary | null, targetPageId: number, textId: string) {
+  function openStickyPage(note: SavedNoteSummary | null, targetPageId: number, textId: string, sourceId?: string) {
     if (operationRef.current) return;
-    if (!note || note.id === autosaveRef.current?.getState().noteId) {
+    if (!note || !sourceId && note.id === autosaveRef.current?.getState().noteId) {
       if (!document) return;
       try {
         const content = historyRef.current;
@@ -267,7 +267,7 @@ export function PdfWorkspace() {
       }
       return;
     }
-    void openPdf(async () => ({ ...await loadSavedNote(note.id), name: note.title }), { pageId: targetPageId, textId });
+    void openPdf(async () => ({ ...await loadSavedNote(note.id, sourceId ? { sourceId } : undefined), name: note.title }), { pageId: targetPageId, textId });
   }
 
   async function handleInsertBlankPage() {

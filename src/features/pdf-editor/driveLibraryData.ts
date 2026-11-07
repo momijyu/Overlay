@@ -1,4 +1,5 @@
 import { driveId, driveObject } from "./googleDriveNoteData";
+import type { DriveStickyCache } from "./driveStickyIndexData";
 
 export type LibraryScope = { accountId: string; rootId: string; deviceId: string; historyId?: string; historyCreated?: boolean };
 export type LibraryEntry = { id: string; kind: "folder" | "note"; name: string; parentId: string | null; remoteId?: string; deleted?: boolean };
@@ -6,6 +7,7 @@ export type LibrarySource = { logicalId: string; noteId: string; noteKey: string
 export type LibraryEvent = { schemaVersion: 1; kind: "overlay-library-event"; id: string; deviceId: string;
   changes: { before: string | string[] | null; entry: LibraryEntry }[]; source?: LibrarySource };
 export type LibraryEntity = { id: string; entry: LibraryEntry; head: string; sources: LibrarySource[];
+  stickyIndexes?: DriveStickyCache[];
   listed?: boolean; cachedSource?: string; cachedVersion?: string; cachedBytes?: number; lastUsed?: number; cacheWarning?: string };
 export type LibraryEventRow = { id: string; event: LibraryEvent; fileId?: string; hash?: string; sent: boolean };
 export type LibraryConflictItem = { key: string; versions: { head: string; deviceId: string; entry: LibraryEntry }[] };

@@ -1,6 +1,6 @@
 import { libraryScope } from "./driveLibraryLocal";
 import type { LibraryEntity, LibraryScope, LibrarySource } from "./driveLibraryData";
-import type { DriveBinding } from "./driveOutbox";
+import { driveBodyBindingSignature, type DriveBinding } from "./driveOutbox";
 import { driveManifestContent, sha256 } from "./driveAutosaveRemote";
 import { BACKUP_LIMITS } from "./noteBackupData";
 import { readRequest, withLocalTransaction } from "./localDatabase";
@@ -77,7 +77,7 @@ export async function checkQueuedDriveCaches(access: DriveNoteAccess, scope: Lib
           const liveBinding = await readRequest<DriveBinding | undefined>(tx.objectStore("driveBindings").get(id));
           if (!active() || liveScope?.accountId !== scope.accountId || liveScope.rootId !== scope.rootId
             || !live || live.entry.deleted || signature(live) !== signature(row)
-            || JSON.stringify(liveBinding) !== JSON.stringify(binding)) return false;
+            || driveBodyBindingSignature(liveBinding) !== driveBodyBindingSignature(binding)) return false;
           checkedRow = matches ? { ...live, cachedVersion: String(metadata.version) } : { ...live, cacheWarning: message };
           await readRequest(store.put(checkedRow)); return true;
         }, false);

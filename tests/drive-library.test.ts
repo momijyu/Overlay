@@ -7,7 +7,7 @@ import { enableDriveLibrary, readLibraryState } from "@/features/pdf-editor/driv
 import { syncDriveLibrary } from "@/features/pdf-editor/driveLibraryRemote";
 import { mergeLibraryEvents, type LibraryEvent } from "@/features/pdf-editor/driveLibraryData";
 import { createDriveAutosave } from "@/features/pdf-editor/driveAutosave";
-import { listDriveBindings } from "@/features/pdf-editor/driveOutbox";
+import { listDriveBindings, updateDriveBinding } from "@/features/pdf-editor/driveOutbox";
 import { checkQueuedDriveCaches, hasDriveCacheChecks, subscribeDriveCacheIssue } from "@/features/pdf-editor/driveCacheChecks";
 import { driveManifestContent } from "@/features/pdf-editor/driveAutosaveRemote";
 import { sha256 } from "@/features/pdf-editor/driveAutosaveRemote";
@@ -20,6 +20,9 @@ import type { DriveNoteAccess } from "@/features/pdf-editor/googleDriveNotes";
 import { DriveVersionDialog } from "@/features/pdf-editor/components/DriveVersionDialog";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { publishDriveStickyIndexes, refreshDriveStickyIndexes } from "@/features/pdf-editor/driveStickyIndexRemote";
+import { stickyDestination } from "@/features/pdf-editor/stickyOutline";
+import { resolveNotePages } from "@/features/pdf-editor/notePages";
 
 const connection = { accountId: "accountA", rootId: "rootA" };
 const useDevice = (db = new IDBFactory()) => { Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: db }); return db; };
@@ -50,8 +53,8 @@ function remote() {
       if (path === "files" && body) return save(body as Record<string, unknown>);
       if (path === "files") {
         if (parameters.q.includes("mimeType = 'application/vnd.google-apps.folder'")) return { files: [...files.values()].filter((f) => !f.trashed && f.mimeType === "application/vnd.google-apps.folder" && f.appProperties.overlayRootId === connection.rootId) };
-        const role = parameters.q.includes("tree-event") ? "tree-event" : "sync-note";
-        return { files: [...files.values()].filter((f) => !f.trashed && f.appProperties.overlayRole === role && f.appProperties.overlayRootId === connection.rootId) };
+        const roles = parameters.q.includes("sticky-index") ? ["sticky-index", "sync-note"] : [parameters.q.includes("tree-event") ? "tree-event" : "sync-note"];
+        return { files: [...files.values()].filter((f) => !f.trashed && roles.includes(f.appProperties.overlayRole) && f.appProperties.overlayRootId === connection.rootId) };
       }
       const value = files.get(path.slice(6)); if (!value) throw new DriveHttpError(404, "missing"); return value;
     },
@@ -91,6 +94,13 @@ function authorize(f: ReturnType<typeof remote>) {
   const session = getGoogleDriveSession();
   mock.method(session, "getConnection", () => ({ account: { id: connection.accountId, displayName: "", emailAddress: "test@example.com" }, root: { id: connection.rootId, name: "Overlay" } }));
   mock.method(session.drive, "autosaveAccess", async () => f.access);
+}
+const sticky = { id: "sticky-1", kind: "sticky" as const, text: "試験範囲\n本文は一覧へ含めない", x: .1, y: .2, width: .3, fontSize: 14 };
+const indexFiles = (f: ReturnType<typeof remote>) => [...f.files.values()].filter((r) => r.appProperties.overlayRole === "sticky-index");
+async function fixtureWithSticky() {
+  const f = await fixture();
+  await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 1, strokesByPage: {}, textsByPage: { 1: [sticky] } });
+  await send(f); await sync(f); return f;
 }
 async function bodyCount() {
   return withLocalTransaction(["notes", "pdfs"], "readonly", async (tx) => [await readRequest(tx.objectStore("notes").count()), await readRequest(tx.objectStore("pdfs").count())]);
@@ -684,4 +694,273 @@ test("裏の確認が通信失敗しても本文を捨てず、キャッシュ�
     await saveLocalNote({ file: original.file, noteId: f.note, expectedRevision: original.revision, strokesByPage: {} });
     assert.ok((await listDriveBindings())[0].generation > (await listDriveBindings())[0].uploadedGeneration);
   } finally { unsubscribe(); }
+});
+
+
+test("別端末の付箋は索引だけで一覧へ載り、本文とPDFを取得せず対象の版を開ける", async () => {
+  const f = await fixtureWithSticky();
+  const source = (await readLibraryState()).entities.find((r) => r.entry.id === f.note)!.sources[0];
+  const index = indexFiles(f)[0]; const data = JSON.parse(await index.data!.text());
+  assert.equal(data.entries[0].label, "試験範囲");
+  for (const key of ["strokesByPage", "textsByPage", "pdf", "x", "y"]) assert.equal(key in data, false);
+  assert.ok(!JSON.stringify(data).includes("本文は一覧へ含めない"));
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); f.calls.length = 0;
+  await sync(f);
+  const summary = (await loadNoteLibrary()).notes[0];
+  assert.deepEqual(summary.stickyNotes, [{ pageId: 1, pageNumber: 1, textId: sticky.id, label: "試験範囲", sourceId: source.noteId }]);
+  assert.equal(summary.stickyNotesPending, false); assert.deepEqual(await bodyCount(), [0, 0]);
+  assert.ok(f.calls.includes(`download ${index.id}`));
+  assert.ok(!f.calls.includes(`download ${source.noteId}`));
+  assert.equal(f.calls.filter((s) => s === "upload application/pdf").length, 0);
+  f.calls.length = 0; await sync(f);
+  assert.equal(f.calls.filter((s) => s.startsWith("download ")).length, 0);
+  authorize(f); const loaded = await loadLocalNote(f.note, { sourceId: summary.stickyNotes![0].sourceId });
+  assert.equal(stickyDestination(resolveNotePages(loaded.pages, 1), loaded.textsByPage, 1, sticky.id), 1);
+});
+
+test("ペンのみの保存では付箋索引と階層履歴を増やさず、付箋の変更・全削除では同じ索引を更新する", async () => {
+  const f = await fixtureWithSticky(); const index = indexFiles(f)[0];
+  const version = index.version; const events = (await readLibraryState()).events.length;
+  await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 2,
+    strokesByPage: { 1: [{ width: 2, points: [{ x: .1, y: .2 }] }] }, textsByPage: { 1: [sticky] } });
+  await send(f); await sync(f);
+  assert.equal(indexFiles(f)[0].version, version); assert.equal((await readLibraryState()).events.length, events);
+  await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 3, strokesByPage: {}, textsByPage: { 1: [{ ...sticky, text: "質問" }] } });
+  await send(f); await sync(f);
+  assert.equal(indexFiles(f)[0].id, index.id); assert.equal(JSON.parse(await indexFiles(f)[0].data!.text()).entries[0].label, "質問");
+  const other = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotes![0].label, "質問");
+  useDevice(f.db);
+  await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 4, strokesByPage: {}, textsByPage: {} });
+  await send(f); await sync(f);
+  useDevice(other); await sync(f);
+  assert.deepEqual((await loadNoteLibrary()).notes[0].stickyNotes, []);
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotesPending, false); assert.deepEqual(await bodyCount(), [0, 0]);
+});
+
+test("索引送信直後の応答消失は本文の保存を取り消さず、同じIDで再試行する", async () => {
+  const f = await fixture(); const old = indexFiles(f)[0];
+  // 新しいノートの索引を初めて送るケース。
+  const id = await saveLocalNote({ file: f.file, noteId: null, strokesByPage: {}, textsByPage: { 1: [sticky] } });
+  await sync(f); await send(f); f.failAfterSave("sticky-index");
+  await assert.rejects(sync(f), /通信断/);
+  const binding = (await listDriveBindings()).find((b) => b.id === id)!;
+  assert.equal(binding.generation, binding.uploadedGeneration); assert.equal(binding.error, undefined);
+  assert.equal(binding.stickyIndexPending, true);
+  const count = f.files.size; await sync(f); assert.equal(f.files.size, count);
+  const after = (await listDriveBindings()).find((b) => b.id === id)!;
+  assert.equal(after.stickyIndexId, binding.stickyIndexId); assert.equal(after.stickyIndexPending, false);
+  assert.equal(indexFiles(f).filter((i) => i.id !== old.id).length, 1);
+});
+
+test("旧Driveノートは最初だけ編集JSONから付箋を抽出し、PDFは取得しない", async () => {
+  const f = await fixtureWithSticky(); for (const index of indexFiles(f)) f.files.delete(index.id);
+  const source = (await readLibraryState()).entities.find((r) => r.entry.id === f.note)!.sources[0];
+  const json = f.files.get(source.noteId)!;
+  const pdfId = JSON.parse(await json.data!.text()).pdfId;
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); f.calls.length = 0; await sync(f);
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotes![0].label, "試験範囲");
+  assert.ok(f.calls.includes(`download ${source.noteId}`)); assert.ok(!f.calls.includes(`download ${pdfId}`));
+  assert.deepEqual(await bodyCount(), [0, 0]); f.calls.length = 0; await sync(f);
+  assert.equal(f.calls.filter((s) => s.startsWith("download ")).length, 0);
+});
+
+test("旧ノートが多数でも編集JSONの初回走査は1周期4件までで、未取得を空と表示しない", async () => {
+  const f = await fixtureWithSticky();
+  for (let i = 0; i < 4; i++) await saveLocalNote({ file: f.file, noteId: null, strokesByPage: {}, textsByPage: { 1: [sticky] } });
+  await sync(f); await send(f); await sync(f);
+  for (const index of indexFiles(f)) f.files.delete(index.id);
+  const sourceIds = new Set((await readLibraryState()).entities.flatMap((r) => r.sources.map((s) => s.noteId)));
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); f.calls.length = 0; await sync(f);
+  assert.equal(f.calls.filter((s) => s.startsWith("download ") && sourceIds.has(s.slice(9))).length, 4);
+  assert.equal((await loadNoteLibrary()).notes.filter((n) => n.stickyNotesPending).length, 1);
+  f.calls.length = 0; await sync(f);
+  assert.equal(f.calls.filter((s) => s.startsWith("download ") && sourceIds.has(s.slice(9))).length, 1);
+  assert.ok((await loadNoteLibrary()).notes.every((n) => !n.stickyNotesPending && n.stickyNotes!.length === 1));
+  assert.deepEqual(await bodyCount(), [0, 0]);
+});
+
+test("同じ付箋IDを持つ端末別の版を混同せず、選択した版へ移動できる", async () => {
+  const f = await fixtureWithSticky(); authorize(f);
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const loaded = await loadLocalNote(f.note);
+  await saveLocalNote({ file: loaded.file, noteId: f.note, expectedRevision: loaded.revision,
+    strokesByPage: {}, textsByPage: { 1: [{ ...sticky, text: "別端末の質問" }] } });
+  await send(f); await sync(f);
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const entries = (await loadNoteLibrary()).notes[0].stickyNotes!;
+  assert.equal(entries.length, 2); assert.equal(new Set(entries.map((e) => e.sourceId)).size, 2);
+  assert.deepEqual(new Set(entries.map((e) => e.label)), new Set(["試験範囲", "別端末の質問"]));
+  const chosen = entries.find((e) => e.label === "別端末の質問")!;
+  const note = await loadLocalNote(f.note, { sourceId: chosen.sourceId });
+  assert.equal(note.textsByPage![1][0].text, "別端末の質問");
+});
+
+test("索引取得中のローカル編集は古いクラウド付箋で上書きしない", async () => {
+  const f = await fixtureWithSticky(); authorize(f);
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const loaded = await loadLocalNote(f.note);
+  const entity = (await readLibraryState()).entities.find((r) => r.entry.id === f.note)!;
+  // 同じ内容の索引に版だけ増えた状態。取得中にユーザーが入力する。
+  const index = indexFiles(f)[0]; await f.access.replace!(index.id, new Blob([await index.data!.text()+" "]));
+  const download = f.access.download; let edited = false;
+  f.access.download = async (...args) => {
+    if (args[0] === index.id && !edited) {
+      edited = true;
+      await saveLocalNote({ file: loaded.file, noteId: f.note, expectedRevision: loaded.revision, strokesByPage: {},
+        textsByPage: { 1: [{ ...sticky, text: "未送信の内容" }] } });
+    }
+    return download(...args);
+  };
+  await refreshDriveStickyIndexes(f.access, (await readLibraryState()).scope!);
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotes![0].label, "未送信の内容");
+  assert.ok((await listDriveBindings())[0].generation > (await listDriveBindings())[0].uploadedGeneration);
+  assert.equal((await readLibraryState()).entities.find((r) => r.entry.id === f.note)!.cachedSource, entity.cachedSource);
+});
+
+test("削除済みノートの索引がDriveに残っていても一覧へ復活しない", async () => {
+  const f = await fixtureWithSticky();
+  const other = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotes!.length, 1);
+  useDevice(f.db); await deleteSavedNote(f.note); await sync(f);
+  assert.equal(indexFiles(f).length, 1);
+  useDevice(other); await sync(f); assert.deepEqual((await loadNoteLibrary()).notes, []);
+});
+
+test("索引の破損・参照違い・所有者・保存場所・サイズ異常では内容を採用しない", async (t) => {
+  const mutations = {
+    checksum: async (f: Awaited<ReturnType<typeof fixtureWithSticky>>) => { indexFiles(f)[0].sha256Checksum = "0".repeat(64); },
+    owner: async (f: Awaited<ReturnType<typeof fixtureWithSticky>>) => { indexFiles(f)[0].ownedByMe = false; },
+    parent: async (f: Awaited<ReturnType<typeof fixtureWithSticky>>) => { indexFiles(f)[0].parents = ["outside"]; },
+    size: async (f: Awaited<ReturnType<typeof fixtureWithSticky>>) => { indexFiles(f)[0].size = "999999999"; },
+    reference: async (f: Awaited<ReturnType<typeof fixtureWithSticky>>) => {
+      const index = indexFiles(f)[0]; const value = JSON.parse(await index.data!.text());
+      await f.access.replace!(index.id, new Blob([JSON.stringify({ ...value, logicalId: "wrong" })]));
+    },
+  };
+  for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async () => {
+    useDevice(); const f = await fixtureWithSticky(); await mutate(f);
+    useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
+    await assert.rejects(sync(f)); assert.deepEqual(await bodyCount(), [0, 0]);
+    const summary = (await loadNoteLibrary()).notes[0];
+    assert.equal(summary.stickyNotes, undefined); assert.equal(summary.stickyNotesPending, true);
+  });
+});
+
+test("重複索引・世代の巻き戻しを拒否し、取得済み付箋を維持する", async () => {
+  const f = await fixtureWithSticky(); const index = indexFiles(f)[0];
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const scope = (await readLibraryState()).scope!;
+  f.files.set("duplicate", { ...index, id: "duplicate" });
+  await assert.rejects(refreshDriveStickyIndexes(f.access, scope), /重複/); f.files.delete("duplicate");
+  const value = JSON.parse(await index.data!.text());
+  await f.access.replace!(index.id, new Blob([JSON.stringify({ ...value, generation: 1, entries: [] })]));
+  await assert.rejects(refreshDriveStickyIndexes(f.access, scope), /更新番号/);
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotes![0].label, "試験範囲");
+});
+
+test("索引の送信失敗後に付箋を元へ戻しても、公開済みハッシュだけで更新を省略しない", async () => {
+  const f = await fixtureWithSticky();
+  await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 2, strokesByPage: {}, textsByPage: { 1: [{ ...sticky, text: "途中" }] } });
+  await send(f);
+  const replace = f.access.replace!; let failed = false;
+  f.access.replace = async (...args) => {
+    const saved = await replace(...args);
+    if (indexFiles(f).some((i) => i.id === args[0]) && !failed) { failed = true; throw new DriveHttpError(0, "索引の応答消失"); }
+    return saved;
+  };
+  await assert.rejects(publishDriveStickyIndexes(f.access, (await readLibraryState()).scope!), /応答消失/);
+  await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 3, strokesByPage: {}, textsByPage: { 1: [sticky] } }); await send(f);
+  await publishDriveStickyIndexes(f.access, (await readLibraryState()).scope!);
+  assert.equal(JSON.parse(await indexFiles(f)[0].data!.text()).entries[0].label, "試験範囲");
+});
+
+
+test("PDF取得中の付箋索引だけの更新は本文競合と誤認せず、新しい索引キャッシュも保持する", async () => {
+  const f = await fixtureWithSticky(); authorize(f);
+  await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() });
+  const source = (await readLibraryState()).entities.find((r) => r.entry.id === f.note)!.sources[0];
+  await withLocalTransaction(["driveEntities"], "readwrite", async (tx) => {
+    const store = tx.objectStore("driveEntities"); const row = await readRequest(store.get(`note:${f.note}`));
+    await readRequest(store.put({ ...row, stickyIndexes: [] }));
+  });
+  const download = f.access.download; let changed = false;
+  f.access.download = async (...args) => {
+    if (args[0] === source.noteId && !changed) {
+      changed = true;
+      const binding = (await listDriveBindings())[0];
+      await updateDriveBinding(binding.id, binding.key, (row) => ({ ...row, stickyIndexPending: true }));
+      await refreshDriveStickyIndexes(f.access, (await readLibraryState()).scope!);
+    }
+    return download(...args);
+  };
+  const loaded = await loadLocalNote(f.note);
+  assert.equal(loaded.textsByPage![1][0].text, sticky.text);
+  assert.equal((await readLibraryState()).entities.find((r) => r.entry.id === f.note)!.stickyIndexes!.length, 1);
+  assert.deepEqual(await bodyCount(), [1, 1]);
+});
+
+test("索引取得中に連携先が変わった場合は一覧やキャッシュへ結果を採用しない", async () => {
+  const f = await fixtureWithSticky();
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
+  // 一覧だけ先に適用する。
+  await syncDriveLibrary(f.access, (await readLibraryState()).scope!, { stickyIndexes: false });
+  const scope = (await readLibraryState()).scope!;
+  const download = f.access.download;
+  f.access.download = async (...args) => {
+    if (indexFiles(f).some((index) => index.id === args[0])) await withLocalTransaction(["driveSettings"], "readwrite", async (tx) => {
+      await readRequest(tx.objectStore("driveSettings").put({ id: "library", value: { ...scope, accountId: "other" } }));
+    });
+    return download(...args);
+  };
+  await assert.rejects(refreshDriveStickyIndexes(f.access, scope), /連携先が変わりました/);
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotes, undefined);
+  assert.deepEqual(await bodyCount(), [0, 0]);
+});
+
+
+test("本文キャッシュ整理後も複数版の一覧を自分の索引へ混ぜて再送しない", async () => {
+  const f = await fixtureWithSticky(); authorize(f);
+  const originalIndex = indexFiles(f)[0];
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const loaded = await loadLocalNote(f.note);
+  await saveLocalNote({ file: loaded.file, noteId: f.note, expectedRevision: loaded.revision, strokesByPage: {},
+    textsByPage: { 1: [{ ...sticky, text: "他端末の付箋" }] } });
+  await send(f); await sync(f);
+  useDevice(f.db);
+  await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() });
+  await sync(f); await sync(f);
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotes!.length, 2);
+  const own = f.files.get(originalIndex.id)!;
+  assert.equal(own.version, originalIndex.version);
+  assert.equal(JSON.parse(await own.data!.text()).entries[0].label, "試験範囲");
+});
+
+
+test("認可が取得途中で失効した場合は、同じ連携先でも古い索引を採用しない", async () => {
+  const f = await fixtureWithSticky();
+  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
+  await syncDriveLibrary(f.access, (await readLibraryState()).scope!, { stickyIndexes: false });
+  const download = f.access.download; let active = true;
+  f.access.download = async (...args) => { const value = await download(...args); active = false; return value; };
+  await refreshDriveStickyIndexes(f.access, (await readLibraryState()).scope!, () => active);
+  const summary = (await loadNoteLibrary()).notes[0];
+  assert.equal(summary.stickyNotes, undefined); assert.equal(summary.stickyNotesPending, true);
+  assert.equal((await readLibraryState()).entities.find((r) => r.entry.id === f.note)!.stickyIndexes, undefined);
+});
+
+
+test("索引機能を入れる前のタイトルだけの一覧も、付箋未取得として扱う", async () => {
+  const f = await fixtureWithSticky();
+  await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() });
+  await withLocalTransaction(["driveEntities", "noteSummaries"], "readwrite", async (tx) => {
+    const entities = tx.objectStore("driveEntities"); const row = await readRequest(entities.get(`note:${f.note}`));
+    await readRequest(entities.put({ ...row, stickyIndexes: undefined }));
+    const summaries = tx.objectStore("noteSummaries"); const summary = await readRequest(summaries.get(f.note));
+    await readRequest(summaries.put({ ...summary, stickyNotes: undefined, stickyNotesPending: undefined }));
+  });
+  await syncDriveLibrary(f.access, (await readLibraryState()).scope!, { stickyIndexes: false });
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotesPending, true);
+  await refreshDriveStickyIndexes(f.access, (await readLibraryState()).scope!);
+  assert.equal((await loadNoteLibrary()).notes[0].stickyNotes![0].label, "試験範囲");
 });

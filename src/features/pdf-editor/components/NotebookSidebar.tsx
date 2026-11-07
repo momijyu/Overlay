@@ -37,7 +37,7 @@ type SidebarProps = {
   onSaveItemsToDrive?: (notes: SavedNoteSummary[]) => void;
   currentStickyOutline?: CurrentStickyOutline;
   currentPageId?: number;
-  onOpenSticky?: (note: SavedNoteSummary | null, pageId: number, textId: string) => void;
+  onOpenSticky?: (note: SavedNoteSummary | null, pageId: number, textId: string, sourceId?: string) => void;
 };
 
 const emptyLibrary: NoteLibrary = { notes: [], folders: [], foldersEnabled: true };

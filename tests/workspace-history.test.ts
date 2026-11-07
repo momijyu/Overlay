@@ -31,6 +31,7 @@ const deletedItems: NoteDragItem[][] = [];
 let openedHeadings: HeadingsByPage | undefined;
 let openedPages: NotePage[] | undefined;
 let openedTexts: TextNotesByPage | undefined;
+const openedNotes: { id: string; sourceId?: string }[] = [];
 const openedStrokes = { 2: [{ width: 5, points: [{ x: 0.2, y: 0.3 }] }] };
 const backups: NoteBackup[] = [];
 const capturedSelections: NoteDragItem[][] = [];
@@ -87,7 +88,8 @@ mock.module("@/features/pdf-editor/localNotes", { exports: {
     if (deleteFails) throw new Error("一括削除失敗");
     deletedItems.push(items);
   },
-  loadLocalNote: async () => {
+  loadLocalNote: async (id: string, options?: { sourceId?: string }) => {
+    openedNotes.push({ id, ...options });
     if (openFails) throw new Error("読込失敗");
     return { file, id: "other", strokesByPage: openedStrokes, headingsByPage: openedHeadings, textsByPage: openedTexts, pages: openedPages, revision: 1 };
   },
@@ -122,7 +124,7 @@ const { AppHeader } = await import("@/components/layout/AppHeader");
 const { NotebookRestoreDialog } = await import("@/features/pdf-editor/components/NotebookRestoreDialog");
 
 beforeEach(() => { openedHeadings = undefined; pageFails = false; openedPages = undefined; exportedPages.length = 0; states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; deletedItems.length = 0; openedTexts = undefined; });
-beforeEach(() => { backups.length = 0; capturedSelections.length = 0; restoreCalls = 0; restoreFails = false; decodeFails = false;
+beforeEach(() => { openedNotes.length = 0; backups.length = 0; capturedSelections.length = 0; restoreCalls = 0; restoreFails = false; decodeFails = false;
   restoreSkipped = false; restoreOptions.length = 0; capturedNotes.length = 0; captureFails = false; });
 
 function render() {
@@ -1130,6 +1132,14 @@ test("付箋一覧から別資料の該当ページを直接開き、白紙追�
   props(NotebookSidebar).onOpenSticky!({ id: "other" } as SavedNoteSummary, 2, "sticky");
   assert.equal(props(PdfPage).pageNumber, 3); assert.equal(props(HistoryControls).canUndo, true);
   assert.equal(savedInputs.length, count);
+});
+
+test("クラウド付箋はその編集版の保存先を読み込みへ渡し、開いた後に実在する付箋を確認する", async () => {
+  setup(); openedTexts = { 2: [{ id: "sticky", kind: "sticky", text: "試験範囲", x: .1, y: .2, width: .3, fontSize: 14 }] };
+  props(NotebookSidebar).onOpenSticky!({ id: "other", title: "Drive資料" } as SavedNoteSummary, 2, "sticky", "source-2");
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.deepEqual(openedNotes, [{ id: "other", sourceId: "source-2" }]);
+  assert.equal(props(PdfPage).pageNumber, 2); assert.equal(props(NotebookSidebar).currentNoteId, "other");
 });
 
 test("削除済み付箋や読み込み失敗では編集中の資料・履歴を保持し、処理中は移動しない", async () => {

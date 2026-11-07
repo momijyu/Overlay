@@ -3,7 +3,7 @@ import { getLibraryScope } from "./driveLibraryLocal";
 import type { LibraryEntity, LibrarySource } from "./driveLibraryData";
 import { queueDriveCacheCheck } from "./driveCacheChecks";
 import { DEFAULT_DRIVE_CACHE_MB, readDriveCacheLimit } from "./driveCacheSettings";
-import type { DriveBinding } from "./driveOutbox";
+import { driveBodyBindingSignature, type DriveBinding } from "./driveOutbox";
 import type { NoteBackup } from "./noteBackupData";
 import { toLocalNoteSummary } from "./localNoteSummary";
 import { getGoogleDriveSession } from "./googleDriveSession";
@@ -117,14 +117,15 @@ export async function hydrateDriveNote(id: string, sourceId?: string, preferCach
     const current = await readRequest<LibraryEntity | undefined>(entities.get(`note:${id}`));
     const liveBinding = await readRequest<DriveBinding | undefined>(tx.objectStore("driveBindings").get(id));
     // hash計算など通信以外の非IDB awaitをトランザクションへ持ち込まない。
-    if (JSON.stringify({ entity: current, binding: liveBinding }) !== JSON.stringify({ entity, binding })) throw new Error("取得中にノートが変更されました。再度開いてください。");
+    if (JSON.stringify({ ...current, stickyIndexes: undefined }) !== JSON.stringify({ ...entity, stickyIndexes: undefined })
+      || driveBodyBindingSignature(liveBinding) !== driveBodyBindingSignature(binding)) throw new Error("取得中にノートが変更されました。再度開いてください。");
     const previous = await readRequest<{ revision?: number } | undefined>(tx.objectStore("notes").get(id));
     const stored = { id, title: entity.entry.name, folderId: entity.entry.parentId, fileName: note.fileName, updatedAt: result.summary.updatedAt,
       revision: (previous?.revision ?? 0) + 1, strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, pages: note.pages, headingsByPage: note.headingsByPage };
     await readRequest(tx.objectStore("pdfs").put({ id, blob: note.pdf }));
     await readRequest(tx.objectStore("notes").put(stored));
     await readRequest(tx.objectStore("noteSummaries").put(toLocalNoteSummary(stored)));
-    await readRequest(entities.put({ ...entity, cachedSource: source.noteId, cachedVersion: version,
+    await readRequest(entities.put({ ...current, cachedSource: source.noteId, cachedVersion: version,
       cacheWarning: undefined, cachedBytes: note.pdf.size + new Blob([JSON.stringify(stored)]).size, lastUsed: Date.now() }));
     // 別端末の版を選んだ場合も旧送信先を上書きしない。次の編集で新しい枝を作る。
     if (liveBinding && liveBinding.ids?.note !== source.noteId) await readRequest(tx.objectStore("driveBindings").delete(id));

@@ -10,6 +10,7 @@ import { subscribeDriveQueue } from "../driveQueueEvents";
 import { DrivePlacementDialog } from "./DrivePlacementDialog";
 import { getGoogleDriveSession } from "../googleDriveSession";
 import { DriveCacheSettings } from "./DriveCacheSettings";
+import { DriveStickyIndexError } from "../driveStickyIndexData";
 
 export function driveAutosaveStatus(rows: DriveBinding[], connection: { account: { id: string }; root: { id: string } | null } | null) {
   const pending = rows.filter((row) => row.enabled && row.generation > row.uploadedGeneration);
@@ -29,6 +30,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
   const [connected, setConnected] = useState<ReturnType<ReturnType<typeof getGoogleDriveSession>["getConnection"]>>(null);
   const [supported, setSupported] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [indexOnlyError, setIndexOnlyError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [scope, setScope] = useState<LibraryScope | null>(null);
   const [treePending, setTreePending] = useState(false);
@@ -45,6 +47,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
     const showFailure = (cause: unknown) => {
       if (!active) return;
       setError(cause instanceof Error ? cause.message : "Drive連携を確認できませんでした。");
+      setIndexOnlyError(cause instanceof DriveStickyIndexError);
       if (cause instanceof LibraryConflict) void readLibraryStatus().then((library) => {
         if (active) { setEntities(library.entities); setConflict(cause.conflicts[0]); }
       }).catch(() => { /* 確認に失敗した場合も既存内容を維持する。 */ });
@@ -78,13 +81,16 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
     changed();
     return () => { active = false; clearInterval(heartbeat); clearInterval(interval); unsubscribeQueue(); unsubscribeSession(); window.removeEventListener("online", changed); runnerRef.current = null; runner.dispose(); };
   }, []);
-  const status = (error ? "Drive連携が停止しています。ノート一覧で確認してください。" : driveAutosaveStatus(rows, connected)) || (treePending ? "Driveへ階層を保存待ち…" : "");
+  const pendingStatus = driveAutosaveStatus(rows, connected) || (treePending ? "Driveへ階層を保存待ち…" : "");
+  const status = error && !indexOnlyError ? "Drive連携が停止しています。ノート一覧で確認してください。"
+    : pendingStatus || (error ? "付箋一覧を更新できません。ノート本文の自動保存は継続します。" : "");
+  const needsUnloadWarning = !!pendingStatus || !!error && !indexOnlyError;
   useEffect(() => {
-    if (!status) return;
+    if (!needsUnloadWarning) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [status]);
+  }, [needsUnloadWarning]);
   const matchingConnection = connected?.root && (!scope || scope.accountId === connected.account.id && scope.rootId === connected.root.id);
   function showConflict(cause: LibraryConflict) {
     void readLibraryStatus().then((library) => {
@@ -99,7 +105,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
         await updateDriveBinding(row.id, row.key, (live) => ({ ...live, error: undefined, retryAt: undefined, failures: 0 }));
       }
       await runnerRef.current?.tick(true);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Drive一覧を更新できませんでした。"); if (cause instanceof LibraryConflict) showConflict(cause); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Drive一覧を更新できませんでした。"); setIndexOnlyError(cause instanceof DriveStickyIndexError); if (cause instanceof LibraryConflict) showConflict(cause); }
     finally { setBusy(false); }
   }
   return <>
@@ -107,7 +113,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
       onChoose={(head) => {
         setBusy(true); setError(null); onMutationChange?.(true);
         void resolveLibraryPlacement(conflict, head).then(() => { setConflict(null); return runnerRef.current?.tick(true); })
-          .catch((cause: unknown) => { setError(cause instanceof Error ? cause.message : "配置を確定できませんでした。"); if (cause instanceof LibraryConflict) showConflict(cause); })
+          .catch((cause: unknown) => { setError(cause instanceof Error ? cause.message : "配置を確定できませんでした。"); setIndexOnlyError(cause instanceof DriveStickyIndexError); if (cause instanceof LibraryConflict) showConflict(cause); })
           .finally(() => { setBusy(false); onMutationChange?.(false); });
       }} />}
     <section aria-label="Drive自動保存" className="mx-4 my-3 border-t border-base-300 pt-3">
@@ -119,7 +125,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
       {!matchingConnection && <p className="mt-2 text-xs">下の「Google Drive」から接続してください。</p>}
       <p className="mt-2 text-xs text-base-content/70">端末ごとに別の保存先を作ります。未送信の間はこのブラウザに保管します。</p>
       {status && <p role="status" className="mt-2 text-xs">{status}</p>}
-      {(error || rows.some((row) => row.enabled && row.error)) && <p role="alert" className="mt-2 text-xs text-error">{error || rows.find((row) => row.enabled && row.error)?.error}</p>}
+      {(error || rows.some((row) => row.enabled && row.error)) && <p role="alert" className="mt-2 text-xs text-error">{rows.find((row) => row.enabled && row.error)?.error || error}</p>}
       <DriveCacheSettings visible={drawerOpen} />
     </section>
     {!drawerOpen && status && typeof document !== "undefined" && createPortal(

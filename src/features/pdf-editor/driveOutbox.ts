@@ -12,10 +12,21 @@ export type DriveBinding = {
   // Googleのsha256Checksumと比較する、送信済みJSON全バイトのハッシュ。旧データでは未設定。
   uploadedChecksum?: string;
   uploadedJsonBytes?: number;
+  // 本文とは独立した付箋索引。本文送信の待ち時間へ索引通信を加えない。
+  stickyIndexId?: string;
+  stickyIndexHash?: string;
+  stickyIndexPending?: boolean;
+  stickyIndexAttempt?: { hash: string; generation: number };
   failures?: number;
 };
 export const DRIVE_DEBOUNCE_MS = 2000;
 export const DRIVE_MAX_WAIT_MS = 10000;
+
+// 付箋索引の進行だけでは、本文取得中の競合や別の編集と判定しない。
+export function driveBodyBindingSignature(binding: DriveBinding | undefined) {
+  return JSON.stringify(binding && { ...binding, stickyIndexId: undefined, stickyIndexHash: undefined,
+    stickyIndexPending: undefined, stickyIndexAttempt: undefined });
+}
 
 export async function dirtyDriveBinding(transaction: IDBTransaction, id: string, now = Date.now()) {
   const store = transaction.objectStore("driveBindings");

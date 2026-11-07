@@ -173,8 +173,10 @@ export async function applyDriveLibrary(scope: LibraryScope, merged: Map<string,
       } else {
         const summaryStore = tx.objectStore("noteSummaries");
         const summary = await readRequest<SavedNoteSummary | undefined>(summaryStore.get(row.entry.id));
+        const hasBody = !!await readRequest(tx.objectStore("notes").getKey(row.entry.id));
         if (summary || row.sources.length) await readRequest(summaryStore.put({ ...summary, id: row.entry.id, title: row.entry.name,
-          folderId: row.entry.parentId, fileName: summary?.fileName ?? row.sources[0].fileName, updatedAt: summary?.updatedAt ?? new Date().toISOString() }));
+          folderId: row.entry.parentId, fileName: summary?.fileName ?? row.sources[0].fileName, updatedAt: summary?.updatedAt ?? new Date().toISOString(),
+          stickyNotesPending: !hasBody && row.sources.some((source) => !old?.stickyIndexes?.some((index) => index.sourceId === source.noteId)) }));
         // 変わっていない階層同期で全ノート本文を読み直さない。
         if (!old || old.entry.name !== row.entry.name || old.entry.parentId !== row.entry.parentId) {
           const note = await readRequest<Record<string, unknown> | undefined>(tx.objectStore("notes").get(row.entry.id));

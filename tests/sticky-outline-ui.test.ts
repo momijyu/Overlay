@@ -34,3 +34,19 @@ test("処理中は移動せず、空の一覧・未保存の開いた資料に�
   (buttons(panel)[0].props.onClick as () => void)(); assert.equal(calls, 0);
   assert.ok(renderToStaticMarkup(StickyNotesPanel({ notes: [], disabled: false, onNavigate: () => {} })).includes("付箋はありません。"));
 });
+
+test("Driveの同じ付箋IDでも編集版を区別し、押した版の保存先を渡す", () => {
+  const cloud = { ...notes[0], stickyNotes: ["source1", "source2"].map((sourceId) => ({ ...notes[0].stickyNotes![0], sourceId })) };
+  const calls: unknown[][] = [];
+  const panel = StickyNotesPanel({ notes: [cloud], disabled: false, onNavigate: (...args) => calls.push(args) });
+  const html = renderToStaticMarkup(panel);
+  assert.ok(html.includes("版1")); assert.ok(html.includes("版2"));
+  (buttons(panel)[1].props.onClick as () => void)();
+  assert.deepEqual(calls, [[cloud, 8, "sticky", "source2"]]);
+});
+
+test("未取得のクラウド付箋を『付箋はありません』と断定せず、取得後の空一覧とは分ける", () => {
+  const cloud = { ...notes[0], stickyNotes: undefined, stickyNotesPending: true };
+  const html = renderToStaticMarkup(StickyNotesPanel({ notes: [cloud], disabled: false, onNavigate: () => {} }));
+  assert.ok(html.includes("未取得の資料")); assert.ok(!html.includes("付箋はありません"));
+});

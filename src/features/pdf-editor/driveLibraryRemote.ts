@@ -7,6 +7,7 @@ import type { DriveNoteAccess } from "./googleDriveNotes";
 import { DriveHttpError } from "./driveHttpError";
 import { sha256 } from "./driveAutosaveRemote";
 import type { DriveBinding } from "./driveOutbox";
+import { DriveStickyIndexError } from "./driveStickyIndexData";
 const FOLDER = "application/vnd.google-apps.folder";
 const roles = new Set(["library-folder", "library-note"]);
 function managed(value: unknown, scope: { rootId: string }, role: string, key?: string) {
@@ -197,7 +198,7 @@ function publicationOrder(events: LibraryEventRow[]) {
   }
   return result;
 }
-export async function syncDriveLibrary(access: DriveNoteAccess, connection: NonNullable<Awaited<ReturnType<typeof getLibraryScope>>>) {
+export async function syncDriveLibrary(access: DriveNoteAccess, connection: NonNullable<Awaited<ReturnType<typeof getLibraryScope>>>, options: { stickyIndexes?: boolean } = {}) {
   const bindings = await (await import("./driveOutbox")).listDriveBindings();
   const before = await readLibraryState();
   for (const binding of bindings) if (binding.uploadedGeneration > 0 && binding.accountId === connection.accountId && binding.rootId === connection.rootId) {
@@ -240,4 +241,14 @@ export async function syncDriveLibrary(access: DriveNoteAccess, connection: NonN
     await withLocalTransaction(["driveTreeEvents"], "readwrite", async (tx) => { await readRequest(tx.objectStore("driveTreeEvents").put(row)); }, false);
   }
   await applyDriveLibrary(scope, merged, events);
+  if (options.stickyIndexes !== false) await syncDriveStickyIndexes(access, scope);
+}
+
+export async function syncDriveStickyIndexes(access: DriveNoteAccess, scope: LibraryScope, active: () => boolean = () => true) {
+  // 付箋索引は不変の階層履歴へ追記せず、本文送信とは別に更新する。
+  const { publishDriveStickyIndexes, refreshDriveStickyIndexes } = await import("./driveStickyIndexRemote");
+  try {
+    await publishDriveStickyIndexes(access, scope, active);
+    await refreshDriveStickyIndexes(access, scope, active);
+  } catch (error) { throw new DriveStickyIndexError(error); }
 }
