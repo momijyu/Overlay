@@ -8,6 +8,8 @@ import { readDriveStickyIndex, readStickyEntries, STICKY_INDEX_BYTES, type Drive
 import { DRIVE_NOTE_FIELDS, driveId, driveObject, driveNoteSummary } from "./googleDriveNoteData";
 import { readDriveSource, type DriveNoteAccess } from "./googleDriveNotes";
 import { createStickyOutline } from "./stickyOutline";
+import { checkedDriveVersion } from "./driveVersionRemote";
+import type { SourceVersion } from "./driveVersionData";
 
 const ROLE = "sticky-index";
 const entryHash = (entries: DriveStickyIndex["entries"]) => sha256(new Blob([JSON.stringify(entries)]));
@@ -118,6 +120,10 @@ export async function refreshDriveStickyIndexes(access: DriveNoteAccess, scope: 
   const rows = state.entities.filter((r) => r.entry.kind === "note" && !r.entry.deleted && r.sources.length);
   if (!rows.length) return;
   const files = await listFiles(access, scope);
+  // 一覧取得済みの小さい本文メタデータを共有する。採用確認用の全件通信を本文同期へ追加しない。
+  const versions = new Map<string, SourceVersion[]>();
+  for (const row of rows) if (row.adoptions?.length) versions.set(row.id, row.sources.map((source) =>
+    checkedDriveVersion(files.get(source.noteId), scope, source).version).sort((a, b) => a.sourceId.localeCompare(b.sourceId)));
   const indexes = new Map<string, Record<string, unknown>>();
   const sources = new Map(rows.flatMap((r) => r.sources.map((s) => [s.noteId, s] as const)));
   for (const file of files.values()) {
@@ -169,5 +175,5 @@ export async function refreshDriveStickyIndexes(access: DriveNoteAccess, scope: 
     }
   }));
   for (const caches of results.values()) caches.sort((a, b) => a.sourceId.localeCompare(b.sourceId));
-  if (active()) await applyStickyIndexes(scope, rows, results, active);
+  if (active()) await applyStickyIndexes(scope, rows, results, active, versions);
 }

@@ -1,5 +1,6 @@
 import { readRequest, withLocalTransaction } from "./localDatabase";
 import type { DriveBinding } from "./driveOutbox";
+import { activeDriveSources } from "./driveVersionData";
 import type { LibraryEntity } from "./driveLibraryData";
 
 export type NoteDriveStatus = "saved" | "pending" | "warning";
@@ -28,7 +29,7 @@ export function noteDriveStatuses(bindings: DriveBinding[], entities: LibraryEnt
   const rows = new Map(entities.map((row) => [row.id, row]));
   for (const row of entities) {
     if (row.entry.kind !== "note" || row.entry.deleted) continue;
-    if (row.cacheWarning || row.sources.length > 1) { statuses[row.entry.id] = "warning"; continue; }
+    if (row.cacheWarning || activeDriveSources(row).length > 1 || (row.adoptions?.length ?? 0) > 1) { statuses[row.entry.id] = "warning"; continue; }
     // 階層送信中は保守的に待機表示。大きくなる変更履歴全件をUI用に走査しない。
     if (treePending) statuses[row.entry.id] = "pending";
     else if (row.sources.length) statuses[row.entry.id] = "saved";

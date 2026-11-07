@@ -3,6 +3,7 @@ import { readRequest, withLocalTransaction } from "./localDatabase";
 import { LibraryRetry, entityKey, type LibraryConflictItem, type LibraryEntity, type LibraryEntry, type LibraryEvent, type LibraryEventRow, type LibraryScope, type LibrarySource } from "./driveLibraryData";
 import type { DriveBinding } from "./driveOutbox";
 import type { NoteFolder, SavedNoteSummary } from "./types";
+import { activeDriveSources, adoptionSignature, readVersionAdoption, type VersionAdoption } from "./driveVersionData";
 
 export const LIBRARY_STORES = ["driveEntities", "driveTreeEvents", "driveSettings", "driveBindings", "noteSummaries", "folders", "notes", "pdfs"] as const;
 export async function libraryScope(tx: IDBTransaction): Promise<LibraryScope | null> {
@@ -31,8 +32,11 @@ async function ensureBinding(tx: IDBTransaction, scope: LibraryScope, id: string
   // Driveの一覧だけを取得したノートは、本文を取得して編集するまで送信対象にしない。
   if (!await readRequest(tx.objectStore("notes").getKey(id))) return;
   const now = Date.now();
+  const entity = await readRequest<LibraryEntity | undefined>(tx.objectStore("driveEntities").get(`note:${id}`));
+  const basedOn = entity?.adoptions?.length === 1 && entity.cachedSource && entity.cachedVersion
+    ? { sourceId: entity.cachedSource, version: entity.cachedVersion, ...(entity.cachedChecksum ? { checksum: entity.cachedChecksum } : {}), heads: [entity.adoptions[0].id] } : undefined;
   await readRequest(store.add({ id, key: crypto.randomUUID(), deviceId: scope.deviceId, accountId: scope.accountId, rootId: scope.rootId,
-    enabled: true, generation: 1, uploadedGeneration: 0, dirtySince: now, changedAt: now } satisfies DriveBinding));
+    enabled: true, generation: 1, uploadedGeneration: 0, dirtySince: now, changedAt: now, ...(basedOn ? { basedOn } : {}) } satisfies DriveBinding));
 }
 
 // 本文を実際に保存した1件だけ登録する。閲覧用キャッシュは自動登録しない。
@@ -114,7 +118,7 @@ export async function registerLibrarySource(binding: DriveBinding, fileName: str
     const row = await readRequest<LibraryEntity | undefined>(store.get(`note:${binding.id}`));
     if (!row || row.entry.deleted || row.sources.some((s) => s.noteId === binding.ids!.note)) return;
     const source: LibrarySource = { logicalId: binding.id, noteId: binding.ids!.note, noteKey: binding.key,
-      containerId: binding.ids!.container, deviceId: binding.deviceId, fileName, ...(binding.pdfHash ? { pdfHash: binding.pdfHash } : {}) };
+      containerId: binding.ids!.container, deviceId: binding.deviceId, fileName, ...(binding.pdfHash ? { pdfHash: binding.pdfHash } : {}), ...(binding.basedOn ? { basedOn: binding.basedOn } : {}) };
     await queueEvent(tx, { schemaVersion: 1, kind: "overlay-library-event", id: crypto.randomUUID(), deviceId: binding.deviceId, changes: [], source });
     await readRequest(store.put({ ...row, sources: [...row.sources, source] }));
   }, false);
@@ -144,6 +148,7 @@ export async function readLibraryState() {
 }
 
 export async function applyDriveLibrary(scope: LibraryScope, merged: Map<string, LibraryEntity>, events: LibraryEventRow[]) {
+  const recheck: LibraryEntity[] = [];
   await withLocalTransaction([...LIBRARY_STORES], "readwrite", async (tx) => {
     const currentScope = await libraryScope(tx);
     if (!currentScope || currentScope.accountId !== scope.accountId || currentScope.rootId !== scope.rootId) throw new Error("連携先が変わりました。");
@@ -155,6 +160,8 @@ export async function applyDriveLibrary(scope: LibraryScope, merged: Map<string,
     for (const entry of previous) if (!merged.has(entry.id)) throw new Error("Driveの階層履歴が欠けています。端末の一覧は変更していません。");
     for (const row of merged.values()) {
       const old = previous.find((r) => r.id === row.id);
+      if (row.adoptions?.length) row.sourceVersions = adoptionSignature(row) === adoptionSignature(old ?? {})
+        ? old?.sourceVersions : row.adoptions.length === 1 ? row.adoptions[0].adoption.observed : undefined;
       if (old && old.head !== row.head) {
         const incoming = events.find((r) => r.id === row.head)?.event;
         if (!incoming) throw new Error("階層の更新を確認できません。");
@@ -176,7 +183,7 @@ export async function applyDriveLibrary(scope: LibraryScope, merged: Map<string,
         const hasBody = !!await readRequest(tx.objectStore("notes").getKey(row.entry.id));
         if (summary || row.sources.length) await readRequest(summaryStore.put({ ...summary, id: row.entry.id, title: row.entry.name,
           folderId: row.entry.parentId, fileName: summary?.fileName ?? row.sources[0].fileName, updatedAt: summary?.updatedAt ?? new Date().toISOString(),
-          stickyNotesPending: !hasBody && row.sources.some((source) => !old?.stickyIndexes?.some((index) => index.sourceId === source.noteId)) }));
+          stickyNotesPending: !hasBody && activeDriveSources(row).some((source) => !old?.stickyIndexes?.some((index) => index.sourceId === source.noteId)) }));
         // 変わっていない階層同期で全ノート本文を読み直さない。
         if (!old || old.entry.name !== row.entry.name || old.entry.parentId !== row.entry.parentId) {
           const note = await readRequest<Record<string, unknown> | undefined>(tx.objectStore("notes").get(row.entry.id));
@@ -184,12 +191,29 @@ export async function applyDriveLibrary(scope: LibraryScope, merged: Map<string,
         }
       }
       const listed = row.entry.kind === "folder" || !!await readRequest(tx.objectStore("noteSummaries").getKey(row.entry.id));
-      await readRequest(store.put({ ...old, ...row, listed }));
+      const next = { ...old, ...row, listed };
+      await readRequest(store.put(next));
+      if (!row.entry.deleted && row.adoptions?.length && old?.cachedSource
+        && (adoptionSignature(old) !== adoptionSignature(row) || JSON.stringify(old.sources) !== JSON.stringify(row.sources))) recheck.push(next);
     }
     for (const event of events) await readRequest(tx.objectStore("driveTreeEvents").put(event));
     await readRequest(tx.objectStore("driveSettings").put({ id: "tree-pending", value: events.some((e) => !e.sent) }));
   }, false);
   notifyLibraryChanged();
+  if (recheck.length) {
+    const { queueDriveCacheCheck } = await import("./driveCacheChecks");
+    for (const row of recheck) queueDriveCacheCheck(row.entry.id, row);
+  }
+}
+
+// 本文の読込・版の再確認後、同じトランザクションで採用履歴を登録する。
+export async function recordVersionAdoption(tx: IDBTransaction, row: LibraryEntity, adoption: VersionAdoption, expectedHeads: string) {
+  const scope = await libraryScope(tx);
+  if (!scope || adoption.logicalId !== row.entry.id || adoptionSignature(row) !== expectedHeads) throw new Error("確認後に採用する版が変わりました。選び直してください。");
+  const id = crypto.randomUUID();
+  const checked = readVersionAdoption(adoption);
+  await queueEvent(tx, { schemaVersion: 1, kind: "overlay-library-event", id, deviceId: scope.deviceId, changes: [], adoption: checked });
+  return { ...row, adoptions: [{ id, adoption: checked }], sourceVersions: checked.observed };
 }
 
 // 利用者が選んだ配置で分岐を合流させる。旧履歴・PDF・各端末の編集版は削除しない。

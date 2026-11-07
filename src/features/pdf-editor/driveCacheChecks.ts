@@ -7,6 +7,8 @@ import { readRequest, withLocalTransaction } from "./localDatabase";
 import { driveNoteSummary, driveObject, readDriveManifest, DRIVE_NOTE_FIELDS } from "./googleDriveNoteData";
 import type { DriveNoteAccess } from "./googleDriveNotes";
 import { notifyDriveQueue } from "./driveQueueEvents";
+import { activeDriveSources } from "./driveVersionData";
+import { readDriveVersions } from "./driveVersionRemote";
 
 const RECHECK_MS = 30000;
 type Checks = { pending: Set<string>; checked: Map<string, { signature: string; at: number }> };
@@ -16,7 +18,7 @@ function state() {
   if (!value) { value = { pending: new Set(), checked: new Map() }; checks.set(indexedDB, value); }
   return value;
 }
-const signature = (row: LibraryEntity) => JSON.stringify([row.head, row.cachedSource, row.cachedVersion]);
+const signature = (row: LibraryEntity) => JSON.stringify([row.head, row.cachedSource, row.cachedVersion, row.adoptions, row.sources]);
 const listeners = new Set<(id: string, message: string) => void>();
 export function subscribeDriveCacheIssue(listener: (id: string, message: string) => void) {
   listeners.add(listener); return () => { listeners.delete(listener); };
@@ -61,15 +63,22 @@ export async function checkQueuedDriveCaches(access: DriveNoteAccess, scope: Lib
     if (!row || row.entry.deleted || !source || !row.cachedVersion || row.cacheWarning
       || binding && binding.generation > binding.uploadedGeneration) continue;
     try {
-      const metadata = driveObject(await access.json(`files/${source.noteId}`, { fields: DRIVE_NOTE_FIELDS }));
+      const versions = row.adoptions?.length ? await readDriveVersions(access, scope, row.sources) : undefined;
+      const metadata = versions?.find((r) => r.source.noteId === source.noteId)?.metadata
+        ?? driveObject(await access.json(`files/${source.noteId}`, { fields: DRIVE_NOTE_FIELDS }));
       if (!active()) return;
       const summary = driveNoteSummary(metadata, scope.rootId);
       if (summary.id !== source.noteId || summary.noteKey !== source.noteKey || summary.containerId !== source.containerId
         || summary.deviceId !== source.deviceId) throw new Error("Driveノートの取得先を確認できませんでした。");
       let checkedRow = row;
-      if (String(metadata.version) !== row.cachedVersion) {
-        const matches = await matchesUploadedContent(access, scope, source, binding, metadata);
-        const message = "Drive上でこのノートが更新されています。表示中の内容は保持しています。ノート一覧から開き直して確認してください。";
+      const candidates = activeDriveSources(row, versions?.map((r) => r.version));
+      const selectionChanged = !!row.adoptions?.length && (row.adoptions.length !== 1 || candidates.length !== 1 || candidates[0].noteId !== row.cachedSource);
+      if (String(metadata.version) !== row.cachedVersion || selectionChanged || versions) {
+        const matches = !selectionChanged && (String(metadata.version) === row.cachedVersion
+          || !!versions && !!row.cachedChecksum && metadata.sha256Checksum === row.cachedChecksum
+          || await matchesUploadedContent(access, scope, source, binding, metadata));
+        const message = selectionChanged ? "Driveに別の採用内容または新しい変更があります。表示中の内容は保持しています。ノート一覧から開き直してください。"
+          : "Drive上でこのノートが更新されています。表示中の内容は保持しています。ノート一覧から開き直して確認してください。";
         const changed = await withLocalTransaction(["driveEntities", "driveBindings", "driveSettings"], "readwrite", async (tx) => {
           const liveScope = await libraryScope(tx);
           const store = tx.objectStore("driveEntities");
@@ -78,7 +87,8 @@ export async function checkQueuedDriveCaches(access: DriveNoteAccess, scope: Lib
           if (!active() || liveScope?.accountId !== scope.accountId || liveScope.rootId !== scope.rootId
             || !live || live.entry.deleted || signature(live) !== signature(row)
             || driveBodyBindingSignature(liveBinding) !== driveBodyBindingSignature(binding)) return false;
-          checkedRow = matches ? { ...live, cachedVersion: String(metadata.version) } : { ...live, cacheWarning: message };
+          const updated = { ...live, ...(versions ? { sourceVersions: versions.map((r) => r.version) } : {}) };
+          checkedRow = matches ? { ...updated, cachedVersion: String(metadata.version) } : { ...updated, cacheWarning: message };
           await readRequest(store.put(checkedRow)); return true;
         }, false);
         if (changed && !matches) for (const listener of listeners) listener(id, message);

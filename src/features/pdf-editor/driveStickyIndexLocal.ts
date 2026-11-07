@@ -1,3 +1,4 @@
+import { activeDriveSources, adoptionSignature, type SourceVersion } from "./driveVersionData";
 import { readRequest, withLocalTransaction } from "./localDatabase";
 import { libraryScope } from "./driveLibraryLocal";
 import { notifyLibraryChanged } from "./driveLibraryEvents";
@@ -26,8 +27,9 @@ export async function captureStickyIndexes(scope: LibraryScope) {
   });
 }
 
-export async function applyStickyIndexes(scope: LibraryScope, snapshots: LibraryEntity[], results: Map<string, DriveStickyCache[]>, active: () => boolean = () => true) {
+export async function applyStickyIndexes(scope: LibraryScope, snapshots: LibraryEntity[], results: Map<string, DriveStickyCache[]>, active: () => boolean = () => true, versions = new Map<string, SourceVersion[]>()) {
   let changed = false;
+  const recheck: LibraryEntity[] = [];
   await withLocalTransaction(["driveSettings", "driveEntities", "driveBindings", "noteSummaries", "notes"], "readwrite", async (tx) => {
     const currentScope = await libraryScope(tx);
     if (!active() || currentScope?.accountId !== scope.accountId || currentScope.rootId !== scope.rootId) throw new Error("付箋索引の連携先が変わりました。");
@@ -36,19 +38,24 @@ export async function applyStickyIndexes(scope: LibraryScope, snapshots: Library
       const caches = results.get(before.id); if (!caches) continue;
       const store = tx.objectStore("driveEntities");
       const current = await readRequest<LibraryEntity | undefined>(store.get(before.id));
-      if (!current || current.entry.deleted || current.head !== before.head || JSON.stringify(current.sources) !== JSON.stringify(before.sources)) continue;
-      if (JSON.stringify(current.stickyIndexes) !== JSON.stringify(caches)) {
-        await readRequest(store.put({ ...current, stickyIndexes: caches }));
+      if (!current || current.entry.deleted || current.head !== before.head || JSON.stringify(current.sources) !== JSON.stringify(before.sources) || adoptionSignature(current) !== adoptionSignature(before) || JSON.stringify(current.sourceVersions) !== JSON.stringify(before.sourceVersions)) continue;
+      const sourceVersions = versions.get(before.id) ?? current.sourceVersions;
+      const versionsChanged = JSON.stringify(sourceVersions) !== JSON.stringify(current.sourceVersions);
+      const next = { ...current, stickyIndexes: caches, ...(sourceVersions ? { sourceVersions } : {}) };
+      if (JSON.stringify(current.stickyIndexes) !== JSON.stringify(caches) || versionsChanged) {
+        await readRequest(store.put(next));
       }
       const binding = await readRequest<DriveBinding | undefined>(tx.objectStore("driveBindings").get(current.entry.id));
+      if (versionsChanged) { changed = true; if (next.cachedSource) recheck.push(next); }
       // 端末の本文・確定済み付箋・未送信の編集を、遅れて届いた索引で置換しない。
       if (binding && binding.generation > binding.uploadedGeneration || await readRequest(tx.objectStore("notes").getKey(current.entry.id))) continue;
       const summaries = tx.objectStore("noteSummaries");
       const summary = await readRequest<SavedNoteSummary | undefined>(summaries.get(current.entry.id));
       if (!summary) continue;
-      const entries = [...current.sources].sort((a, b) => a.noteId.localeCompare(b.noteId)).flatMap((source) => (caches.find((c) => c.sourceId === source.noteId)?.entries ?? [])
+      const sources = activeDriveSources(next);
+      const entries = [...sources].sort((a, b) => a.noteId.localeCompare(b.noteId)).flatMap((source) => (caches.find((c) => c.sourceId === source.noteId)?.entries ?? [])
         .map((entry) => ({ ...entry, sourceId: source.noteId })));
-      const pending = caches.length !== current.sources.length;
+      const pending = sources.some((source) => !caches.some((cache) => cache.sourceId === source.noteId));
       if (JSON.stringify(summary.stickyNotes ?? []) !== JSON.stringify(entries) || !!summary.stickyNotesPending !== pending) {
         await readRequest(summaries.put({ ...summary, stickyNotes: entries, stickyNotesPending: pending }));
         changed = true;
@@ -56,4 +63,8 @@ export async function applyStickyIndexes(scope: LibraryScope, snapshots: Library
     }
   }, false);
   if (changed) notifyLibraryChanged();
+  if (recheck.length) {
+    const { queueDriveCacheCheck } = await import("./driveCacheChecks");
+    for (const row of recheck) queueDriveCacheCheck(row.entry.id, row);
+  }
 }

@@ -1,12 +1,14 @@
 import { readRequest, withLocalTransaction } from "./localDatabase";
 import { readNoteBackup, type NoteBackup } from "./noteBackupData";
 import type { LoadedNote } from "./types";
+import type { VersionBase } from "./driveVersionData";
 
 export type DriveBinding = {
   id: string; key: string; deviceId: string; accountId: string; rootId: string; enabled: boolean;
   generation: number; uploadedGeneration: number; dirtySince: number; changedAt: number;
   ids?: { container: string; pdf: string; note: string }; error?: string; retryAt?: number;
   parentId?: string;
+  basedOn?: VersionBase;
   pdfHash?: string;
   uploadedHash?: string;
   // Googleのsha256Checksumと比較する、送信済みJSON全バイトのハッシュ。旧データでは未設定。

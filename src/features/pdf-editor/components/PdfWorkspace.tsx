@@ -532,7 +532,7 @@ export function PdfWorkspace() {
       {versionChoice && <DriveVersionDialog choice={versionChoice.error} onClose={() => setVersionChoice(null)}
         onChoose={(sourceId) => {
           const selected = versionChoice; setVersionChoice(null);
-          void openPdf(async () => ({ ...await loadSavedNote(selected.error.noteId, { sourceId }), name: selected.error.title }), selected.destination);
+          void openPdf(async () => ({ ...await loadSavedNote(selected.error.noteId, { sourceId, acceptVersion: selected.error }), name: selected.error.title }), selected.destination);
         }} />}
       <NotebookDrawer open={sidebarVisible} busy={isOrganizing || isBackupWorking || !!pendingBackup}
         driveSaveRequest={driveSaveRequest}

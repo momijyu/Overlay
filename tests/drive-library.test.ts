@@ -25,9 +25,9 @@ import { stickyDestination } from "@/features/pdf-editor/stickyOutline";
 import { resolveNotePages } from "@/features/pdf-editor/notePages";
 
 const connection = { accountId: "accountA", rootId: "rootA" };
-const useDevice = (db = new IDBFactory()) => { Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: db }); return db; };
+const selectDevice = (db = new IDBFactory()) => { Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: db }); return db; };
 beforeEach(() => {
-  useDevice(); mock.method(globalThis, "fetch", () => { throw new Error("実Googleへは接続しない"); });
+  selectDevice(); mock.method(globalThis, "fetch", () => { throw new Error("実Googleへは接続しない"); });
 });
 afterEach(() => mock.restoreAll());
 async function pdf() {
@@ -94,6 +94,7 @@ function authorize(f: ReturnType<typeof remote>) {
   const session = getGoogleDriveSession();
   mock.method(session, "getConnection", () => ({ account: { id: connection.accountId, displayName: "", emailAddress: "test@example.com" }, root: { id: connection.rootId, name: "Overlay" } }));
   mock.method(session.drive, "autosaveAccess", async () => f.access);
+  mock.method(session.auth, "getAccessToken", () => "test-token");
 }
 const sticky = { id: "sticky-1", kind: "sticky" as const, text: "試験範囲\n本文は一覧へ含めない", x: .1, y: .2, width: .3, fontSize: 14 };
 const indexFiles = (f: ReturnType<typeof remote>) => [...f.files.values()].filter((r) => r.appProperties.overlayRole === "sticky-index");
@@ -217,7 +218,7 @@ test("階層変更と待ち行列の保存失敗では移動自体もロール�
 });
 
 test("別端末は一覧と階層だけ取得し、選択したノートだけを同じ論理IDで取得する", async () => {
-  const f = await fixture(); useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
+  const f = await fixture(); selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
   const downloads = f.calls.filter((c) => c.startsWith("download")).length;
   await sync(f); assert.deepEqual(await bodyCount(), [0, 0]);
   assert.equal((await loadNoteLibrary()).notes[0].id, f.note);
@@ -233,18 +234,18 @@ test("本文の初回送信待ちの他端末ノートを、ローカルの階�
   const note = await saveLocalNote({ file: await pdf(), noteId: null, strokesByPage: {} });
   await enableDriveLibrary(connection.accountId, connection.rootId);
   const f = remote(); await sync(f);
-  const deviceB = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const deviceB = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   assert.equal((await loadNoteLibrary()).notes.length, 0);
   await createNoteFolder("別端末のフォルダ", null); await sync(f);
   assert.equal((await readLibraryState()).entities.find((row) => row.entry.id === note)?.entry.deleted, undefined);
-  useDevice(deviceA); await sync(f); await send(f); await sync(f);
-  useDevice(deviceB); await sync(f);
+  selectDevice(deviceA); await sync(f); await send(f); await sync(f);
+  selectDevice(deviceB); await sync(f);
   assert.equal((await loadNoteLibrary()).notes[0].id, note);
 });
 
 test("別端末の編集は独立した保存先へ送り、同じ論理ノートの版として選択できる", async () => {
   const f = await fixture(); const previous = (await listDriveBindings())[0].ids;
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
   const opened = await loadLocalNote(f.note);
   await saveLocalNote({ file: opened.file, noteId: f.note, expectedRevision: opened.revision, strokesByPage: { 1: [{ width: 2, points: [{ x: .4, y: .4 }] }] } });
   await sync(f); await send(f); await sync(f);
@@ -256,17 +257,17 @@ test("別端末の編集は独立した保存先へ送り、同じ論理ノー�
 });
 
 test("同じ基点からの二端末の移動は競合として止め、時刻やパスで片方を上書きしない", async () => {
-  const f = await fixture(); const deviceB = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const f = await fixture(); const deviceB = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   await moveSavedNote(f.note, f.parent);
-  useDevice(f.db); await moveSavedNote(f.note, null); await sync(f);
-  useDevice(deviceB); const count = f.files.size;
+  selectDevice(f.db); await moveSavedNote(f.note, null); await sync(f);
+  selectDevice(deviceB); const count = f.files.size;
   await assert.rejects(sync(f), /競合/); assert.equal(f.files.size, count);
   assert.equal((await loadNoteLibrary()).notes[0].folderId, f.parent);
   assert.ok((await readLibraryState()).events.some((e) => !e.sent));
 });
 
 test("PDF未取得ノートの一括移動も本文を取得せず、同じIDの所属だけを更新する", async () => {
-  const f = await fixture(); useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const f = await fixture(); selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   await moveSavedItems([{ kind: "note", id: f.note }], null); await sync(f);
   assert.deepEqual(await bodyCount(), [0, 0]); assert.equal((await loadNoteLibrary()).notes[0].folderId, null);
 });
@@ -319,7 +320,7 @@ test("利用者の容量設定を整理処理へ反映し、上限を下げて�
 test("一覧から削除した項目は別端末でも復活せず、DriveのPDF自体は自動削除しない", async () => {
   const f = await fixture(); await deleteSavedNote(f.note); await deleteEmptyNoteFolder(f.folder); await sync(f);
   assert.ok([...f.files.values()].some((file) => file.mimeType === "application/pdf"));
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   assert.equal((await loadNoteLibrary()).notes.length, 0); assert.ok(!(await loadNoteLibrary()).folders.some((r) => r.id === f.folder));
 });
 
@@ -346,16 +347,16 @@ test("違うフォルダ同士の同時移動でできる循環や同名衝突�
 test("版選択は端末ごとに表示し、キャンセルを備える", () => {
   const choice = new DriveVersionRequired("id", "講義", [{ logicalId: "id", noteId: "note", noteKey: "branch", containerId: "container", deviceId: "deviceA", fileName: "a.pdf" }]);
   const html = renderToStaticMarkup(createElement(DriveVersionDialog, { choice, onChoose() {}, onClose() {} }));
-  assert.match(html, /開く版を選択/); assert.match(html, /端末 deviceA/); assert.match(html, /キャンセル/);
+  assert.match(html, /今後使う内容を選択/); assert.match(html, /別のブラウザ・端末の保存先/); assert.match(html, /Drive保存日時：不明/); assert.doesNotMatch(html, /deviceA|branch/); assert.match(html, /キャンセル/);
 });
 
 test("競合した移動は利用者が配置を選んで合流でき、同じ物理IDと両方の編集版を保持する", async () => {
   const { LibraryConflict } = await import("@/features/pdf-editor/driveLibraryData");
   const { resolveLibraryPlacement } = await import("@/features/pdf-editor/driveLibraryLocal");
-  const f = await fixture(); const deviceB = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const f = await fixture(); const deviceB = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   await moveSavedNote(f.note, f.parent);
-  useDevice(f.db); await moveSavedNote(f.note, null); await sync(f);
-  useDevice(deviceB);
+  selectDevice(f.db); await moveSavedNote(f.note, null); await sync(f);
+  selectDevice(deviceB);
   let conflict: InstanceType<typeof LibraryConflict> | null = null;
   try { await sync(f); } catch (error) { if (error instanceof LibraryConflict) conflict = error; else throw error; }
   assert.ok(conflict);
@@ -364,7 +365,7 @@ test("競合した移動は利用者が配置を選んで合流でき、同じ�
   await resolveLibraryPlacement(choice, chosen.head); await sync(f);
   assert.equal((await loadNoteLibrary()).notes[0].folderId, null);
   assert.ok((await readLibraryState()).events.every((r) => r.sent));
-  useDevice(f.db); await sync(f); assert.equal((await loadNoteLibrary()).notes[0].folderId, null);
+  selectDevice(f.db); await sync(f); assert.equal((await loadNoteLibrary()).notes[0].folderId, null);
 });
 
 test("PDFの追加先は選択したフォルダのIDで指定し、削除済みの追加先へは保存しない", async () => {
@@ -410,9 +411,9 @@ test("キャッシュの削除途中で失敗しても元PDF・本文・一覧�
 test("競合の確認後にさらに移動した場合は、古い選択で上書きしない", async () => {
   const { LibraryConflict } = await import("@/features/pdf-editor/driveLibraryData");
   const { resolveLibraryPlacement } = await import("@/features/pdf-editor/driveLibraryLocal");
-  const f = await fixture(); const deviceB = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const f = await fixture(); const deviceB = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   await moveSavedNote(f.note, f.parent);
-  useDevice(f.db); await moveSavedNote(f.note, null); await sync(f); useDevice(deviceB);
+  selectDevice(f.db); await moveSavedNote(f.note, null); await sync(f); selectDevice(deviceB);
   let conflict: InstanceType<typeof LibraryConflict> | null = null;
   try { await sync(f); } catch (error) { if (error instanceof LibraryConflict) conflict = error; else throw error; }
   assert.ok(conflict); await moveSavedNote(f.note, f.folder);
@@ -422,7 +423,7 @@ test("競合の確認後にさらに移動した場合は、古い選択で上�
 
 
 test("閲覧用キャッシュは他ノートの保存・復元や再接続では送信対象にせず、編集した1件だけ登録する", async () => {
-  const f = await fixture(); useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
+  const f = await fixture(); selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
   const opened = await loadLocalNote(f.note);
   const other = await saveLocalNote({ file: f.file, noteId: null, strokesByPage: {} });
   await enableDriveLibrary(connection.accountId, connection.rootId);
@@ -433,11 +434,11 @@ test("閲覧用キャッシュは他ノートの保存・復元や再接続で�
 
 test("複数版から選んで開いた内容をフォルダバックアップへ含め、未選択の版は勝手に選ばない", async () => {
   const f = await fixture(); const source = (await listDriveBindings())[0].ids!.note;
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
   const opened = await loadLocalNote(f.note);
   await saveLocalNote({ file: opened.file, noteId: f.note, expectedRevision: opened.revision, strokesByPage: { 1: [{ width: 2, points: [{ x: .4, y: .4 }] }] } });
   await sync(f); await send(f); await sync(f);
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   await assert.rejects(captureNoteBackup({ kind: "folder", id: f.parent }), DriveVersionRequired);
   await loadLocalNote(f.note, { sourceId: source });
   const backup = await captureNoteBackup({ kind: "folder", id: f.parent });
@@ -449,14 +450,14 @@ test("初回本文送信待ちの子を持つフォルダは単独・一括ど�
   const deviceA = indexedDB as IDBFactory; const folder = await createNoteFolder("講義", null);
   const note = await saveLocalNote({ file: await pdf(), noteId: null, initialFolderId: folder, strokesByPage: {} });
   await enableDriveLibrary(connection.accountId, connection.rootId); const f = remote(); await sync(f);
-  const deviceB = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const deviceB = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   assert.equal((await loadNoteLibrary()).notes.length, 0);
   const before = await readLibraryState();
   await assert.rejects(deleteEmptyNoteFolder(folder), /初回送信中/);
   await assert.rejects(deleteSavedItems([{ kind: "folder", id: folder }]), /初回送信中/);
   assert.deepEqual(await readLibraryState(), before); await sync(f);
-  useDevice(deviceA); await sync(f); await send(f); await sync(f);
-  useDevice(deviceB); await sync(f);
+  selectDevice(deviceA); await sync(f); await send(f); await sync(f);
+  selectDevice(deviceB); await sync(f);
   assert.equal((await loadNoteLibrary()).notes[0].id, note);
   assert.ok((await loadNoteLibrary()).folders.some((row) => row.id === folder));
 });
@@ -600,7 +601,7 @@ test("版差分の本文確認中に接続先が変わった場合は確認版�
 
 test("裏の更新確認で異なる版を見つけても本文・更新番号を変えず、次に開く時だけ新版を取得する", async () => {
   const f = await fixture(); const sourceId = (await listDriveBindings())[0].ids!.note;
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
   const original = await loadLocalNote(f.note); await loadLocalNote(f.note);
   const changed = await remoteEdit(f, sourceId);
   const notices: string[] = []; const unsubscribe = subscribeDriveCacheIssue((id, message) => { assert.equal(id, f.note); notices.push(message); });
@@ -704,7 +705,7 @@ test("別端末の付箋は索引だけで一覧へ載り、本文とPDFを取�
   assert.equal(data.entries[0].label, "試験範囲");
   for (const key of ["strokesByPage", "textsByPage", "pdf", "x", "y"]) assert.equal(key in data, false);
   assert.ok(!JSON.stringify(data).includes("本文は一覧へ含めない"));
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); f.calls.length = 0;
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); f.calls.length = 0;
   await sync(f);
   const summary = (await loadNoteLibrary()).notes[0];
   assert.deepEqual(summary.stickyNotes, [{ pageId: 1, pageNumber: 1, textId: sticky.id, label: "試験範囲", sourceId: source.noteId }]);
@@ -728,12 +729,12 @@ test("ペンのみの保存では付箋索引と階層履歴を増やさず、�
   await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 3, strokesByPage: {}, textsByPage: { 1: [{ ...sticky, text: "質問" }] } });
   await send(f); await sync(f);
   assert.equal(indexFiles(f)[0].id, index.id); assert.equal(JSON.parse(await indexFiles(f)[0].data!.text()).entries[0].label, "質問");
-  const other = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const other = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   assert.equal((await loadNoteLibrary()).notes[0].stickyNotes![0].label, "質問");
-  useDevice(f.db);
+  selectDevice(f.db);
   await saveLocalNote({ file: f.file, noteId: f.note, expectedRevision: 4, strokesByPage: {}, textsByPage: {} });
   await send(f); await sync(f);
-  useDevice(other); await sync(f);
+  selectDevice(other); await sync(f);
   assert.deepEqual((await loadNoteLibrary()).notes[0].stickyNotes, []);
   assert.equal((await loadNoteLibrary()).notes[0].stickyNotesPending, false); assert.deepEqual(await bodyCount(), [0, 0]);
 });
@@ -758,7 +759,7 @@ test("旧Driveノートは最初だけ編集JSONから付箋を抽出し、PDF�
   const source = (await readLibraryState()).entities.find((r) => r.entry.id === f.note)!.sources[0];
   const json = f.files.get(source.noteId)!;
   const pdfId = JSON.parse(await json.data!.text()).pdfId;
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); f.calls.length = 0; await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); f.calls.length = 0; await sync(f);
   assert.equal((await loadNoteLibrary()).notes[0].stickyNotes![0].label, "試験範囲");
   assert.ok(f.calls.includes(`download ${source.noteId}`)); assert.ok(!f.calls.includes(`download ${pdfId}`));
   assert.deepEqual(await bodyCount(), [0, 0]); f.calls.length = 0; await sync(f);
@@ -771,7 +772,7 @@ test("旧ノートが多数でも編集JSONの初回走査は1周期4件まで�
   await sync(f); await send(f); await sync(f);
   for (const index of indexFiles(f)) f.files.delete(index.id);
   const sourceIds = new Set((await readLibraryState()).entities.flatMap((r) => r.sources.map((s) => s.noteId)));
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); f.calls.length = 0; await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); f.calls.length = 0; await sync(f);
   assert.equal(f.calls.filter((s) => s.startsWith("download ") && sourceIds.has(s.slice(9))).length, 4);
   assert.equal((await loadNoteLibrary()).notes.filter((n) => n.stickyNotesPending).length, 1);
   f.calls.length = 0; await sync(f);
@@ -782,12 +783,12 @@ test("旧ノートが多数でも編集JSONの初回走査は1周期4件まで�
 
 test("同じ付箋IDを持つ端末別の版を混同せず、選択した版へ移動できる", async () => {
   const f = await fixtureWithSticky(); authorize(f);
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   const loaded = await loadLocalNote(f.note);
   await saveLocalNote({ file: loaded.file, noteId: f.note, expectedRevision: loaded.revision,
     strokesByPage: {}, textsByPage: { 1: [{ ...sticky, text: "別端末の質問" }] } });
   await send(f); await sync(f);
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   const entries = (await loadNoteLibrary()).notes[0].stickyNotes!;
   assert.equal(entries.length, 2); assert.equal(new Set(entries.map((e) => e.sourceId)).size, 2);
   assert.deepEqual(new Set(entries.map((e) => e.label)), new Set(["試験範囲", "別端末の質問"]));
@@ -798,7 +799,7 @@ test("同じ付箋IDを持つ端末別の版を混同せず、選択した版へ
 
 test("索引取得中のローカル編集は古いクラウド付箋で上書きしない", async () => {
   const f = await fixtureWithSticky(); authorize(f);
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   const loaded = await loadLocalNote(f.note);
   const entity = (await readLibraryState()).entities.find((r) => r.entry.id === f.note)!;
   // 同じ内容の索引に版だけ増えた状態。取得中にユーザーが入力する。
@@ -820,11 +821,11 @@ test("索引取得中のローカル編集は古いクラウド付箋で上書�
 
 test("削除済みノートの索引がDriveに残っていても一覧へ復活しない", async () => {
   const f = await fixtureWithSticky();
-  const other = useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const other = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   assert.equal((await loadNoteLibrary()).notes[0].stickyNotes!.length, 1);
-  useDevice(f.db); await deleteSavedNote(f.note); await sync(f);
+  selectDevice(f.db); await deleteSavedNote(f.note); await sync(f);
   assert.equal(indexFiles(f).length, 1);
-  useDevice(other); await sync(f); assert.deepEqual((await loadNoteLibrary()).notes, []);
+  selectDevice(other); await sync(f); assert.deepEqual((await loadNoteLibrary()).notes, []);
 });
 
 test("索引の破損・参照違い・所有者・保存場所・サイズ異常では内容を採用しない", async (t) => {
@@ -839,8 +840,8 @@ test("索引の破損・参照違い・所有者・保存場所・サイズ異�
     },
   };
   for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async () => {
-    useDevice(); const f = await fixtureWithSticky(); await mutate(f);
-    useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
+    selectDevice(); const f = await fixtureWithSticky(); await mutate(f);
+    selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
     await assert.rejects(sync(f)); assert.deepEqual(await bodyCount(), [0, 0]);
     const summary = (await loadNoteLibrary()).notes[0];
     assert.equal(summary.stickyNotes, undefined); assert.equal(summary.stickyNotesPending, true);
@@ -849,7 +850,7 @@ test("索引の破損・参照違い・所有者・保存場所・サイズ異�
 
 test("重複索引・世代の巻き戻しを拒否し、取得済み付箋を維持する", async () => {
   const f = await fixtureWithSticky(); const index = indexFiles(f)[0];
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   const scope = (await readLibraryState()).scope!;
   f.files.set("duplicate", { ...index, id: "duplicate" });
   await assert.rejects(refreshDriveStickyIndexes(f.access, scope), /重複/); f.files.delete("duplicate");
@@ -902,7 +903,7 @@ test("PDF取得中の付箋索引だけの更新は本文競合と誤認せず�
 
 test("索引取得中に連携先が変わった場合は一覧やキャッシュへ結果を採用しない", async () => {
   const f = await fixtureWithSticky();
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
   // 一覧だけ先に適用する。
   await syncDriveLibrary(f.access, (await readLibraryState()).scope!, { stickyIndexes: false });
   const scope = (await readLibraryState()).scope!;
@@ -922,12 +923,12 @@ test("索引取得中に連携先が変わった場合は一覧やキャッシ�
 test("本文キャッシュ整理後も複数版の一覧を自分の索引へ混ぜて再送しない", async () => {
   const f = await fixtureWithSticky(); authorize(f);
   const originalIndex = indexFiles(f)[0];
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
   const loaded = await loadLocalNote(f.note);
   await saveLocalNote({ file: loaded.file, noteId: f.note, expectedRevision: loaded.revision, strokesByPage: {},
     textsByPage: { 1: [{ ...sticky, text: "他端末の付箋" }] } });
   await send(f); await sync(f);
-  useDevice(f.db);
+  selectDevice(f.db);
   await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() });
   await sync(f); await sync(f);
   assert.equal((await loadNoteLibrary()).notes[0].stickyNotes!.length, 2);
@@ -939,7 +940,7 @@ test("本文キャッシュ整理後も複数版の一覧を自分の索引へ�
 
 test("認可が取得途中で失効した場合は、同じ連携先でも古い索引を採用しない", async () => {
   const f = await fixtureWithSticky();
-  useDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId);
   await syncDriveLibrary(f.access, (await readLibraryState()).scope!, { stickyIndexes: false });
   const download = f.access.download; let active = true;
   f.access.download = async (...args) => { const value = await download(...args); active = false; return value; };
@@ -963,4 +964,169 @@ test("索引機能を入れる前のタイトルだけの一覧も、付箋未�
   assert.equal((await loadNoteLibrary()).notes[0].stickyNotesPending, true);
   await refreshDriveStickyIndexes(f.access, (await readLibraryState()).scope!);
   assert.equal((await loadNoteLibrary()).notes[0].stickyNotes![0].label, "試験範囲");
+});
+
+async function twoVersionFixture() {
+  const f = await fixture(); const original = (await listDriveBindings())[0].ids!.note;
+  const dbB = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
+  const opened = await loadLocalNote(f.note);
+  await saveLocalNote({ file: opened.file, noteId: f.note, expectedRevision: opened.revision,
+    strokesByPage: { 1: [{ width: 2, points: [{ x: .4, y: .4 }] }] } });
+  await send(f); await sync(f);
+  const other = (await listDriveBindings())[0].ids!.note;
+  return { ...f, dbB, original, other };
+}
+async function chooseVersion(id: string) {
+  try { await loadLocalNote(id); } catch (error) { if (error instanceof DriveVersionRequired) return error; throw error; }
+  throw new Error("版の確認が必要なはず");
+}
+
+test("採用した版をDriveへ公開し、再読込・他端末でも再選択せず使う。旧版は削除しない", async () => {
+  const f = await twoVersionFixture();
+  const choice = await chooseVersion(f.note); const count = f.files.size;
+  await loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice });
+  const events = (await readLibraryState()).events.filter((e) => e.event.adoption);
+  assert.equal(events.length, 1); assert.equal(events[0].sent, false);
+  assert.deepEqual((await loadLocalNote(f.note)).strokesByPage, {});
+  await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  assert.deepEqual((await loadLocalNote(f.note)).strokesByPage, {});
+  assert.ok(f.files.has(f.other) && f.files.has(f.original)); assert.ok(f.files.size > count);
+  assert.equal((await readLibraryState()).entities.find((e) => e.entry.id === f.note)!.adoptions!.length, 1);
+});
+
+test("採用済みの内容を別端末で編集した続きは新しい版を自動で使い、往復しても確認を繰り返さない", async () => {
+  const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
+  const selected = await loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }); await sync(f);
+  await saveLocalNote({ file: selected.file, noteId: f.note, expectedRevision: selected.revision,
+    strokesByPage: { 1: [{ width: 3, points: [{ x: .5, y: .5 }] }] } });
+  const binding = (await listDriveBindings())[0]; assert.equal(binding.basedOn?.sourceId, f.original);
+  assert.ok(binding.basedOn?.checksum); await send(f); await sync(f);
+  const continued = await loadLocalNote(f.note); assert.equal(continued.strokesByPage[1][0].width, 3);
+  selectDevice(f.db); await sync(f); const fromB = await loadLocalNote(f.note);
+  assert.equal(fromB.strokesByPage[1][0].width, 3);
+  await saveLocalNote({ file: fromB.file, noteId: f.note, expectedRevision: fromB.revision,
+    strokesByPage: { 1: [{ width: 4, points: [{ x: .6, y: .6 }] }] } });
+  await send(f); await sync(f);
+  selectDevice(f.dbB); await sync(f); assert.equal((await loadLocalNote(f.note)).strokesByPage[1][0].width, 4);
+});
+
+test("採用しなかった版で後から編集された内容は隠さず、再度選べる", async () => {
+  const f = await twoVersionFixture(); selectDevice(f.db); await sync(f);
+  const choice = await chooseVersion(f.note);
+  await loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }); await sync(f);
+  // オフラインで古い版を編集した端末を再現。確定編集は勝手に置換しない。
+  selectDevice(f.dbB);
+  const local = await loadLocalNote(f.note, { sourceId: f.other });
+  await saveLocalNote({ file: local.file, noteId: f.note, expectedRevision: local.revision,
+    strokesByPage: { 1: [{ width: 5, points: [{ x: .7, y: .7 }] }] } });
+  await send(f); await sync(f);
+  const next = await chooseVersion(f.note); assert.equal(next.sources.length, 2);
+  assert.ok(next.sources.some((s) => s.noteId === f.other));
+});
+
+test("選択後の更新や未送信の編集がある場合は採用せず、本文と旧履歴を保持する", async () => {
+  const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
+  const changed = f.files.get(f.original)!;
+  f.files.set(f.original, { ...changed, sha256Checksum: "f".repeat(64), version: "2" });
+  await assert.rejects(loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }), DriveVersionRequired);
+  assert.equal((await readLibraryState()).events.filter((e) => e.event.adoption).length, 0);
+  f.files.set(f.original, changed);
+  const current = await loadLocalNote(f.note, { sourceId: f.other });
+  await saveLocalNote({ file: current.file, noteId: f.note, expectedRevision: current.revision, strokesByPage: {} });
+  await assert.rejects(loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }), /未送信/);
+  assert.equal((await readLibraryState()).events.filter((e) => e.event.adoption).length, 0);
+});
+
+test("異なる端末の同時採用は時刻で上書きせず、再選択で両方の採用履歴を合流する", async () => {
+  const f = await twoVersionFixture(); const dbC = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const choiceC = await chooseVersion(f.note);
+  selectDevice(f.db); await sync(f); const choiceA = await chooseVersion(f.note);
+  await loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choiceA }); await sync(f);
+  selectDevice(dbC); await loadLocalNote(f.note, { sourceId: f.other, acceptVersion: choiceC }); await sync(f);
+  const conflict = await chooseVersion(f.note); assert.equal(conflict.heads.length, 2);
+  await loadLocalNote(f.note, { sourceId: f.original, acceptVersion: conflict }); await sync(f);
+  selectDevice(f.db); await sync(f); assert.deepEqual((await loadLocalNote(f.note)).strokesByPage, {});
+  assert.equal((await readLibraryState()).entities.find((e) => e.entry.id === f.note)!.adoptions!.length, 1);
+});
+
+test("採用履歴の送信応答が失われても同じIDで再試行し、二重採用を作らない", async () => {
+  const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
+  await loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice });
+  f.failAfterSave("tree-event"); await assert.rejects(sync(f));
+  const count = [...f.files.values()].filter((r) => r.appProperties.overlayRole === "tree-event").length;
+  await sync(f); assert.equal([...f.files.values()].filter((r) => r.appProperties.overlayRole === "tree-event").length, count);
+  assert.deepEqual((await loadLocalNote(f.note)).strokesByPage, {});
+});
+
+test("採用中にPDF取得が失敗した場合は採用履歴も本文も変更しない", async () => {
+  const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
+  const previous = await bodyCount(); const download = f.access.download.bind(f.access);
+  f.access.download = async (...args) => { if (f.files.get(args[0])?.mimeType === "application/pdf") throw new DriveHttpError(0, "offline"); return download(...args); };
+  await assert.rejects(loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }));
+  assert.deepEqual(await bodyCount(), previous); assert.equal((await readLibraryState()).events.filter((e) => e.event.adoption).length, 0);
+});
+
+test("採用済みキャッシュは通信を待たず表示し、背景で旧版の新しい編集を通知する", async () => {
+  const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
+  await loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }); await sync(f);
+  const originalJson = f.access.json.bind(f.access);
+  f.access.json = async () => { throw new Error("通信を待たない"); };
+  assert.deepEqual((await loadLocalNote(f.note)).strokesByPage, {});
+  f.access.json = originalJson;
+  const old = f.files.get(f.other)!; f.files.set(old.id, { ...old, version: "2", sha256Checksum: "d".repeat(64) });
+  const messages: string[] = []; const unsubscribe = subscribeDriveCacheIssue((_id, message) => { messages.push(message); });
+  try {
+    await checkQueuedDriveCaches(f.access, (await readLibraryState()).scope!, () => true);
+    assert.ok(messages.some((s) => s.includes("新しい変更")));
+    await assert.rejects(loadLocalNote(f.note), DriveVersionRequired);
+  } finally { unsubscribe(); }
+});
+
+test("同じ採用済み内容から二端末が並行編集した場合は両方を残し、勝手に片方を採用しない", async () => {
+  const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
+  const openedB = await loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }); await sync(f);
+  const dbC = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const openedC = await loadLocalNote(f.note);
+  selectDevice(f.dbB); await saveLocalNote({ file: openedB.file, noteId: f.note, expectedRevision: openedB.revision, strokesByPage: { 1: [{ width: 3, points: [{ x: .2, y: .3 }] }] } });
+  await send(f); await sync(f);
+  selectDevice(dbC); await saveLocalNote({ file: openedC.file, noteId: f.note, expectedRevision: openedC.revision, strokesByPage: { 1: [{ width: 4, points: [{ x: .3, y: .3 }] }] } });
+  await send(f); await sync(f);
+  const conflict = await chooseVersion(f.note); assert.equal(conflict.sources.length, 2);
+  assert.ok(conflict.sources.every((s) => s.noteId !== f.original && s.noteId !== f.other));
+});
+
+test("採用履歴の端末書込が失敗した場合は、取得した本文も含めて全件取り消す", async () => {
+  const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
+  const old = await loadLocalNote(f.note, { sourceId: f.other });
+  const add = IDBObjectStore.prototype.add;
+  mock.method(IDBObjectStore.prototype, "add", function (this: IDBObjectStore, ...args: Parameters<typeof add>) {
+    if (this.name === "driveTreeEvents") throw new Error("保存失敗");
+    return add.apply(this, args);
+  });
+  await assert.rejects(loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }), /保存失敗/);
+  assert.equal((await readLibraryState()).events.filter((e) => e.event.adoption).length, 0);
+  assert.deepEqual((await loadLocalNote(f.note, { sourceId: f.other })).strokesByPage, old.strokesByPage);
+});
+
+test("採用途中に認可が変わった場合は、同じアカウントでも結果を採用しない", async () => {
+  const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
+  const download = f.access.download.bind(f.access);
+  f.access.download = async (...args) => { const blob = await download(...args); if (f.files.get(args[0])?.mimeType === "application/pdf") mock.method(getGoogleDriveSession().auth, "getAccessToken", () => "new-token"); return blob; };
+  await assert.rejects(loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }), /連携先/);
+  assert.equal((await readLibraryState()).events.filter((e) => e.event.adoption).length, 0);
+});
+
+test("採用後のクラウド付箋一覧には使う版だけを載せ、旧版の付箋を混ぜない", async () => {
+  const f = await fixtureWithSticky(); const original = (await listDriveBindings())[0].ids!.note;
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f); authorize(f);
+  const opened = await loadLocalNote(f.note);
+  await saveLocalNote({ file: opened.file, noteId: f.note, expectedRevision: opened.revision, strokesByPage: {}, textsByPage: { 1: [{ ...sticky, text: "採用する付箋" }] } });
+  await send(f); await sync(f); const other = (await listDriveBindings())[0].ids!.note;
+  const choice = await chooseVersion(f.note);
+  await loadLocalNote(f.note, { sourceId: other, acceptVersion: choice }); await sync(f);
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  const summary = (await loadNoteLibrary()).notes.find((n) => n.id === f.note)!;
+  assert.deepEqual(summary.stickyNotes?.map((s) => s.label), ["採用する付箋"]);
+  assert.equal(summary.stickyNotes?.[0].sourceId, other); assert.ok(f.files.has(original));
 });

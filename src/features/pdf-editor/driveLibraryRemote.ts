@@ -191,6 +191,14 @@ function publicationOrder(events: LibraryEventRow[]) {
         const root = roots.get(`folder:${change.entry.parentId}`); if (root && root !== row.id) dependencies.push(root);
       }
       if (row.event.source) { const root = roots.get(`note:${row.event.source.logicalId}`); if (root) dependencies.push(root); }
+      if (row.event.adoption) {
+        dependencies.push(...row.event.adoption.before);
+        for (const version of row.event.adoption.observed) {
+          const source = events.find((e) => e.event.source?.noteId === version.sourceId);
+          if (source) dependencies.push(source.id);
+        }
+      }
+      if (row.event.source?.basedOn) dependencies.push(...row.event.source.basedOn.heads);
       return dependencies.every((id) => completed.has(id));
     });
     if (index < 0) throw new Error("Drive階層の公開順序が不正です。");

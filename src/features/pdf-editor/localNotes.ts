@@ -229,8 +229,8 @@ export async function saveLocalNote(input: {
   }, false);
 }
 
-export async function loadLocalNote(noteId: string, options: { sourceId?: string; refresh?: boolean } = {}): Promise<LoadedNote> {
-  await (await import("./driveLibraryCache")).hydrateDriveNote(noteId, options.sourceId, false, !options.refresh);
+export async function loadLocalNote(noteId: string, options: { sourceId?: string; refresh?: boolean; acceptVersion?: import("./driveLibraryCache").DriveVersionRequired } = {}): Promise<LoadedNote> {
+  await (await import("./driveLibraryCache")).hydrateDriveNote(noteId, options.sourceId, false, !options.refresh, options.acceptVersion);
   return withLocalTransaction(["notes", "pdfs"], "readonly", async (transaction) => {
     const [note, pdf] = await Promise.all([
       readRequest<LocalNote | undefined>(transaction.objectStore("notes").get(noteId)),

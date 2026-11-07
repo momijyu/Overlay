@@ -6,6 +6,7 @@ import * as localNotes from "@/features/pdf-editor/localNotes";
 import type { HeadingsByPage, NotePage, PenStroke, SavedNoteSummary, TextNotesByPage } from "@/features/pdf-editor/types";
 import type { NoteDragItem } from "@/features/pdf-editor/noteDrag";
 import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
+import { DriveVersionRequired } from "@/features/pdf-editor/driveLibraryCache";
 
 // Hooksの保持だけを代用し、Workspace内のイベント・状態・保存の接続を検証する。
 // DOM・実際のReact再描画・ブラウザ操作を再現するテストではない。
@@ -18,6 +19,7 @@ let stateCursor = 0;
 let refCursor = 0;
 let deleteFails = false;
 let openFails = false;
+let versionNeeded: DriveVersionRequired | null = null;
 let pdfFails = false;
 const documentOptions: { standardFontDataUrl?: string }[] = [];
 let persistFails = false;
@@ -31,7 +33,7 @@ const deletedItems: NoteDragItem[][] = [];
 let openedHeadings: HeadingsByPage | undefined;
 let openedPages: NotePage[] | undefined;
 let openedTexts: TextNotesByPage | undefined;
-const openedNotes: { id: string; sourceId?: string }[] = [];
+const openedNotes: { id: string; sourceId?: string; acceptVersion?: DriveVersionRequired }[] = [];
 const openedStrokes = { 2: [{ width: 5, points: [{ x: 0.2, y: 0.3 }] }] };
 const backups: NoteBackup[] = [];
 const capturedSelections: NoteDragItem[][] = [];
@@ -88,9 +90,10 @@ mock.module("@/features/pdf-editor/localNotes", { exports: {
     if (deleteFails) throw new Error("一括削除失敗");
     deletedItems.push(items);
   },
-  loadLocalNote: async (id: string, options?: { sourceId?: string }) => {
+  loadLocalNote: async (id: string, options?: { sourceId?: string; acceptVersion?: DriveVersionRequired }) => {
     openedNotes.push({ id, ...options });
     if (openFails) throw new Error("読込失敗");
+    if (versionNeeded && !options?.acceptVersion) throw versionNeeded;
     return { file, id: "other", strokesByPage: openedStrokes, headingsByPage: openedHeadings, textsByPage: openedTexts, pages: openedPages, revision: 1 };
   },
 } });
@@ -122,10 +125,11 @@ const { PenWidthControl } = await import("@/features/pdf-editor/components/PenWi
 const { EditorIcon } = await import("@/features/pdf-editor/components/EditorIcon");
 const { AppHeader } = await import("@/components/layout/AppHeader");
 const { NotebookRestoreDialog } = await import("@/features/pdf-editor/components/NotebookRestoreDialog");
+const { DriveVersionDialog } = await import("@/features/pdf-editor/components/DriveVersionDialog");
 
 beforeEach(() => { openedHeadings = undefined; pageFails = false; openedPages = undefined; exportedPages.length = 0; states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; deletedItems.length = 0; openedTexts = undefined; });
 beforeEach(() => { openedNotes.length = 0; backups.length = 0; capturedSelections.length = 0; restoreCalls = 0; restoreFails = false; decodeFails = false;
-  restoreSkipped = false; restoreOptions.length = 0; capturedNotes.length = 0; captureFails = false; });
+  restoreSkipped = false; restoreOptions.length = 0; capturedNotes.length = 0; captureFails = false; versionNeeded = null; });
 
 function render() {
   stateCursor = 0;
@@ -800,6 +804,28 @@ async function openOther() {
   assert.equal(refs[1].current, false);
   assert.equal(props(NotebookSidebar).currentNoteId, "other");
 }
+
+test("版選択のキャンセルは現在の内容を保ち、採用時だけ確認情報を読み込みへ渡す", async () => {
+  setup();
+  const before = props(PdfPage).strokes;
+  versionNeeded = new DriveVersionRequired("other", "授業メモ", []);
+  const requestChoice = async () => {
+    props(NotebookSidebar).onOpen({ id: "other", title: "授業メモ" } as SavedNoteSummary);
+    for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+    assert.equal(props(DriveVersionDialog).choice, versionNeeded);
+  };
+  await requestChoice();
+  props(DriveVersionDialog).onClose();
+  assert.equal(openedNotes.length, 1);
+  assert.deepEqual(props(PdfPage).strokes, before);
+  assert.equal(find(render(), (element) => element.type === DriveVersionDialog), undefined);
+  await requestChoice();
+  props(DriveVersionDialog).onChoose("selected-source");
+  for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
+  assert.deepEqual(openedNotes.at(-1), { id: "other", sourceId: "selected-source", acceptVersion: versionNeeded });
+  assert.equal(props(NotebookSidebar).currentNoteId, "other");
+  assert.equal(find(render(), (element) => element.type === DriveVersionDialog), undefined);
+});
 
 test("画面のテキストと付箋の更新が保存・Undo・Redo・PDF出力へ接続される", async () => {
   setup();

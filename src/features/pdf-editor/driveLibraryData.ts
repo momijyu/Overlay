@@ -1,14 +1,15 @@
 import { driveId, driveObject } from "./googleDriveNoteData";
 import type { DriveStickyCache } from "./driveStickyIndexData";
+import { mergeVersionAdoptions, readVersionAdoption, readVersionBase, type AdoptionHead, type SourceVersion, type VersionAdoption, type VersionBase } from "./driveVersionData";
 
 export type LibraryScope = { accountId: string; rootId: string; deviceId: string; historyId?: string; historyCreated?: boolean };
 export type LibraryEntry = { id: string; kind: "folder" | "note"; name: string; parentId: string | null; remoteId?: string; deleted?: boolean };
-export type LibrarySource = { logicalId: string; noteId: string; noteKey: string; containerId: string; deviceId: string; fileName: string; updatedAt?: string; pdfHash?: string };
+export type LibrarySource = { logicalId: string; noteId: string; noteKey: string; containerId: string; deviceId: string; fileName: string; updatedAt?: string; pdfHash?: string; basedOn?: VersionBase };
 export type LibraryEvent = { schemaVersion: 1; kind: "overlay-library-event"; id: string; deviceId: string;
-  changes: { before: string | string[] | null; entry: LibraryEntry }[]; source?: LibrarySource };
+  changes: { before: string | string[] | null; entry: LibraryEntry }[]; source?: LibrarySource; adoption?: VersionAdoption };
 export type LibraryEntity = { id: string; entry: LibraryEntry; head: string; sources: LibrarySource[];
-  stickyIndexes?: DriveStickyCache[];
-  listed?: boolean; cachedSource?: string; cachedVersion?: string; cachedBytes?: number; lastUsed?: number; cacheWarning?: string };
+  stickyIndexes?: DriveStickyCache[]; adoptions?: AdoptionHead[]; sourceVersions?: SourceVersion[];
+  listed?: boolean; cachedSource?: string; cachedVersion?: string; cachedChecksum?: string; cachedBytes?: number; lastUsed?: number; cacheWarning?: string };
 export type LibraryEventRow = { id: string; event: LibraryEvent; fileId?: string; hash?: string; sent: boolean };
 export type LibraryConflictItem = { key: string; versions: { head: string; deviceId: string; entry: LibraryEntry }[] };
 export class LibraryConflict extends Error {
@@ -46,10 +47,12 @@ export function readLibraryEvent(input: unknown): LibraryEvent {
     const s = driveObject(data.source);
     if (s.pdfHash !== undefined && (typeof s.pdfHash !== "string" || !/^[a-f0-9]{64}$/.test(s.pdfHash))) throw new Error("DriveノートのPDF検証情報が不正です。");
     source = { logicalId: driveId(s.logicalId), noteId: driveId(s.noteId), noteKey: driveId(s.noteKey), containerId: driveId(s.containerId), deviceId: driveId(s.deviceId), fileName: name(s.fileName, 255),
-      ...(typeof s.pdfHash === "string" && /^[a-f0-9]{64}$/.test(s.pdfHash) ? { pdfHash: s.pdfHash } : {}) };
+      ...(typeof s.pdfHash === "string" && /^[a-f0-9]{64}$/.test(s.pdfHash) ? { pdfHash: s.pdfHash } : {}),
+      ...(s.basedOn !== undefined ? { basedOn: readVersionBase(s.basedOn) } : {}) };
   }
-  if (!changes.length && !source) throw new Error("Drive階層の変更が空です。");
-  return { schemaVersion: 1, kind: "overlay-library-event", id: driveId(data.id), deviceId: driveId(data.deviceId), changes, ...(source ? { source } : {}) };
+  const adoption = data.adoption === undefined ? undefined : readVersionAdoption(data.adoption);
+  if (!changes.length && !source && !adoption) throw new Error("Drive階層の変更が空です。");
+  return { schemaVersion: 1, kind: "overlay-library-event", id: driveId(data.id), deviceId: driveId(data.deviceId), changes, ...(source ? { source } : {}), ...(adoption ? { adoption } : {}) };
 }
 
 // 移動履歴は不変のイベントとして残す。同じ基点からの二重変更を時刻で上書きしない。
@@ -109,7 +112,9 @@ export function mergeLibraryEvents(events: LibraryEvent[]): Map<string, LibraryE
     if (!same) entry.sources.push(event.source);
   }
   const destinations = new Set<string>(); const physicalIds = new Set<string>();
+  for (const event of unique.values()) if (event.adoption && !result.has(`note:${event.adoption.logicalId}`)) throw new Error("採用履歴に対応するノートがありません。");
   for (const row of result.values()) {
+    mergeVersionAdoptions(row, [...unique.values()]);
     if (row.entry.deleted) continue;
     if (physicalIds.has(row.entry.remoteId!)) throw new Error("Drive階層の保存先IDが重複しています。");
     physicalIds.add(row.entry.remoteId!);
