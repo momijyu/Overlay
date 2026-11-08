@@ -3,6 +3,7 @@ import test, { beforeEach, mock } from "node:test";
 import * as React from "react";
 import type { NotePage } from "@/features/pdf-editor/types";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
+import { speedMeasurements, type SpeedSpan } from "@/features/pdf-editor/speedMeasurements";
 
 // DOM配置・PDF.js自体は代用し、倍率変更と描画の非同期接続を検証する。
 let states: { value: unknown }[];
@@ -37,6 +38,7 @@ const { PenLayer } = await import("@/features/pdf-editor/components/PenLayer");
 const { TextLayer } = await import("@/features/pdf-editor/components/TextLayer");
 
 beforeEach(() => {
+  speedMeasurements.clear();
   states = []; refs = []; effects = []; pendingLayouts = []; pendingEffects = [];
   stateIndex = 0; refIndex = 0; effectIndex = 0;
   Object.assign(globalThis, {
@@ -46,7 +48,7 @@ beforeEach(() => {
   });
 });
 
-function fixture(notePage?: NotePage) {
+function fixture(notePage?: NotePage, openTiming?: SpeedSpan) {
   const requestedPages: number[] = [];
   const fills: unknown[] = [];
   const draws: unknown[] = [];
@@ -77,7 +79,7 @@ function fixture(notePage?: NotePage) {
   const textControlsContainer = {} as HTMLDivElement;
   function render() {
     stateIndex = 0; refIndex = 0; effectIndex = 0;
-    const element = PdfPage({ document, pageNumber: 1, notePage, strokes: [], texts: [], editVersion: 0,
+    const element = PdfPage({ document, pageNumber: 1, notePage, openTiming, strokes: [], texts: [], editVersion: 0,
       penWidth: 2.5, penColor: "#000000", tool: "text", eraserWidth: 16,
       zoom, disabled, textControlsContainer, onZoomChange: changeZoom, onStrokeComplete: () => {}, onStrokesChange: () => {}, onTextsChange: () => {},
     });
@@ -116,6 +118,26 @@ function childElement<T>(element: React.ReactElement, type: (props: T) => React.
 function childProps<T>(element: React.ReactElement, type: (props: T) => React.ReactNode): T {
   return childElement(element, type).props;
 }
+
+test("初回読込はPDF描画タスクだけでなく表示Canvasへの反映完了まで計測する", async () => {
+  speedMeasurements.start(); const open = speedMeasurements.begin("note.open"); const f = fixture(undefined, open);
+  try {
+    f.render(); await flush();
+    assert.equal(speedMeasurements.snapshot().records.length, 0); assert.equal(speedMeasurements.snapshot().active, 2);
+    f.tasks[0].resolve(); await flush();
+    const rows = speedMeasurements.snapshot().records;
+    assert.equal(f.draws.length, 1); assert.deepEqual(rows.map((row) => row.phase), ["pdf.render", "note.open"]);
+    assert.equal(rows[0].parentId, rows[1].id); assert.equal(rows[0].outcome, "ok");
+  } finally { f.cleanup(); speedMeasurements.clear(); }
+});
+
+test("表示失敗は成功時間として扱わず、ページ操作をエラー表示へ返す", async () => {
+  speedMeasurements.start(); const open = speedMeasurements.begin("note.open"); const f = fixture(undefined, open);
+  try {
+    f.render(); await flush(); f.tasks[0].reject(); await flush();
+    assert.equal(f.draws.length, 0); assert.deepEqual(speedMeasurements.snapshot().records.map((row) => row.outcome), ["error", "error"]);
+  } finally { f.cleanup(); speedMeasurements.clear(); }
+});
 
 test("倍率変更中も表示キャンバスを消さず、PDF・線・文章に同じ表示倍率を使う", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });

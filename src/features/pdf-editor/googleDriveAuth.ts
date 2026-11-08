@@ -23,10 +23,13 @@ export function createGoogleDriveAuth(options: {
   let generation = 0;
   let preparation: Promise<void> | null = null;
   let active: { cancel: () => void } | null = null;
+  const listeners = new Set<() => void>();
 
   function setState(next: AuthStatus, message: string | null = null) {
+    const changed = status !== next || error !== message;
     status = next;
     error = message;
+    if (changed) for (const listener of listeners) listener();
   }
 
   function getState(): GoogleDriveAuthState {
@@ -147,5 +150,6 @@ export function createGoogleDriveAuth(options: {
     // ローカルの認可情報だけを破棄する。ノート削除やGoogle全権限のrevokeは行わない。
   }
 
-  return { prepare, connect, getState, getAccessToken, invalidateAccessToken, disconnect };
+  return { prepare, connect, getState, getAccessToken, invalidateAccessToken, disconnect,
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }

@@ -6,28 +6,31 @@ import { getGoogleDriveSession } from "../googleDriveSession";
 import type { NoteBackup } from "../noteBackupData";
 import type { DriveSaveSource } from "../googleDriveBatch";
 import { GoogleDriveNotes } from "./GoogleDriveNotes";
+import { GoogleDriveBackupRestore } from "./GoogleDriveBackupRestore";
+import { SpeedMeasurementPanel } from "./SpeedMeasurementPanel";
 
 type Stage = "preparing" | "ready" | "checking" | "creating" | "checked" | "error";
 type SetupState = { stage: Stage; account: GoogleDriveAccount | null; root: GoogleDriveRoot | null; error: string | null };
 type Runtime = ReturnType<typeof getGoogleDriveSession> & { busy: boolean };
 export type DriveSaveRequest = { id: string; backup: NoteBackup } | { id: string; sources: DriveSaveSource[] };
-type NoteActions = { captureNote?: () => NoteBackup; onImportNote?: (backup: NoteBackup) => void;
+type NoteActions = { captureNote?: () => NoteBackup;
   saveRequest?: DriveSaveRequest | null; onSaveRequestClose?: () => void };
 
-export function GoogleDriveSetup({ disabled = false, captureNote, onImportNote, saveRequest, onSaveRequestClose }: { disabled?: boolean } & NoteActions) {
+export function GoogleDriveSetup({ disabled = false, captureNote, saveRequest, onSaveRequestClose }: { disabled?: boolean } & NoteActions) {
   const [open, setOpen] = useState(false);
   const [closedRequest, setClosedRequest] = useState<string | null>(null);
   const activeRequest = saveRequest && saveRequest.id !== closedRequest ? saveRequest : null;
   return <div className="border-t border-base-300 p-4">
     <button type="button" className="btn btn-sm" disabled={disabled} onClick={() => setOpen(true)}>Google Drive</button>
     {(open || activeRequest) && <GoogleDriveSetupDialog captureNote={activeRequest && "backup" in activeRequest ? () => activeRequest.backup : captureNote}
-      saveRequest={activeRequest} onImportNote={onImportNote} onClose={() => {
+      saveRequest={activeRequest} onClose={() => {
         setClosedRequest(saveRequest?.id ?? null); setOpen(false); onSaveRequestClose?.();
       }} />}
   </div>;
 }
 
-export function GoogleDriveSetupDialog({ onClose, captureNote, onImportNote, saveRequest }: { onClose: () => void } & NoteActions) {
+type RestoreAction = { onImportNote: (backup: NoteBackup) => void };
+export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequest }: { onClose: () => void; restore?: RestoreAction } & NoteActions) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const runtimeRef = useRef<Runtime | null>(null);
   const [state, setState] = useState<SetupState>({ stage: "preparing", account: null, root: null, error: null });
@@ -48,6 +51,19 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, onImportNote, sav
     runtimeRef.current = runtime;
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) dialog.showModal();
+    const updateConnection = () => {
+      const current = runtime.getConnection();
+      if (runtimeRef.current !== runtime || runtime.busy) return;
+      if (current) { setDrive(runtime.drive); setState({ stage: "checked", ...current, error: null }); }
+      else {
+        setDrive(null);
+        setState((previous) => previous.stage === "checked" ? { stage: "ready", account: null, root: null,
+          error: "Googleとの接続が切れました。再接続してください。" } : previous);
+      }
+    };
+    const unsubscribe = runtime.subscribe(updateConnection);
+    // getConnectionで期限を再検証。画面を開いたままでも古い確認結果を表示し続けない。
+    const interval = setInterval(updateConnection, 5000);
     const connection = runtime.getConnection();
     if (connection) void Promise.resolve(connection).then((current) => {
       if (runtimeRef.current === runtime) { setDrive(runtime.drive); setState({ stage: "checked", ...current, error: null }); }
@@ -55,6 +71,7 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, onImportNote, sav
     else void prepare(runtime);
     return () => {
       runtimeRef.current = null;
+      unsubscribe(); clearInterval(interval);
       runtime.detach();
       if (dialog?.open) dialog.close();
     };
@@ -102,25 +119,30 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, onImportNote, sav
       // Strict Modeのeffect再実行で、一度閉じた後に再表示したdialogを古いcloseイベントで閉じない。
       if (event.target === event.currentTarget && !event.currentTarget.open) onClose();
     }}>
-    <div className="modal-box max-w-md rounded-box space-y-4">
-      <h2 id="google-drive-setup-title" className="text-lg font-bold">Google Drive</h2>
-      <p className="text-sm">接続後、全ノート・フォルダをDriveへ自動保存します。</p>
-      {state.account && <dl className="space-y-1 text-sm break-words">
-        <dt className="font-semibold">確認したアカウント</dt>
-        <dd>{state.account.emailAddress}</dd>
-      </dl>}
-      {state.stage === "checked" && <p role="status" className="text-sm break-words">
-        {state.root ? `専用フォルダ「${state.root.name}」を確認しました。` : "専用フォルダは未作成です。"}
-      </p>}
-      {busy && state.stage !== "checked" && <p role="status" className="text-sm">{state.stage === "preparing" ? "接続準備中…"
-        : state.stage === "checking" ? "接続確認中…" : "専用フォルダを作成中…"}</p>}
-      {state.error && <p role="alert" className="text-sm text-error">{state.error}</p>}
-      {state.stage === "checked" && state.account && state.root && drive && <GoogleDriveNotes
-        key={`${state.account.id}:${state.root.id}`} drive={drive} accountId={state.account.id} rootId={state.root.id}
-        captureNote={captureNote} initialBackup={saveRequest && "backup" in saveRequest ? saveRequest.backup : undefined}
-        batchSources={saveRequest && "sources" in saveRequest ? saveRequest.sources : undefined}
-        onImportNote={onImportNote} onClose={onClose} onBusyChange={setTransferBusy} />}
-      <div className="flex flex-wrap justify-end gap-2">
+    <div className="modal-box flex max-h-[calc(100dvh-2rem)] max-w-md flex-col overflow-hidden rounded-box p-0">
+      <h2 id="google-drive-setup-title" className="shrink-0 border-b border-base-300 px-5 py-4 text-lg font-bold">{restore ? "Driveバックアップを復元" : saveRequest ? "Driveに保存" : "Google Drive"}</h2>
+      <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
+        {!restore && !saveRequest && <p className="text-sm">{state.root ? "全ノート・フォルダを自動保存します。" : "接続後、全ノート・フォルダをDriveへ自動保存します。"}</p>}
+        {state.account && <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm break-words">
+          <dt className="text-base-content/70">アカウント</dt>
+          <dd className="min-w-0">{state.account.emailAddress}</dd>
+          <dt className="text-base-content/70">保存先</dt>
+          <dd className="min-w-0">{state.root?.name ?? "未作成"}</dd>
+        </dl>}
+        {busy && state.stage !== "checked" && <p role="status" className="text-sm">{state.stage === "preparing" ? "接続準備中…"
+          : state.stage === "checking" ? "接続確認中…" : "専用フォルダを作成中…"}</p>}
+        {state.error && <p role="alert" className="text-sm text-error">{state.error}</p>}
+        {!saveRequest && !restore && <SpeedMeasurementPanel />}
+        {state.stage === "checked" && state.account && state.root && drive && saveRequest && <GoogleDriveNotes
+          key={`${state.account.id}:${state.root.id}`} drive={drive} accountId={state.account.id} rootId={state.root.id}
+          captureNote={captureNote} initialBackup={saveRequest && "backup" in saveRequest ? saveRequest.backup : undefined}
+          batchSources={saveRequest && "sources" in saveRequest ? saveRequest.sources : undefined}
+          onClose={onClose} onBusyChange={setTransferBusy} />}
+        {state.stage === "checked" && state.account && state.root && drive && restore && <GoogleDriveBackupRestore
+          key={`${state.account.id}:${state.root.id}`} drive={drive} accountId={state.account.id} rootId={state.root.id}
+          onImportNote={restore.onImportNote} onClose={onClose} onBusyChange={setTransferBusy} />}
+      </div>
+      <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-base-300 px-5 py-4 [&_button]:min-h-11">
         <button type="button" className="btn btn-sm" onClick={onClose}>閉じる</button>
         {state.stage === "error" && <button type="button" className="btn btn-sm" onClick={() => {
           const runtime = runtimeRef.current;

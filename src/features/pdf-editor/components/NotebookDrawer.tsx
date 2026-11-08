@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode, type ChangeEventHandler } from "react";
-import { GoogleDriveSetup, type DriveSaveRequest } from "./GoogleDriveSetup";
+import { useEffect, useRef, useState, type ReactNode, type ChangeEventHandler } from "react";
+import { GoogleDriveSetup, GoogleDriveSetupDialog, type DriveSaveRequest } from "./GoogleDriveSetup";
 import type { NoteBackup } from "../noteBackupData";
 
 type NotebookDrawerProps = {
@@ -23,6 +23,8 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
   const dialogRef = useRef<HTMLDialogElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
+  const backupMenuRef = useRef<HTMLDetailsElement>(null);
+  const [restoreOpen, setRestoreOpen] = useState(false);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -58,20 +60,36 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
             </button>
           </div>
           {onBackupFileChange && <div className="px-4 pb-3">
-            <button type="button" className="btn btn-sm" disabled={pdfOpenDisabled}
-              onClick={() => { if (!pdfOpenDisabled) backupInputRef.current?.click(); }}>バックアップを読み込む</button>
+            <details ref={backupMenuRef} className="dropdown w-full">
+              <summary className="btn btn-sm" aria-disabled={pdfOpenDisabled}
+                onClick={(event) => { if (pdfOpenDisabled) event.preventDefault(); }}>バックアップを読み込む</summary>
+              <ul className="dropdown-content menu z-10 mt-2 w-full rounded-box border border-base-300 bg-base-100 p-2 shadow">
+                <li><button type="button" disabled={pdfOpenDisabled} onClick={() => {
+                  if (pdfOpenDisabled) return;
+                  if (backupMenuRef.current) backupMenuRef.current.open = false;
+                  backupInputRef.current?.click();
+                }}>ファイルから読み込む</button></li>
+                {onImportDriveNote && <li><button type="button" disabled={pdfOpenDisabled} onClick={() => {
+                  if (pdfOpenDisabled) return;
+                  if (backupMenuRef.current) backupMenuRef.current.open = false;
+                  setRestoreOpen(true);
+                }}>以前のDriveバックアップから</button></li>}
+              </ul>
+            </details>
             <input ref={backupInputRef} type="file" accept=".overlay,.zip" hidden
               aria-label="読み込むOverlayバックアップ" disabled={pdfOpenDisabled} onChange={onBackupFileChange} />
           </div>}
           {children}
           {open && <GoogleDriveSetup disabled={busy || pdfOpenDisabled} captureNote={captureDriveNote}
-            saveRequest={driveSaveRequest} onSaveRequestClose={onDriveSaveRequestClose} onImportNote={onImportDriveNote} />}
+            saveRequest={driveSaveRequest} onSaveRequestClose={onDriveSaveRequestClose} />}
         </div>
         <div className="modal-backdrop">
           <button type="button" aria-label="ノート一覧の外側を押して閉じる" tabIndex={-1}
             disabled={busy} onClick={onClose} />
         </div>
       </dialog>
+      {open && restoreOpen && onImportDriveNote && <GoogleDriveSetupDialog
+        restore={{ onImportNote: onImportDriveNote }} onClose={() => setRestoreOpen(false)} />}
     </>
   );
 }

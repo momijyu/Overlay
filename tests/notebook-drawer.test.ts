@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 // dialogの呼び出しとイベント接続を検証する。実DOMのフォーカスやアニメーションは実機確認する。
 let effects: (() => void)[] = [];
+let restoreOpen = false;
 const dialog = {
   open: false,
   showCount: 0,
@@ -16,12 +17,14 @@ const dialog = {
 };
 mock.module("react", { exports: {
   ...React,
+  useState: () => [restoreOpen, (value: boolean) => { restoreOpen = value; }],
   useRef: () => ({ current: dialog }),
   useEffect: (effect: () => void) => { effects.push(effect); },
 } });
 const { NotebookDrawer } = await import("@/features/pdf-editor/components/NotebookDrawer");
+const { GoogleDriveSetupDialog } = await import("@/features/pdf-editor/components/GoogleDriveSetup");
 
-beforeEach(() => { effects = []; dialog.open = false; dialog.showCount = 0; dialog.closeCount = 0; dialog.pickerCount = 0; });
+beforeEach(() => { effects = []; restoreOpen = false; dialog.open = false; dialog.showCount = 0; dialog.closeCount = 0; dialog.pickerCount = 0; });
 
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   return React.Children.toArray(node).flatMap((child) => React.isValidElement<Record<string, unknown>>(child)
@@ -120,7 +123,7 @@ test("バックアップ読み込みはPDFと別の選択欄へ接続し、キ�
     const node = NotebookDrawer({ open: true, busy: disabled, pdfOpenDisabled: disabled,
       onFileChange: () => {}, onBackupFileChange: () => { changed++; }, onClose: () => { closed++; }, children: null });
     const entries = elements(node);
-    const button = entries.find((item) => item.type === "button" && item.props.children === "バックアップを読み込む")!;
+    const button = entries.find((item) => item.type === "button" && item.props.children === "ファイルから読み込む")!;
     const input = entries.find((item) => item.props["aria-label"] === "読み込むOverlayバックアップ")!;
     const before = dialog.pickerCount;
     (button.props.onClick as () => void)();
@@ -132,4 +135,21 @@ test("バックアップ読み込みはPDFと別の選択欄へ接続し、キ�
     assert.equal(changed, 1);
     assert.equal(closed, 0);
   }
+});
+
+test("以前のDriveバックアップは読み込みメニューから開き、通常設定からのコピーと分離する", () => {
+  let imports = 0, closed = 0;
+  const props = { open: true, busy: false, pdfOpenDisabled: false, onFileChange: () => {},
+    onBackupFileChange: () => {}, onImportDriveNote: () => { imports++; }, onClose: () => { closed++; }, children: null };
+  const tree = NotebookDrawer(props);
+  const button = elements(tree).find((entry) => entry.type === "button" && entry.props.children === "以前のDriveバックアップから")!;
+  assert.ok(button); assert.equal(restoreOpen, false);
+  (button.props.onClick as () => void)();
+  assert.equal(restoreOpen, true); assert.equal(dialog.pickerCount, 0);
+  const modal = elements(NotebookDrawer(props)).find((entry) => entry.type === GoogleDriveSetupDialog)!;
+  assert.ok(modal);
+  (modal.props.restore as { onImportNote: () => void }).onImportNote(); assert.equal(imports, 1);
+  (modal.props.onClose as () => void)(); assert.equal(restoreOpen, false); assert.equal(closed, 0);
+  const disabled = elements(NotebookDrawer({ ...props, pdfOpenDisabled: true })).find((entry) => entry.props.children === "以前のDriveバックアップから")!;
+  (disabled.props.onClick as () => void)(); assert.equal(restoreOpen, false);
 });

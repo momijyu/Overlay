@@ -2,6 +2,7 @@ import type { NoteBackup } from "./noteBackupData";
 import type { DriveNoteAccess } from "./googleDriveNotes";
 import type { DriveOverwriteTarget } from "./googleDriveNoteData";
 import { DriveHttpError } from "./driveHttpError";
+import { speedMeasurements } from "./speedMeasurements";
 
 // 通常の自動保存とは分離し、確認後の手動保存・コピー読み込みを扱う。
 type DriveAuthorization = { getAccessToken: () => string; invalidateAccessToken: (token: string) => void };
@@ -111,6 +112,10 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     const controller = new AbortController();
     pending.add(controller);
     const timeout = setTimeout(() => controller.abort(), options.rawBody ? 120_000 : 30_000);
+    const timing = speedMeasurements.begin("drive.http", { method: options.method ?? (body === undefined ? "GET" : "POST"),
+      requestKind: options.upload || options.url ? "upload" : path === "about" ? "account"
+        : parameters.alt === "media" ? "download" : path === "files" ? "list" : "metadata" });
+    let headersMs = 0, httpStatus = 0;
     try {
       const response = await requestFetch(url.toString(), {
         method: options.method ?? (body === undefined ? "GET" : "POST"),
@@ -118,6 +123,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
         ...(options.rawBody ? { body: options.rawBody } : body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: controller.signal, credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer",
       });
+      headersMs = timing.elapsedMs(); httpStatus = response.status;
       assertToken(token);
       assertOperation(operationVersion);
       if (controller.signal.aborted) throw new Error("request-aborted");
@@ -136,8 +142,12 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
       assertToken(token);
       assertOperation(operationVersion);
       if (controller.signal.aborted) throw new Error("request-aborted");
+      timing.finish("ok", { headersMs, bodyMs: Math.max(0, timing.elapsedMs() - headersMs), httpStatus });
       return value;
     } catch (error) {
+      // 応答前の接続失敗を「本文の受信時間」として記録しない。
+      if (httpStatus === 0) headersMs = timing.elapsedMs();
+      timing.finish("error", { headersMs, bodyMs: httpStatus === 0 ? 0 : Math.max(0, timing.elapsedMs() - headersMs), httpStatus });
       // サーバーの本文やfetchの例外は認証情報を含む可能性があるため、そのまま転送しない。
       assertToken(token);
       assertOperation(operationVersion);
@@ -152,6 +162,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
         ? "Google Driveへ接続できませんでした。通信状態を確認して再試行してください。"
         : "フォルダ作成の結果を確認できませんでした。接続確認からフォルダを再検索してください。");
     } finally {
+      timing.finish("cancelled");
       clearTimeout(timeout);
       pending.delete(controller);
     }

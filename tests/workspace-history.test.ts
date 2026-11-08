@@ -7,6 +7,7 @@ import type { HeadingsByPage, NotePage, PenStroke, SavedNoteSummary, TextNotesBy
 import type { NoteDragItem } from "@/features/pdf-editor/noteDrag";
 import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
 import { DriveVersionRequired } from "@/features/pdf-editor/driveLibraryCache";
+import { speedMeasurements } from "@/features/pdf-editor/speedMeasurements";
 
 // Hooksの保持だけを代用し、Workspace内のイベント・状態・保存の接続を検証する。
 // DOM・実際のReact再描画・ブラウザ操作を再現するテストではない。
@@ -21,7 +22,7 @@ let deleteFails = false;
 let openFails = false;
 let versionNeeded: DriveVersionRequired | null = null;
 let pdfFails = false;
-const documentOptions: { standardFontDataUrl?: string }[] = [];
+const documentOptions: { standardFontDataUrl?: string; cMapUrl?: string; cMapPacked?: boolean }[] = [];
 let persistFails = false;
 let persistWait: Promise<void> | null = null;
 let exportFails = true;
@@ -103,7 +104,7 @@ mock.module("@/features/pdf-editor/noteBackupFile", { exports: {
 } });
 mock.module("pdfjs-dist/legacy/build/pdf.mjs", { exports: {
   GlobalWorkerOptions: {},
-  getDocument: (options: { standardFontDataUrl?: string }) => { documentOptions.push(options); return ({ promise: pdfFails ? Promise.reject(new Error("PDF解析失敗")) : Promise.resolve(pdf), destroy: async () => {} }); },
+  getDocument: (options: { standardFontDataUrl?: string; cMapUrl?: string; cMapPacked?: boolean }) => { documentOptions.push(options); return ({ promise: pdfFails ? Promise.reject(new Error("PDF解析失敗")) : Promise.resolve(pdf), destroy: async () => {} }); },
 } });
 mock.module("@/features/pdf-editor/exportAnnotatedPdf", { exports: {
   exportAnnotatedPdf: async (_file: unknown, _pdf: unknown, strokes: Record<number, PenStroke[]>, texts?: TextNotesByPage, pages?: NotePage[]) => {
@@ -805,6 +806,19 @@ async function openOther() {
   assert.equal(props(NotebookSidebar).currentNoteId, "other");
 }
 
+test("ノート切替の取得・PDF解析を記録し、Canvas完了の通知まで全体計測を終えない", async () => {
+  setup(); speedMeasurements.start();
+  try {
+    await openOther();
+    const result = speedMeasurements.snapshot();
+    assert.equal(result.active, 1);
+    assert.deepEqual(result.records.map((row) => row.phase), ["note.flush", "note.read", "pdf.prepare", "pdf.parse"]);
+    props(PdfPage).openTiming!.finish();
+    assert.equal(speedMeasurements.snapshot().records.at(-1)!.phase, "note.open");
+    assert.doesNotMatch(JSON.stringify(speedMeasurements.snapshot()), /sample.pdf|授業メモ|other/);
+  } finally { speedMeasurements.clear(); }
+});
+
 test("版選択のキャンセルは現在の内容を保ち、採用時だけ確認情報を読み込みへ渡す", async () => {
   setup();
   const before = props(PdfPage).strokes;
@@ -1215,8 +1229,10 @@ test("付箋から別資料へ移動する前に未保存内容を待ち、破�
 });
 
 
-test("PDF読み込みには同梱の標準フォント配信先を指定する", async () => {
+test("PDF読み込みには同梱CMap・標準フォントの配信先を指定する", async () => {
   setup(); const before = documentOptions.length; await openOther();
   assert.ok(documentOptions.length > before);
   assert.equal(documentOptions.at(-1)!.standardFontDataUrl, "/pdfjs/standard_fonts/");
+  assert.equal(documentOptions.at(-1)!.cMapUrl, "/pdfjs/cmaps/");
+  assert.equal(documentOptions.at(-1)!.cMapPacked, true);
 });

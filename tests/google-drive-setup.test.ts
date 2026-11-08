@@ -13,11 +13,13 @@ let rootReply: { id: string; name: string } | null = null;
 let createFailure = false;
 let authorized = false, cancelled = 0;
 let token = "test-token";
+const authListeners = new Set<() => void>();
 const dialog = { open: false, showModal() { this.open = true; }, close() { this.open = false; } };
 const account = { id: "account_A", displayName: "Test User", emailAddress: "test@example.com" };
 const auth = { prepare() { prepared++; return preparationReply(); }, async connect() { connected++; authorized = false; await authReply(); authorized = true; },
   getState: () => ({ status: authorized ? "authorized" : "disconnected" }),
-  disconnect() { disconnected++; authorized = false; }, getAccessToken: () => token, invalidateAccessToken: () => {} };
+  disconnect() { disconnected++; authorized = false; }, getAccessToken: () => token, invalidateAccessToken: () => {},
+  subscribe(listener: () => void) { authListeners.add(listener); return () => { authListeners.delete(listener); }; } };
 const drive = { async getAccount() { accounts++; return account; }, async findRoot() { searches++; return rootReply; },
   async createRoot(id: string) { assert.equal(id, account.id); creates++; if (createFailure) throw new Error("再接続してください。"); return { id: "folder_A", name: "Overlay" }; },
   cancelPending() { cancelled++; }, dispose() { disposed++; } };
@@ -26,7 +28,7 @@ mock.module("react", { exports: { ...React,
   useState(initial: unknown) {
     const index = stateIndex++;
     if (!(index in states)) states[index] = typeof initial === "function" ? initial() : initial;
-    return [states[index], (value: unknown) => { states[index] = value; }];
+    return [states[index], (value: unknown) => { states[index] = typeof value === "function" ? value(states[index]) : value; }];
   },
   useRef() { const index = refIndex++; return references[index] ??= { current: index === 0 ? dialog : null }; },
   useEffect(effect: () => void | (() => void)) { if (initialRender) effects.push(effect); },
@@ -38,11 +40,14 @@ let session: ReturnType<typeof createGoogleDriveSession>;
 mock.module("@/features/pdf-editor/googleDriveSession", { exports: { getGoogleDriveSession: () => session } });
 const { GoogleDriveSetup, GoogleDriveSetupDialog } = await import("@/features/pdf-editor/components/GoogleDriveSetup");
 const { GoogleDriveNotes } = await import("@/features/pdf-editor/components/GoogleDriveNotes");
+const { GoogleDriveBackupRestore } = await import("@/features/pdf-editor/components/GoogleDriveBackupRestore");
+const { SpeedMeasurementPanel } = await import("@/features/pdf-editor/components/SpeedMeasurementPanel");
 
 beforeEach(() => {
   states = []; references = []; effects = []; initialRender = true; stateIndex = 0; refIndex = 0;
   prepared = connected = disconnected = disposed = accounts = searches = creates = 0;
   authReply = preparationReply = async () => {}; rootReply = null; createFailure = false; dialog.open = false;
+  authListeners.clear();
   authorized = false; cancelled = 0; token = "test-token"; session = createGoogleDriveSession();
 });
 
@@ -56,6 +61,8 @@ function shallow(node: React.ReactNode): React.ReactNode {
   return React.Children.map(node, (child) => {
     if (!React.isValidElement<{ children?: React.ReactNode }>(child)) return child;
     if (child.type === GoogleDriveNotes) return React.createElement("section", { "aria-label": "Driveのノート" });
+    if (child.type === GoogleDriveBackupRestore) return React.createElement("section", { "aria-label": "Driveバックアップの復元" });
+    if (child.type === SpeedMeasurementPanel) return React.createElement("section", { "aria-label": "速度計測" });
     return React.cloneElement(child, {}, shallow(child.props.children));
   });
 }
@@ -87,6 +94,11 @@ test("入口を表示するだけではSDK準備も認証もAPI通信も開始�
   assert.equal(elements(disabled).find((entry) => entry.type === "button")!.props.disabled, true);
 });
 
+test("速度計測は通常の設定だけに置き、復元・手動保存には重ねて表示しない", () => {
+  assert.ok(render().entries.some((entry) => entry.type === SpeedMeasurementPanel));
+  assert.ok(!render(() => {}, { restore: { onImportNote() {} } }).entries.some((entry) => entry.type === SpeedMeasurementPanel));
+});
+
 test("開いた時だけ準備し、接続後の全件自動保存を案内して認可はクリックを待つ", async () => {
   const cleanup = await mount();
   assert.equal(dialog.open, true);
@@ -112,7 +124,7 @@ test("ユーザーのクリック内で認証を開始し、本人確認と検�
   const { html } = render();
   assert.equal(accounts, 1); assert.equal(searches, 1); assert.equal(creates, 0);
   assert.doesNotMatch(html, /Test User/); assert.match(html, /test@example.com/);
-  assert.match(html, /専用フォルダは未作成/);
+  assert.match(html, /保存先<\/dt><dd[^>]*>未作成/);
   assert.ok(!html.includes("test-token"));
   cleanup();
 });
@@ -122,7 +134,7 @@ test("フォルダ作成は追加の明示操作でのみ行い、完了後に�
   assert.equal(creates, 0);
   click("専用フォルダを作成"); await settle();
   assert.equal(creates, 1);
-  assert.match(render().html, /専用フォルダ「Overlay」を確認しました/);
+  assert.match(render().html, /保存先<\/dt><dd[^>]*>Overlay/);
   assert.ok(!render().html.includes("専用フォルダを作成</button>"));
   cleanup();
 });
@@ -196,6 +208,33 @@ test("有効な接続は閉じて開き直しても認証・本人確認を繰�
   assert.equal(connected, 1); expired();
 });
 
+test("開いたまま認可が失効したら接続済み表示を消し、同じ画面から再接続できる", async () => {
+  rootReply = { id: "folder_A", name: "Overlay" };
+  const cleanup = await mount();
+  try {
+    click("Googleで接続"); await settle(); assert.match(render().html, /test@example.com/);
+    authorized = false; authListeners.forEach((listener) => listener()); await settle();
+    assert.doesNotMatch(render().html, /test@example.com|全ノート・フォルダを自動保存します。/);
+    assert.match(render().html, /接続が切れました/); assert.match(render().html, /Googleで接続/);
+    click("Googleで接続"); await settle();
+    assert.match(render().html, /test@example.com/); assert.doesNotMatch(render().html, /接続が切れました/);
+    assert.equal(connected, 2);
+  } finally { cleanup(); }
+});
+
+test("接続の期限は画面表示中も再確認し、閉じた後は監視を解除する", async () => {
+  mock.timers.enable({ apis: ["setInterval"] });
+  rootReply = { id: "folder_A", name: "Overlay" };
+  const cleanup = await mount();
+  try {
+    click("Googleで接続"); await settle();
+    authorized = false; mock.timers.tick(5000); await settle();
+    assert.match(render().html, /接続が切れました/); assert.doesNotMatch(render().html, /test@example.com/);
+  } finally { cleanup(); mock.timers.reset(); }
+  const previous = states.slice(); session.clear();
+  assert.deepEqual(states, previous);
+});
+
 test("選択ノートの保存要求で画面を開き、閉じた要求を再表示せずスナップショットを解放する", () => {
   const request = { id: "request_A", backup: { schemaVersion: 1 as const, kind: "note" as const, name: "選択ノート", folders: [], notes: [] } };
   let released = 0;
@@ -245,5 +284,27 @@ test("接続確認のEscapeは親のノート一覧へ伝播させない", async
   dialog.open = false;
   close({ target: dialog, currentTarget: dialog });
   assert.equal(closed, 2);
+  cleanup();
+});
+
+test("通常のDrive設定は接続情報だけを表示し、保存・復元用の一覧を作らない", async () => {
+  rootReply = { id: "folder_A", name: "Overlay" };
+  const cleanup = await mount(); click("Googleで接続"); await settle();
+  const tree = render(() => {}, { captureNote: () => { throw new Error("PDFを取得しない"); } });
+  assert.match(tree.html, /test@example.com/);
+  assert.doesNotMatch(tree.html, /手動バックアップ|ブラウザへコピー|Driveからコピー/);
+  assert.ok(!tree.entries.some((entry) => entry.type === GoogleDriveNotes || entry.type === GoogleDriveBackupRestore));
+  cleanup();
+});
+
+test("以前のバックアップ復元を明示した時だけ復元画面を接続する", async () => {
+  rootReply = { id: "folder_A", name: "Overlay" };
+  const cleanup = await mount(); click("Googleで接続"); await settle();
+  const restore = { onImportNote: () => {} };
+  const tree = render(() => {}, { restore });
+  assert.match(tree.html, /Driveバックアップを復元/);
+  const child = tree.entries.find((entry) => entry.type === GoogleDriveBackupRestore)!;
+  assert.equal(child.props.onImportNote, restore.onImportNote);
+  assert.ok(!tree.entries.some((entry) => entry.type === GoogleDriveNotes));
   cleanup();
 });

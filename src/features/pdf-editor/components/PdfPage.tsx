@@ -8,6 +8,7 @@ import { PenLayer } from "./PenLayer";
 import { TextLayer } from "./TextLayer";
 import { bindPageZoomWheel, capturePageZoomAnchor, capturePageResizeAnchor, restorePageZoomAnchor, type PageZoomAnchor } from "../pageZoom";
 import { bindPageGestures, createPageInteraction } from "../pageGestures";
+import { speedMeasurements, type SpeedSpan } from "../speedMeasurements";
 
 type PdfPageProps = {
   document: PDFDocumentProxy;
@@ -27,6 +28,7 @@ type PdfPageProps = {
   disabled: boolean;
   onStrokeComplete: (stroke: PenStroke) => void;
   onStrokesChange: (strokes: PenStroke[]) => void;
+  openTiming?: SpeedSpan | null;
 };
 
 export function PdfPage({
@@ -47,6 +49,7 @@ export function PdfPage({
   disabled,
   onStrokeComplete,
   onStrokesChange,
+  openTiming,
 }: PdfPageProps) {
   const sourcePageNumber = notePage?.kind === "pdf" ? notePage.pageNumber : pageNumber;
   const blankWidth = notePage?.kind === "blank" ? notePage.width : undefined;
@@ -158,8 +161,10 @@ export function PdfPage({
 
     let active = true;
     let renderTask: RenderTask | undefined;
+    let timing: SpeedSpan | undefined;
 
     async function renderPage() {
+      timing = speedMeasurements.begin("pdf.render", undefined, openTiming?.id);
       try {
         const page = blankWidth !== undefined ? null : await document.getPage(sourcePageNumber);
         if (!active) return;
@@ -200,9 +205,16 @@ export function PdfPage({
           context.drawImage(buffer, 0, 0);
           setError(null);
           setRenderedPage({ width: original.width, height: original.height });
+          timing.finish("ok", { width: original.width, height: original.height });
+          // Canvasへの反映完了。ブラウザの画面合成・物理ディスプレイの描画時間は含めない。
+          openTiming?.finish();
         }
       } catch {
+        timing.finish(active ? "error" : "cancelled");
+        if (active) openTiming?.finish("error");
         if (active) setError("このページを表示できませんでした。");
+      } finally {
+        timing.finish("cancelled");
       }
     }
 
@@ -214,8 +226,9 @@ export function PdfPage({
       active = false;
       if (timer !== null) clearTimeout(timer);
       renderTask?.cancel();
+      timing?.finish("cancelled");
     };
-  }, [document, sourcePageNumber, blankWidth, blankHeight, availableWidth, zoom]);
+  }, [document, sourcePageNumber, blankWidth, blankHeight, availableWidth, zoom, openTiming]);
 
   return (
     <div

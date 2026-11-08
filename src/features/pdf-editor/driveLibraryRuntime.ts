@@ -8,6 +8,7 @@ import { checkQueuedDriveCaches, hasDriveCacheChecks } from "./driveCacheChecks"
 import { pruneDriveCache } from "./driveLibraryCache";
 import { createGoogleDriveClient } from "./googleDriveClient";
 import { getGoogleDriveSession } from "./googleDriveSession";
+import { measureSpeed } from "./speedMeasurements";
 
 export function createBrowserDriveLibrary() {
   const autosave = createBrowserDriveAutosave();
@@ -55,7 +56,7 @@ export function createBrowserDriveLibrary() {
             nextRefresh = Date.now() + 30000;
             const access = await client.autosaveAccess(scope.accountId, scope.rootId);
             if (disposed) return;
-            await syncDriveLibrary(access, scope, { stickyIndexes: false });
+            await measureSpeed("drive.library", () => syncDriveLibrary(access, scope!, { stickyIndexes: false }));
             // 大きな旧JSONの初回索引生成も本文の送信・次のハートビートを待たせない。
             // 別タブの索引更新だけを専用ロックで排他し、通常の階層・本文ロックと分ける。
             if (!stickyRunning && !disposed) {
@@ -67,7 +68,7 @@ export function createBrowserDriveLibrary() {
               };
               void navigator.locks.request(`overlay-sticky-index-${root.id}`, { ifAvailable: true }, async (lock) => {
                 if (!lock || !current()) return;
-                try { await syncDriveStickyIndexes(access, indexScope, current); if (current()) stickyFailure = null; }
+                try { await measureSpeed("drive.index", () => syncDriveStickyIndexes(access, indexScope, current)); if (current()) stickyFailure = null; }
                 catch (error) { if (current()) stickyFailure = error instanceof DriveStickyIndexError ? error : new DriveStickyIndexError(error); }
               }).catch((error: unknown) => { if (current()) stickyFailure = new DriveStickyIndexError(error); })
                 .finally(() => { stickyRunning = false; });

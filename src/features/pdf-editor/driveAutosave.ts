@@ -6,6 +6,7 @@ import { DriveHttpError } from "./driveHttpError";
 import { createGoogleDriveClient } from "./googleDriveClient";
 import { getGoogleDriveSession } from "./googleDriveSession";
 import type { DriveNoteAccess } from "./googleDriveNotes";
+import { measureSpeed, speedMeasurements } from "./speedMeasurements";
 
 type Connection = { accountId: string; rootId: string };
 export type DriveAutosaveOptions = {
@@ -31,6 +32,8 @@ export function createDriveAutosave(options: DriveAutosaveOptions) {
           if (disposed || !driveJobDue(candidate, now()) || candidate.accountId !== connection.accountId || candidate.rootId !== connection.rootId) continue;
           // 同じブラウザの別タブも含めて直列化。ロック未対応環境で危険な代替処理はしない。
           await options.lock(`overlay-drive-${candidate.key}`, async () => {
+            const timing = speedMeasurements.begin("drive.save");
+            const queueWaitMs = Math.max(0, now() - candidate.dirtySince);
             try {
               let job = await captureDriveJob(candidate.id, candidate.key);
               if (!job || !driveJobDue(job.binding, now()) || disposed) return;
@@ -54,7 +57,8 @@ export function createDriveAutosave(options: DriveAutosaveOptions) {
               }
               const latest = await getDriveBinding(candidate.id);
               if (!latest?.enabled || latest.key !== candidate.key || disposed) return;
-              const uploaded = await sendDriveAutosave(access, { ...job.binding, pdfHash: hash }, job.backup);
+              const uploaded = await measureSpeed("drive.transfer", () => sendDriveAutosave(access, { ...job!.binding, pdfHash: hash }, job!.backup),
+                { pdfBytes: job.backup.notes[0].pdf.size, firstUpload: job.binding.uploadedGeneration === 0 }, timing.id);
               const sentGeneration = job.binding.generation;
               await updateDriveBinding(candidate.id, candidate.key, (row) => ({ ...row,
                 uploadedGeneration: Math.max(row.uploadedGeneration, sentGeneration),
@@ -64,8 +68,11 @@ export function createDriveAutosave(options: DriveAutosaveOptions) {
                 error: undefined, retryAt: undefined, failures: 0 }));
               await registerLibrarySource(job.binding, job.backup.notes[0].fileName);
               await markUploadedCache(job.binding, job.backup, uploaded.version);
+              timing.finish("ok", { pdfBytes: job.backup.notes[0].pdf.size, queueWaitMs,
+                pendingMs: Math.max(0, now() - job.binding.dirtySince), sinceLastChangeMs: Math.max(0, now() - job.binding.changedAt) });
               // 送信中の新しい編集は番号が大きいまま残る。現在画面の内容を古い応答で戻さない。
             } catch (error) {
+              timing.finish("error");
               if (disposed) return;
               // 認証切れは本文も待ち行列も変更せず、明示的な再接続後に再開する。
               const live = options.connection();
@@ -74,7 +81,7 @@ export function createDriveAutosave(options: DriveAutosaveOptions) {
               await updateDriveBinding(candidate.id, candidate.key, (row) => ({ ...row, failures: (row.failures ?? 0) + 1,
                 ...(transient ? { retryAt: now() + Math.min(60000, 2000 * 2 ** Math.min(row.failures ?? 0, 5)) }
                   : { error: error instanceof Error ? error.message : "Driveへ保存できませんでした。" }) }));
-            }
+            } finally { timing.finish("cancelled"); }
           });
         }
       } finally { running = false; }

@@ -1,4 +1,5 @@
 import type { HeadingsByPage, NotePage, PenStroke, TextNotesByPage } from "./types";
+import { measureSpeed } from "./speedMeasurements";
 
 type Strokes = Record<number, PenStroke[]>;
 export type LocalSaveInput = {
@@ -74,10 +75,10 @@ export function createLocalAutosave(options: {
           const textSnapshot = latestTexts;
           const pageSnapshot = latestPages;
           const headingSnapshot = latestHeadings;
-          noteId = await options.persist({
+          noteId = await measureSpeed("local.save", () => options.persist({
             file: options.file, strokesByPage: snapshot, textsByPage: textSnapshot, noteId, expectedRevision: revision,
             pages: pageSnapshot, headingsByPage: headingSnapshot,
-          });
+          }), { pdfBytes: options.file.size });
           revision += 1;
           saved = snapshot;
           savedTexts = textSnapshot;

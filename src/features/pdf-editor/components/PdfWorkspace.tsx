@@ -31,6 +31,7 @@ import { HistoryControls } from "./HistoryControls";
 import { ZoomControl } from "./ZoomControl";
 import { EditorIcon } from "./EditorIcon";
 import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordPageInsertion, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
+import { speedMeasurements, type SpeedSpan } from "../speedMeasurements";
 
 type PdfInput = {
   file: File;
@@ -94,7 +95,9 @@ export function PdfWorkspace() {
   const autosaveRef = useRef<LocalAutosave | null>(null);
   const historyRef = useRef(history);
   const newNoteFolderRef = useRef<string | null>(null);
+  const openTimingRef = useRef<SpeedSpan | null>(null);
   const [versionChoice, setVersionChoice] = useState<{ error: DriveVersionRequired; destination?: { pageId: number; textId: string } } | null>(null);
+  const [openTiming, setOpenTiming] = useState<SpeedSpan | null>(null);
   useEffect(() => noteId ? pinDriveNote(noteId) : undefined, [noteId]);
   useEffect(() => subscribeDriveCacheIssue((id, message) => {
     if (mountedRef.current && autosaveRef.current?.getState().noteId === id) setError(message);
@@ -115,6 +118,7 @@ export function PdfWorkspace() {
     return () => {
       mountedRef.current = false;
       autosaveRef.current?.dispose();
+      openTimingRef.current?.finish("cancelled");
       void loadingTaskRef.current?.destroy();
     };
   }, []);
@@ -130,6 +134,10 @@ export function PdfWorkspace() {
 
   async function openPdf(getInput: () => Promise<PdfInput>, destination?: { pageId: number; textId: string }) {
     if (operationRef.current) return;
+    openTimingRef.current?.finish("cancelled");
+    const timing = speedMeasurements.begin("note.open");
+    let stage: SpeedSpan | undefined;
+    let awaitingRender = false;
     operationRef.current = true;
     setIsLoading(true);
     setError(null);
@@ -138,26 +146,35 @@ export function PdfWorkspace() {
     try {
       // 通常は保存完了を待ってから切り替える。失敗時だけ破棄の確認をする。
       const previousAutosave = autosaveRef.current;
+      stage = speedMeasurements.begin("note.flush", undefined, timing.id);
       if (previousAutosave && !await previousAutosave.flush()
         && !window.confirm("保存できていない変更があります。変更を破棄して別のノートを開きますか？")) return;
+      stage.finish();
       if (!mountedRef.current) return;
+      stage = speedMeasurements.begin("note.read", undefined, timing.id);
       const input = await getInput();
+      stage.finish("ok", { pdfBytes: input.file.size });
       // 古い一覧の付箋が既に消えていた場合は、開いているノートを切り替えない。
       if (destination && !input.textsByPage?.[destination.pageId]?.some((text) => text.kind === "sticky" && text.id === destination.textId)) {
         throw new Error("この付箋は削除または変更されています。一覧を更新してください。");
       }
       isReadingPdf = true;
+      stage = speedMeasurements.begin("pdf.prepare", undefined, timing.id);
       const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
       pdfjs.GlobalWorkerOptions.workerSrc = new URL(
         "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
         import.meta.url,
       ).toString();
       const data = await input.file.arrayBuffer();
+      stage.finish();
       if (!mountedRef.current) return;
 
-      loadingTask = pdfjs.getDocument({ data: new Uint8Array(data), standardFontDataUrl: "/pdfjs/standard_fonts/" });
+      stage = speedMeasurements.begin("pdf.parse", undefined, timing.id);
+      loadingTask = pdfjs.getDocument({ data: new Uint8Array(data),
+        cMapUrl: "/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/pdfjs/standard_fonts/" });
       loadingTaskRef.current = loadingTask;
       const loadedDocument = await loadingTask.promise;
+      stage.finish("ok", { pageCount: loadedDocument.numPages });
       if (!mountedRef.current) return;
       const headingsByPage = readPageHeadings(input.headingsByPage);
       checkPageBindings(input.pages, [input.strokesByPage, input.textsByPage ?? {}, headingsByPage], loadedDocument.numPages);
@@ -168,6 +185,8 @@ export function PdfWorkspace() {
       previousAutosave?.dispose();
       const nextHistory = createStrokeHistory(input.strokesByPage, input.textsByPage, input.pages, headingsByPage);
       historyRef.current = nextHistory;
+      openTimingRef.current = timing;
+      setOpenTiming(timing);
       setFile(input.file);
       setDocument(loadedDocument);
       setHistory(nextHistory);
@@ -192,8 +211,11 @@ export function PdfWorkspace() {
         },
       });
       autosaveRef.current = autosave;
+      awaitingRender = true;
       // 開いただけのPDFは未変更。最初の描画完了でupdateから保存を開始する。
     } catch (openError) {
+      stage?.finish(openError instanceof DriveVersionRequired ? "choice" : "error");
+      timing.finish(openError instanceof DriveVersionRequired ? "choice" : "error");
       if (openError instanceof DriveVersionRequired) setVersionChoice({ error: openError, destination });
       void loadingTask?.destroy();
       if (mountedRef.current) {
@@ -204,6 +226,8 @@ export function PdfWorkspace() {
         );
       }
     } finally {
+      stage?.finish("cancelled");
+      if (!awaitingRender) timing.finish("cancelled");
       loadingTaskRef.current = null;
       operationRef.current = false;
       if (mountedRef.current) setIsLoading(false);
@@ -718,6 +742,7 @@ export function PdfWorkspace() {
                 <PdfPage
                   key={`${documentVersion}-${pageId}`}
                   document={document}
+                  openTiming={openTiming}
                   pageNumber={pageNumber}
                   notePage={currentPage}
                   strokes={strokesByPage[pageId] ?? []}

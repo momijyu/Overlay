@@ -1,6 +1,6 @@
 # Overlayのコードが動く場所
 
-2026年11月6日時点。現在の処理の役割をまとめる。利用者向け操作は[README](../README.md)、正式仕様は[PROJECT.md](../PROJECT.md)。
+2026年11月8日時点。現在の処理の役割をまとめる。利用者向け操作は[README](../README.md)、正式仕様は[PROJECT.md](../PROJECT.md)。
 
 ## 全体像
 
@@ -26,10 +26,12 @@ Google未連携時は端末内だけにノートを保存する。連携後は�
 | noteBackupData.ts / noteBackupFile.ts | 編集用ZIPの検証・梱包・解析 |
 | exportAnnotatedPdf.ts / noteFont.ts | 同梱フォントの遅延取得、日本語・線・白紙を反映したPDF出力 |
 | googleIdentity.ts / googleDriveAuth.ts / googleDriveSession.ts | SDK準備・認可・接続先をメモリで保持 |
+| components/GoogleDriveSetup.tsx / GoogleDriveNotes.tsx / GoogleDriveBackupRestore.tsx | 接続設定・手動保存・以前のバックアップ復元を別の入口で表示 |
 | googleDriveClient.ts / googleDriveNotes.ts / googleDriveBatch.ts | 制限付きDrive HTTP・取得・手動保存と一括進行 |
 | driveLibraryData.ts / driveLibraryLocal.ts / driveLibraryRemote.ts | 固定ID階層の履歴・競合・一覧・Drive上の移動 |
 | driveLibraryRuntime.ts / driveAutosave.ts / driveOutbox.ts | 階層と本文の送信順・再試行・未送信保護 |
 | driveLibraryCache.ts / driveCacheChecks.ts / driveCacheSettings.ts | 必要時取得・背景更新確認・キャッシュ整理と上限 |
+| speedMeasurements.ts / components/SpeedMeasurementPanel.tsx | 明示開始中だけの時間記録・記録上限・許可項目と端末内JSON出力。DB・Driveへ診断情報を送らない |
 
 PDFを開き、最初の確定編集でlocalAutosaveへ通知し、localNotesがPDF・編集情報・一覧を同じトランザクションで保存する。Drive連携中は送信待ちも記録し、画面が動いている間に別のrunnerが送信する。DBトランザクション内でGoogle通信を待たない。
 

@@ -12,6 +12,7 @@ import { driveAutosaveStatus } from "@/features/pdf-editor/components/DriveAutos
 import { DriveAutosavePanel } from "@/features/pdf-editor/components/DriveAutosavePanel";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { speedMeasurements } from "@/features/pdf-editor/speedMeasurements";
 
 const file = new File(["%PDF-1.7\nfixture"], "授業.pdf", { type: "application/pdf" });
 const connection = { accountId: "account_A", rootId: "root_A" };
@@ -20,7 +21,7 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: new IDBFactory() });
   mock.method(globalThis, "fetch", () => { throw new Error("実Googleへ接続しない"); });
 });
-afterEach(() => mock.restoreAll());
+afterEach(() => { mock.restoreAll(); speedMeasurements.clear(); });
 
 function remote() {
   type Item = { id: string; name: string; appProperties: Record<string, string>; data?: Blob; [key: string]: unknown };
@@ -79,6 +80,19 @@ async function setup(delayMs = 0) {
   return { ...f, id, runner, advance() { time += 120000; }, reconnect(value: typeof current) { current = value; } };
 }
 async function row() { return (await listDriveBindings())[0]; }
+
+test("自動保存計測は待機と転送を分け、仮APIへの追加通信や本文・IDの記録をしない", async () => {
+  const f = await setup(); speedMeasurements.start(); await f.runner.tick();
+  const result = speedMeasurements.stop();
+  const save = result.records.find((item) => item.phase === "drive.save")!;
+  const transfer = result.records.find((item) => item.phase === "drive.transfer")!;
+  assert.equal(save.outcome, "ok"); assert.equal(transfer.outcome, "ok"); assert.equal(transfer.parentId, save.id);
+  assert.equal(transfer.info.firstUpload, true); assert.equal(save.info.pdfBytes, file.size);
+  assert.ok(save.info.queueWaitMs! >= 2000); assert.ok(save.info.pendingMs! >= save.info.queueWaitMs!);
+  assert.equal((await row()).generation, (await row()).uploadedGeneration);
+  const count = f.calls.length; await f.runner.tick(); assert.equal(f.calls.length, count);
+  assert.doesNotMatch(JSON.stringify(result), /授業|account_A|root_A|fixture|folder_/);
+});
 
 test("仮APIで通常更新の通信回数・JSON読み戻し量・待機時間を記録する", async (t) => {
   const f = await setup(50); await f.runner.tick();

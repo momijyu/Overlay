@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { afterEach, mock } from "node:test";
 import { createGoogleDriveClient } from "@/features/pdf-editor/googleDriveClient";
+import { speedMeasurements } from "@/features/pdf-editor/speedMeasurements";
 
 const user = { permissionId: "account_A", displayName: "Test User", emailAddress: "test@example.com", me: true };
 const folder = { id: "folder_A", name: "Overlay", mimeType: "application/vnd.google-apps.folder", ownedByMe: true, trashed: false,
@@ -8,7 +9,7 @@ const folder = { id: "folder_A", name: "Overlay", mimeType: "application/vnd.goo
 type Reply = (url: string, init: RequestInit) => Promise<Response>;
 const json = (value: unknown, status = 200) => async () => Response.json(value, { status });
 const clients: ReturnType<typeof createGoogleDriveClient>[] = [];
-afterEach(() => { clients.splice(0).forEach((client) => client.dispose()); mock.timers.reset(); });
+afterEach(() => { clients.splice(0).forEach((client) => client.dispose()); mock.timers.reset(); speedMeasurements.clear(); });
 
 function fixture() {
   let token: string | null = "token_A";
@@ -40,6 +41,24 @@ test("作成だけでは通信せず、確認前・別アカウント指定で�
   await verify(f);
   await assert.rejects(f.client.createRoot("account_B"), /接続確認/);
   assert.equal(f.requests.length, 1);
+});
+
+test("HTTP計測は応答待ちと本文受信を区別し、通信回数・応答値・エラー処理を変えない", async () => {
+  const f = fixture(); speedMeasurements.start();
+  assert.equal((await verify(f)).id, user.permissionId);
+  f.replies.push(json({}, 403)); await assert.rejects(f.client.findRoot(user.permissionId), /アクセス/);
+  const report = speedMeasurements.stop();
+  assert.equal(f.requests.length, 2); assert.equal(report.records.length, 2);
+  assert.deepEqual(report.records.map((row) => row.info.httpStatus), [200, 403]);
+  assert.deepEqual(report.records.map((row) => row.outcome), ["ok", "error"]);
+  assert.equal(report.records[0].info.requestKind, "account");
+  assert.equal(typeof report.records[0].info.headersMs, "number"); assert.equal(typeof report.records[0].info.bodyMs, "number");
+  assert.doesNotMatch(JSON.stringify(report), /account_A|token_A|test@example|Test User|googleapis/);
+  speedMeasurements.start(); f.replies.push(async () => { throw new Error("private-network-error"); });
+  await assert.rejects(f.client.getAccount());
+  const failed = speedMeasurements.stop().records[0];
+  assert.equal(failed.info.httpStatus, 0); assert.equal(failed.info.bodyMs, 0);
+  assert.doesNotMatch(JSON.stringify(failed), /private-network-error/);
 });
 
 test("APIの本人情報でアカウントを確認し、トークンはヘッダー以外に渡さない", async () => {

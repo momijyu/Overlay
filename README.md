@@ -47,6 +47,8 @@ Driveでは、本文未取得のノートだけに雲が付きます。端末に
 
 アプリ内の削除はDriveの共通一覧にも反映しますが、Drive上のPDF・編集JSONを自動で削除しません。キャッシュ整理もDriveの実体削除とは別です。[Driveの保存・競合・容量](docs/drive-storage.md)
 
+Driveの資料は通常のノート一覧から開きます。「Google Drive」画面では接続先を確認・変更できます。手動保存はノートの「操作」や複数選択の「Driveに保存」から、以前のDriveバックアップの復元は「バックアップを読み込む → 以前のDriveバックアップから」へ進みます。復元前の確認と重複判定を行います。
+
 ## 対応環境と制約
 
 - Chromeを中心に開発しています。スマホ・iPad向けの縦横UIとタッチ操作を実装していますが、端末・ブラウザ別の通し確認は継続中です。Safariの過去の表示・入力不具合も、すべて解決済みとは扱っていません。
@@ -81,13 +83,15 @@ npm start
 
 テストはNode標準のテスト機能・fake-indexeddb・仮のDrive APIを使用し、実際のブラウザやDriveのデータは変更しません。本番ビルドは現在webpackを指定しています。テスト用の実験機能警告と、実際の失敗は区別してください。
 
+動作の遅さを調べる場合は、「Google Drive → 速度計測」で開始し、操作後に停止・結果保存します。本文や認証情報を含まないJSONを端末へ出力します。[計測手順と結果の読み方](docs/drive-performance.md)
+
 ## 技術スタック
 
 | 用途 | 技術 |
 | --- | --- |
 | アプリ | Next.js・React・TypeScript |
 | UI | Tailwind CSS・daisyUI・SVG |
-| PDF表示 | PDF.js（Worker・標準フォントを同梱） |
+| PDF表示 | PDF.js（Worker・標準フォント・CMapを同梱） |
 | PDF出力 | pdf-lib・@pdf-lib/fontkit・Noto Sans JP |
 | 端末保存 | IndexedDB・Web Locks |
 | Drive連携 | Google Identity Services・Google Drive API（drive.file） |
@@ -117,6 +121,7 @@ PDFの解析・編集・端末保存・Drive API呼び出しはブラウザ側�
 | 編集・クラウドアイコン | [Lucide 1.59.0](https://github.com/lucide-icons/lucide/tree/1.59.0)、ISC／Feather由来MIT。[取得元](docs/icon-sources.md)・[全文](public/licenses/lucide-LICENSE.txt) |
 | 日本語フォント | Noto Sans JP、SIL OFL 1.1。[取得元](public/fonts/README.md)・[全文](public/fonts/OFL.txt) |
 | ZIP処理 | fflate、MIT。[全文](public/licenses/fflate-LICENSE.txt) |
+| PDF.js CMap | Adobe、BSD 3-Clause。[全文](public/pdfjs/cmaps/LICENSE)・[取得元](public/pdfjs/README.md) |
 | PDF.js標準フォント | [Foxit](public/pdfjs/standard_fonts/LICENSE_FOXIT)・[Liberation](public/pdfjs/standard_fonts/LICENSE_LIBERATION)の同梱条件 |
 
 その他の依存パッケージにもそれぞれのライセンスが適用されます。Overlay独自コードのライセンス方針は未確定です。第三者資産の許諾をアプリ全体の許諾として扱わないでください。資料として開くPDFや書き込む内容についても、利用者が共有・配布できる範囲を確認してください。
