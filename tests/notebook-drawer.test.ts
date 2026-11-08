@@ -65,6 +65,17 @@ test("開閉状態をnative dialogへ同期し、開いているdialogを二重�
   assert.equal(dialog.open, false);
 });
 
+test("PDF追加・ノート一覧・Drive設定・バックアップ読み込みの順に並べる", () => {
+  const node = NotebookDrawer({ open: true, busy: false, pdfOpenDisabled: false, onFileChange: () => {}, onBackupFileChange: () => {}, onClose: () => {},
+    children: React.createElement("nav", null, "ノート一覧の目印"),
+    storageControls: React.createElement("section", null, "Drive設定の目印"),
+  });
+  const html = renderToStaticMarkup(node);
+  assert.ok(html.indexOf("PDFを追加") < html.indexOf("ノート一覧の目印"));
+  assert.ok(html.indexOf("ノート一覧の目印") < html.indexOf("Drive設定の目印"));
+  assert.ok(html.indexOf("Drive設定の目印") < html.indexOf("バックアップを読み込む"));
+});
+
 test("閉じる、背景ボタンを閉じる処理へ接続する", () => {
   const { entries, calls } = render(true);
   for (const label of ["ノート一覧を閉じる", "ノート一覧の外側を押して閉じる"]) {

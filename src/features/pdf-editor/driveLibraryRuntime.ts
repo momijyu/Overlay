@@ -41,7 +41,7 @@ export function createBrowserDriveLibrary() {
           if (!lock || disposed) return;
           const token = session.auth.getAccessToken();
           if (verifiedToken !== token) {
-            if ((await client.getAccount()).id !== connection.account.id) throw new Error("連携先のアカウントが変わりました。");
+            if ((await client.getAccount({ reuseConfirmed: true })).id !== connection.account.id) throw new Error("連携先のアカウントが変わりました。");
             verifiedToken = token;
           }
           const latest = session.getConnection();

@@ -24,7 +24,8 @@ import { subscribeDriveCacheIssue } from "../driveCacheChecks";
 import { DriveVersionRequired, pinDriveNote } from "../driveLibraryCache";
 import { DriveVersionDialog } from "./DriveVersionDialog";
 import { DriveAutosavePanel } from "./DriveAutosavePanel";
-import type { DriveSaveRequest } from "./GoogleDriveSetup";
+import { GoogleDriveSetup, type DriveSaveRequest } from "./GoogleDriveSetup";
+import { NoteExportMenu } from "./NoteExportMenu";
 import { EraserSizeControl } from "./EraserSizeControl";
 import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
@@ -543,14 +544,8 @@ export function PdfWorkspace() {
           <button type="button" className="editor-settings-toggle btn btn-square btn-ghost mobile-only" aria-label="道具の設定"
             title="道具の設定" aria-expanded={mobileSettingsOpen} aria-controls="editor-settings"
             onClick={() => setMobileSettingsOpen((open) => !open)}><EditorIcon name="settings" /></button>
-          <details className="editor-export dropdown dropdown-end mobile-only">
-            <summary className="btn btn-square btn-ghost" aria-label="書き出しメニュー" title="書き出しメニュー"><EditorIcon name="more" /></summary>
-            <div className="dropdown-content z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-sm">
-              <button type="button" className="btn w-full" disabled={isBusy} onClick={() => void handleDownload()}>PDFをダウンロード</button>
-              <button type="button" className="btn mt-2 w-full" disabled={isBusy} onClick={() => void handleBackup()}>ノートのバックアップ</button>
-              <div className="mt-3">{backupNotice}</div>
-            </div>
-          </details>
+          <NoteExportMenu className="editor-export mobile-only" iconOnly disabled={isBusy}
+            onDownload={() => void handleDownload()} onBackup={() => void handleBackup()} />
         </>}
       </AppHeader>
       {versionChoice && <DriveVersionDialog choice={versionChoice.error} onClose={() => setVersionChoice(null)}
@@ -559,11 +554,14 @@ export function PdfWorkspace() {
           void openPdf(async () => ({ ...await loadSavedNote(selected.error.noteId, { sourceId, acceptVersion: selected.error }), name: selected.error.title }), selected.destination);
         }} />}
       <NotebookDrawer open={sidebarVisible} busy={isOrganizing || isBackupWorking || !!pendingBackup}
-        driveSaveRequest={driveSaveRequest}
-        onDriveSaveRequestClose={() => setDriveSaveRequest(null)}
         onFileChange={handleFileChange} onBackupFileChange={handleBackupFileChange} pdfOpenDisabled={isBusy}
         onClose={() => { setDriveSaveRequest(null); setSidebarVisible(false); }}
-        captureDriveNote={file && document && !isBusy ? () => captureCurrentNote() : undefined}
+        storageControls={<DriveAutosavePanel disabled={isBusy} drawerOpen={sidebarVisible}
+          onMutationChange={(busy) => { operationRef.current = busy; setIsOrganizing(busy); }}>
+          {sidebarVisible && <GoogleDriveSetup disabled={isBusy || !!pendingBackup} label="接続設定" className=""
+            captureNote={file && document && !isBusy ? () => captureCurrentNote() : undefined}
+            saveRequest={driveSaveRequest} onSaveRequestClose={() => setDriveSaveRequest(null)} />}
+        </DriveAutosavePanel>}
         onImportDriveNote={(backup) => {
           if (operationRef.current || pendingBackup) throw new Error("別の処理が完了してから読み込んでください。");
           setBackupError(null); setIsDriveRestore(true); setPendingBackup(backup);
@@ -600,8 +598,6 @@ export function PdfWorkspace() {
               setIsOrganizing(busy);
             }}
           />
-          <DriveAutosavePanel disabled={isBusy} drawerOpen={sidebarVisible}
-            onMutationChange={(busy) => { operationRef.current = busy; setIsOrganizing(busy); }} />
           {pendingBackup && <NotebookRestoreDialog backup={pendingBackup} skipDuplicates={isDriveRestore} busy={isBackupWorking} error={backupError}
             onRestore={() => void handleRestoreBackup()}
             onClose={() => { if (!operationRef.current) { setPendingBackup(null); setBackupError(null); } }} />}
@@ -642,8 +638,8 @@ export function PdfWorkspace() {
 
             {document && file && (
               <>
-                <div className="editor-toolbar min-w-0 space-y-3">
-                  <div data-editor-row="title" className="desktop-only flex h-6 min-w-0 items-center gap-3">
+                <div className="editor-toolbar min-w-0">
+                  <div data-editor-row="title" className="desktop-only flex min-h-8 min-w-0 items-center gap-3">
                     <p className="min-w-0 flex-1 truncate" title={noteName || file.name}>
                       {noteName}
                     </p>
@@ -651,10 +647,11 @@ export function PdfWorkspace() {
                       className={`w-20 shrink-0 whitespace-nowrap text-right text-xs ${saveError ? "text-error" : "text-base-content/60"}`}>
                       {statusText}
                     </span>
+                    <NoteExportMenu disabled={isBusy} onDownload={() => void handleDownload()} onBackup={() => void handleBackup()} />
                   </div>
                   {/* 道具の列は設定やノート名と分け、切り替えても折り返さない。 */}
                   <div data-editor-row="tools" role="group" aria-label="編集操作"
-                    className="editor-tools flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
+                    className="editor-tools flex h-11 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
                     <div className="editor-tool-buttons join" role="group" aria-label="編集ツール">
                       {editorTools.map(({ tool, label }) => <button key={tool} type="button"
                         className={`btn btn-square btn-ghost join-item ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
@@ -672,7 +669,7 @@ export function PdfWorkspace() {
                   {/* 高さは維持し、テキスト・付箋の操作もこの行へ表示する。 */}
                   <div data-editor-row="settings" role="group" aria-label="道具の設定"
                     id="editor-settings" data-mobile-open={mobileSettingsOpen}
-                    className="editor-settings flex h-14 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
+                    className="editor-settings flex h-11 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
                     {/* マーカーの表示の挙動めっちゃすき。 */}
                     {(penTool === "pen" || penTool === "marker") && <div className="flex items-center gap-2">
                       <label className="label" htmlFor="pen-color">{penTool === "marker" ? "マーカーの色" : "ペンの色"}</label>
@@ -697,15 +694,6 @@ export function PdfWorkspace() {
                     <div className="mobile-zoom mobile-only"><ZoomControl id="mobile-pdf-zoom" value={zoom} disabled={isBusy} onChange={setZoom} /></div>
                   </div>
                   <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-                    <div className="desktop-only flex flex-wrap gap-2"><button
-                      className="btn btn-primary"
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => void handleDownload()}
-                    >
-                      PDFをダウンロード
-                    </button>
-                    <button type="button" className="btn" disabled={isBusy} onClick={() => void handleBackup()}>ノートのバックアップ</button></div>
                     <div className="join shrink-0" role="group" aria-label="ページ切り替え">
                       <button type="button" className="btn join-item gap-1 px-2" aria-label="次に空白ページを追加" title="次に空白ページを追加"
                         disabled={isBusy || pages.length >= MAX_NOTE_PAGES} onClick={() => void handleInsertBlankPage()}>
@@ -737,7 +725,6 @@ export function PdfWorkspace() {
                       </button>
                     </div>
                   </div>
-                  <div className="desktop-only">{backupNotice}</div>
                 </div>
                 <PdfPage
                   key={`${documentVersion}-${pageId}`}

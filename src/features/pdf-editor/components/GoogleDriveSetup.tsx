@@ -16,12 +16,15 @@ export type DriveSaveRequest = { id: string; backup: NoteBackup } | { id: string
 type NoteActions = { captureNote?: () => NoteBackup;
   saveRequest?: DriveSaveRequest | null; onSaveRequestClose?: () => void };
 
-export function GoogleDriveSetup({ disabled = false, captureNote, saveRequest, onSaveRequestClose }: { disabled?: boolean } & NoteActions) {
+export function GoogleDriveSetup({ disabled = false, captureNote, saveRequest, onSaveRequestClose,
+  label = "Google Drive", className = "border-t border-base-300 p-4" }: {
+  disabled?: boolean; label?: string; className?: string;
+} & NoteActions) {
   const [open, setOpen] = useState(false);
   const [closedRequest, setClosedRequest] = useState<string | null>(null);
   const activeRequest = saveRequest && saveRequest.id !== closedRequest ? saveRequest : null;
-  return <div className="border-t border-base-300 p-4">
-    <button type="button" className="btn btn-sm" disabled={disabled} onClick={() => setOpen(true)}>Google Drive</button>
+  return <div className={className}>
+    <button type="button" className="btn btn-sm" disabled={disabled} onClick={() => setOpen(true)}>{label}</button>
     {(open || activeRequest) && <GoogleDriveSetupDialog captureNote={activeRequest && "backup" in activeRequest ? () => activeRequest.backup : captureNote}
       saveRequest={activeRequest} onClose={() => {
         setClosedRequest(saveRequest?.id ?? null); setOpen(false); onSaveRequestClose?.();
@@ -120,7 +123,7 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequ
       if (event.target === event.currentTarget && !event.currentTarget.open) onClose();
     }}>
     <div className="modal-box flex max-h-[calc(100dvh-2rem)] max-w-md flex-col overflow-hidden rounded-box p-0">
-      <h2 id="google-drive-setup-title" className="shrink-0 border-b border-base-300 px-5 py-4 text-lg font-bold">{restore ? "Driveバックアップを復元" : saveRequest ? "Driveに保存" : "Google Drive"}</h2>
+      <h2 id="google-drive-setup-title" className="shrink-0 border-b border-base-300 px-5 py-4 text-lg font-bold">{restore ? "Driveバックアップを復元" : saveRequest ? "Driveにバックアップ" : "Google Drive"}</h2>
       <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
         {!restore && !saveRequest && <p className="text-sm">{state.root ? "全ノート・フォルダを自動保存します。" : "接続後、全ノート・フォルダをDriveへ自動保存します。"}</p>}
         {state.account && <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm break-words">

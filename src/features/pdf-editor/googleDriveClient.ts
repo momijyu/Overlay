@@ -5,7 +5,8 @@ import { DriveHttpError } from "./driveHttpError";
 import { speedMeasurements } from "./speedMeasurements";
 
 // 通常の自動保存とは分離し、確認後の手動保存・コピー読み込みを扱う。
-type DriveAuthorization = { getAccessToken: () => string; invalidateAccessToken: (token: string) => void };
+type DriveAuthorization = { getAccessToken: () => string; invalidateAccessToken: (token: string) => void;
+  subscribe?: (listener: () => void) => () => void };
 export type GoogleDriveAccount = { id: string; displayName: string; emailAddress: string };
 export type GoogleDriveRoot = { id: string; name: string };
 const FOLDER_TYPE = "application/vnd.google-apps.folder";
@@ -17,6 +18,14 @@ const ROOT_QUERY = "trashed = false and mimeType = 'application/vnd.google-apps.
 const INVALID_RESPONSE = "Google Driveの応答を確認できませんでした。接続確認をやり直してください。";
 // multipartのメタデータ分も含め、Googleの小さいファイル向け5MBの目安を下回る範囲。
 const SINGLE_JSON_UPLOAD_BYTES = 4 * 1024 * 1024;
+const CHECK_TTL_MS = 30_000;
+type ConnectionChecks = {
+  token?: string; revision: number;
+  account?: { value: GoogleDriveAccount; at: number };
+  root?: { accountId: string; value: GoogleDriveRoot; at: number };
+};
+// 同じ認可オブジェクトの完了済み結果だけをメモリで共有する。通信・AbortControllerは共有しない。
+const connectionChecks = new WeakMap<DriveAuthorization, ConnectionChecks>();
 
 async function boundedBlob(response: Response, maximumBytes: number): Promise<Blob> {
   const length = response.headers.get("Content-Length");
@@ -65,19 +74,26 @@ function root(value: unknown): GoogleDriveRoot {
 }
 
 export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: typeof fetch = (...args) => fetch(...args)) {
+  let checks = connectionChecks.get(auth);
+  if (!checks) { checks = { revision: 0 }; connectionChecks.set(auth, checks); }
+  const shared = checks;
+  function clearChecks() { shared.revision++; shared.account = undefined; shared.root = undefined; }
+  const unsubscribe = auth.subscribe?.(() => { clearChecks(); shared.token = undefined; });
   let verified: { token: string; accountId: string } | null = null;
   let disposed = false;
   let creating = false;
   let savingNote = false;
   let cancellationVersion = 0;
   let rootLookup: { token: string; accountId: string; result: Promise<GoogleDriveRoot | null> } | null = null;
-  // 取得先の確認だけを短期間共有する。手動の接続確認と本文の競合検証は省略しない。
-  let checkedRoot: { token: string; accountId: string; root: GoogleDriveRoot; at: number } | null = null;
   const pending = new Set<AbortController>();
 
   function currentToken() {
     if (disposed) throw new Error("Google Driveの操作をキャンセルしました。");
-    return auth.getAccessToken();
+    let token: string;
+    try { token = auth.getAccessToken(); }
+    catch (error) { clearChecks(); shared.token = undefined; throw error; }
+    if (shared.token !== token) { clearChecks(); shared.token = token; }
+    return token;
   }
 
   function assertToken(token: string) {
@@ -129,6 +145,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
       if (controller.signal.aborted) throw new Error("request-aborted");
       if (response.status === 401) {
         auth.invalidateAccessToken(token);
+        clearChecks();
         verified = null;
         throw new Error("Googleへ再接続してから操作してください。");
       }
@@ -168,20 +185,33 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     }
   }
 
-  async function getAccount(): Promise<GoogleDriveAccount> {
-    verified = null; checkedRoot = null;
+  async function getAccount(options: { reuseConfirmed?: boolean } = {}): Promise<GoogleDriveAccount> {
+    const operationVersion = cancellationVersion;
     const token = currentToken();
+    const cached = shared.account;
+    if (options.reuseConfirmed && cached && Date.now() >= cached.at && Date.now() - cached.at < CHECK_TTL_MS) {
+      verified = { token, accountId: cached.value.id };
+      return { ...cached.value };
+    }
+    // 通常のgetAccountは明示的な接続確認。短期キャッシュがあってもAPIで再確認する。
+    verified = null; clearChecks();
+    const revision = shared.revision;
     const value = object(await request("about", { fields: "user(permissionId,displayName,emailAddress,me)" }, token));
     const user = object(value.user);
     if (user.me !== true) throw new Error(INVALID_RESPONSE);
     const account = { id: text(user.permissionId, 256), displayName: text(user.displayName, 256), emailAddress: text(user.emailAddress, 320) };
+    assertToken(token); assertOperation(operationVersion);
     verified = { token, accountId: account.id };
+    if (shared.revision === revision) shared.account = { value: { ...account }, at: Date.now() };
     return account;
   }
 
   async function findRoot(accountId: string): Promise<GoogleDriveRoot | null> {
     const token = accountToken(accountId);
     if (rootLookup?.token === token && rootLookup.accountId === accountId) return rootLookup.result;
+    // findRootの明示呼び出しは必ず再検索する。失敗・未検出時に古い共有結果へ戻らない。
+    shared.root = undefined;
+    const revision = ++shared.revision;
     const result = (async () => {
     const value = object(await request("files", {
       q: ROOT_QUERY, spaces: "drive", corpora: "user", pageSize: "2",
@@ -199,9 +229,9 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     try {
       const value = await result;
       assertToken(token);
-      checkedRoot = value ? { token, accountId, root: value, at: Date.now() } : null;
+      if (shared.revision === revision) shared.root = value ? { accountId, value: { ...value }, at: Date.now() } : undefined;
       return value;
-    } catch (error) { checkedRoot = null; throw error; }
+    } catch (error) { if (shared.revision === revision) shared.root = undefined; throw error; }
     finally { if (rootLookup === lookup) rootLookup = null; }
   }
 
@@ -229,9 +259,10 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
   async function noteAccess(accountId: string, rootId: string): Promise<DriveNoteAccess> {
     const operationVersion = cancellationVersion;
     const token = accountToken(accountId);
-    const currentRoot = checkedRoot?.token === token && checkedRoot.accountId === accountId
-      && checkedRoot.root.id === rootId && Date.now() - checkedRoot.at < 30000
-      ? checkedRoot.root : await findRoot(accountId);
+    const cached = shared.root;
+    const currentRoot = cached?.accountId === accountId && cached.value.id === rootId
+      && Date.now() >= cached.at && Date.now() - cached.at < CHECK_TTL_MS
+      ? cached.value : await findRoot(accountId);
     assertToken(token);
     assertOperation(operationVersion);
     if (!currentRoot || currentRoot.id !== rootId) throw new Error("専用フォルダが変更されました。接続確認をやり直してください。");
@@ -339,7 +370,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
 
   function cancelPending() {
     cancellationVersion++;
-    rootLookup = null; checkedRoot = null;
+    rootLookup = null; clearChecks();
     for (const controller of pending) controller.abort();
     pending.clear();
   }
@@ -348,6 +379,7 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     disposed = true;
     verified = null;
     cancelPending();
+    unsubscribe?.();
   }
 
   return { getAccount, findRoot, createRoot, saveNewNote, findSaveTarget, findSaveTargetByTitle, saveConfirmedNote, listNotes, loadNote,

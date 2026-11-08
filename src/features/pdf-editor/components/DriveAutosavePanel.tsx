@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { createBrowserDriveLibrary } from "../driveLibraryRuntime";
 import { readLibraryPending, readLibraryStatus, resolveLibraryPlacement } from "../driveLibraryLocal";
@@ -23,8 +23,8 @@ export function driveAutosaveStatus(rows: DriveBinding[], connection: { account:
 }
 
 // ドロワーを閉じてもマウントを維持。モーダル内の手動送信とは寿命を分ける。
-export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
-  disabled: boolean; drawerOpen: boolean; onMutationChange?: (busy: boolean) => void;
+export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange, children }: {
+  disabled: boolean; drawerOpen: boolean; onMutationChange?: (busy: boolean) => void; children?: ReactNode;
 }) {
   const [rows, setRows] = useState<DriveBinding[]>([]);
   const [connected, setConnected] = useState<ReturnType<ReturnType<typeof getGoogleDriveSession>["getConnection"]>>(null);
@@ -36,6 +36,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
   const [treePending, setTreePending] = useState(false);
   const [conflict, setConflict] = useState<LibraryConflictItem | null>(null);
   const [entities, setEntities] = useState<LibraryEntity[]>([]);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const runnerRef = useRef<ReturnType<typeof createBrowserDriveLibrary> | null>(null);
   useEffect(() => {
     let active = true;
@@ -117,16 +118,25 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange }: {
           .finally(() => { setBusy(false); onMutationChange?.(false); });
       }} />}
     <section aria-label="Drive自動保存" className="mx-4 my-3 border-t border-base-300 pt-3">
-      <h2 className="text-sm font-semibold">Drive自動保存</h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">Google Drive</h2>
+        {children}
+      </div>
+      <p className="mt-2 text-xs text-base-content/70" data-drive-connection-status>
+        {connected?.root ? matchingConnection ? "接続中・自動保存" : "接続先を確認してください。"
+          : connected ? "保存先を設定してください。" : scope ? "再接続が必要です。" : "未接続"}
+      </p>
       <p className="mt-2 text-xs">{scope ? "全ノート・フォルダをDriveへ自動保存します。" : "Drive接続後、全ノート・フォルダを自動保存します。"}</p>
       {connected?.root && <button type="button" className="btn btn-sm mt-2" disabled={disabled || busy || !supported || !matchingConnection}
         onClick={() => void retryLibrary()}>Drive一覧を更新・再試行</button>}
       {!supported && <p className="mt-2 text-xs">自動保存にはHTTPSまたはlocalhostの対応ブラウザが必要です。</p>}
-      {!matchingConnection && <p className="mt-2 text-xs">下の「Google Drive」から接続してください。</p>}
-      <p className="mt-2 text-xs text-base-content/70">端末ごとに別の保存先を作ります。未送信の間はこのブラウザに保管します。</p>
       {status && <p role="status" className="mt-2 text-xs">{status}</p>}
       {(error || rows.some((row) => row.enabled && row.error)) && <p role="alert" className="mt-2 text-xs text-error">{rows.find((row) => row.enabled && row.error)?.error || error}</p>}
-      <DriveCacheSettings visible={drawerOpen} />
+      <details className="mt-3" onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
+        <summary className="cursor-pointer py-2 text-sm">保存の詳細</summary>
+        <p className="mt-2 text-xs text-base-content/70">端末ごとに別の保存先を作ります。未送信の間はこのブラウザに保管します。</p>
+        <DriveCacheSettings visible={drawerOpen && detailsOpen} />
+      </details>
     </section>
     {!drawerOpen && status && typeof document !== "undefined" && createPortal(
       <div className="pointer-events-none fixed bottom-3 right-3 z-30 max-w-[calc(100vw-1.5rem)] rounded-box border border-base-300 bg-base-100 px-3 py-2 text-xs shadow-sm" role="status">{status}</div>, document.body)}

@@ -15,6 +15,23 @@ body {
   margin: 0;
 }
 
+/* PCではタイトル・道具・設定の3行にまとめる。道具を替えても行の高さは変えない。 */
+.editor-toolbar {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: 0.5rem 0.75rem;
+}
+.editor-toolbar [data-editor-row="title"] { grid-column: 1 / -1; grid-row: 1; }
+.editor-tools { grid-column: 1 / -1; grid-row: 2; }
+.editor-tools .btn { width: 2.75rem; height: 2.75rem; min-height: 2.75rem; }
+.editor-settings { grid-column: 1; grid-row: 3; }
+.editor-toolbar [data-editor-row="actions"] { grid-column: 2; grid-row: 3; }
+.editor-toolbar [data-editor-row="actions"] .btn { height: 2.75rem; min-height: 2.75rem; }
+.note-export-content { max-height: min(24rem, calc(100dvh - 8rem)); overflow-y: auto; overscroll-behavior: contain; }
+@media (640px <= width < 900px) {
+  .editor-settings { grid-column: 1 / -1; }
+  .editor-toolbar [data-editor-row="actions"] { grid-column: 1 / -1; grid-row: 4; justify-content: flex-end; }
+}
+
 /* 同じ条件でCSS・操作の表示先を切り替える。高さはキーボードでも変わるので判定に使わない。 */
 .mobile-only { display: none; }
 @media (width < 640px), (hover: none) and (pointer: coarse) {

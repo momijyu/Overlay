@@ -81,6 +81,93 @@ async function setup(delayMs = 0) {
 }
 async function row() { return (await listDriveBindings())[0]; }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+async function inTime(promise: Promise<unknown>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try { await Promise.race([promise, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("並列の読み取りが開始されませんでした。")), 2000);
+  })]); }
+  finally { clearTimeout(timer); }
+}
+function libraryParent(f: Awaited<ReturnType<typeof setup>>) {
+  const parent = { id: "logical_parent", name: "資料", parents: [connection.rootId],
+    mimeType: "application/vnd.google-apps.folder", ownedByMe: true, trashed: false,
+    appProperties: { overlayApp: "overlay", overlaySchema: "1", overlayRole: "library-note", overlayRootId: connection.rootId } };
+  f.files.set(parent.id, parent);
+  return parent;
+}
+
+test("親階層と3件のメタデータを並列取得し、すべての確認が終わるまで更新しない", async () => {
+  const f = await setup(); await f.runner.tick(); const binding = await row();
+  const parent = libraryParent(f);
+  f.files.get(binding.ids!.container)!.parents = [parent.id];
+  await updateDriveBinding(f.id, binding.key, (r) => ({ ...r, parentId: parent.id }));
+  await saveLocalNote({ file, noteId: f.id, expectedRevision: 1, strokesByPage: {} }); f.advance(); f.calls.length = 0;
+  const metadataStarted = deferred<void>(), ancestryStarted = deferred<void>();
+  const metadataRelease = deferred<void>(), ancestryRelease = deferred<void>();
+  let metadataCount = 0;
+  const json = f.access.json;
+  f.access.json = async (...args) => {
+    if (args[0] === `files/${parent.id}`) {
+      ancestryStarted.resolve(); await ancestryRelease.promise;
+    } else if (++metadataCount <= 3) {
+      if (metadataCount === 3) metadataStarted.resolve();
+      await metadataRelease.promise;
+    }
+    return json(...args);
+  };
+  const saving = f.runner.tick();
+  try {
+    await inTime(Promise.all([metadataStarted.promise, ancestryStarted.promise]));
+    assert.equal(f.calls.length, 0);
+    metadataRelease.resolve();
+    // 親階層の確認が残っていれば、他のメタデータが揃っても書き込まない。
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(f.calls.some((c) => /^(POST|upload|replace) /.test(c)), false);
+  } finally { metadataRelease.resolve(); ancestryRelease.resolve(); await saving; }
+  assert.equal((await row()).error, undefined);
+  assert.equal((await row()).uploadedGeneration, 2);
+  assert.equal(f.calls.filter((c) => c.startsWith("replace ")).length, 1);
+  assert.equal(f.calls.filter((c) => c.startsWith("download ")).length, 0);
+  assert.equal(f.calls.at(-1), `GET files/${binding.ids!.note}`);
+});
+
+for (const invalid of ["owner", "type", "root", "cycle", "missing", "container-parent"] as const) {
+  test(`並列取得でも親階層の異常（${invalid}）では書き込まず、未送信の編集を保持する`, async () => {
+    const f = await setup(); await f.runner.tick(); const binding = await row();
+    const parent = libraryParent(f);
+    f.files.get(binding.ids!.container)!.parents = [parent.id];
+    await updateDriveBinding(f.id, binding.key, (r) => ({ ...r, parentId: parent.id }));
+    if (invalid === "owner") parent.ownedByMe = false;
+    if (invalid === "type") parent.mimeType = "application/pdf";
+    if (invalid === "root") parent.appProperties.overlayRootId = "other_root";
+    if (invalid === "cycle") parent.parents = [parent.id];
+    if (invalid === "missing") f.files.delete(parent.id);
+    if (invalid === "container-parent") f.files.get(binding.ids!.container)!.parents = [connection.rootId];
+    await saveLocalNote({ file, noteId: f.id, expectedRevision: 1, strokesByPage: {} }); f.advance(); f.calls.length = 0;
+    const previous = f.files.get(binding.ids!.note)!.data;
+    await f.runner.tick();
+    assert.ok((await row()).error); assert.equal((await row()).uploadedGeneration, 1);
+    assert.equal(f.calls.some((c) => /^(POST|upload|replace) /.test(c)), false);
+    assert.equal(f.files.get(binding.ids!.note)!.data, previous);
+    assert.deepEqual((await loadLocalNote(f.id)).strokesByPage, {});
+  });
+}
+
+test("初回保存でも親階層を確認できなければ、予約ID以外のファイルを作成しない", async () => {
+  const f = await setup(); const binding = await row();
+  await updateDriveBinding(f.id, binding.key, (r) => ({ ...r, parentId: "missing_parent" }));
+  await f.runner.tick();
+  assert.ok((await row()).error); assert.equal((await row()).uploadedGeneration, 0);
+  assert.equal(f.files.size, 0);
+  assert.equal(f.calls.some((c) => /^(POST|upload|replace) /.test(c)), false);
+  assert.deepEqual((await loadLocalNote(f.id)).strokesByPage, strokes);
+});
+
 test("自動保存計測は待機と転送を分け、仮APIへの追加通信や本文・IDの記録をしない", async () => {
   const f = await setup(); speedMeasurements.start(); await f.runner.tick();
   const result = speedMeasurements.stop();

@@ -49,17 +49,22 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
   }
   const properties = (role: string) => ({ overlayApp: "overlay", overlaySchema: "1", overlayRole: role,
     overlayRootId: binding.rootId, overlayNoteKey: binding.key, overlayDeviceId: binding.deviceId });
-  const [folderMetadata, pdfMetadata, noteMetadata] = await Promise.all([metadata(access, container), metadata(access, pdf), metadata(access, noteId)]);
+  const parentId = binding.parentId ?? binding.rootId;
+  // 保存済みの親IDから読み取りを先行する。下のdriveFileで実際のコンテナの親とも照合し、
+  // 階層確認が成功するまでは作成・更新しない。ローカル階層だけでDriveの現状を信頼しない。
+  const ancestry = parentId === binding.rootId ? Promise.resolve()
+    : import("./driveLibraryRemote").then(({ verifyLibraryAncestry }) => verifyLibraryAncestry(access, { parents: [parentId] }, binding.rootId));
+  const [folderMetadata, pdfMetadata, noteMetadata] = await Promise.all([
+    metadata(access, container), metadata(access, pdf), metadata(access, noteId), ancestry,
+  ]);
   if (binding.uploadedGeneration > 0 && (!folderMetadata || !pdfMetadata || !noteMetadata)) {
     throw new Error("保存済みのDriveファイルが見つかりません。作り直さず停止しました。端末の内容は残っています。");
   }
-  const parentId = binding.parentId ?? binding.rootId;
   const folder = folderMetadata ?? await createOnce(access, container, () => access.json("files", { fields: DRIVE_NOTE_FIELDS }, {
     id: container, name: `${source.title} (${binding.deviceId.slice(0, 8)})`, mimeType: "application/vnd.google-apps.folder",
     parents: [parentId], appProperties: properties("note-container"),
   }));
   if (driveFile(folder, "note-container", binding.rootId, binding.key, parentId).id !== container) throw new Error("Driveの保存先が一致しません。");
-  if (parentId !== binding.rootId) await (await import("./driveLibraryRemote")).verifyLibraryAncestry(access, driveObject(folder), binding.rootId);
   const original = driveFile(pdfMetadata ?? await createOnce(access, pdf, () => access.upload({ id: pdf,
     name: source.fileName, mimeType: "application/pdf", parents: [container], appProperties: properties("pdf") }, source.pdf)),
   "pdf", binding.rootId, binding.key, container);

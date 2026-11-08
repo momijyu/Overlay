@@ -126,6 +126,9 @@ const { PenWidthControl } = await import("@/features/pdf-editor/components/PenWi
 const { EditorIcon } = await import("@/features/pdf-editor/components/EditorIcon");
 const { AppHeader } = await import("@/components/layout/AppHeader");
 const { NotebookRestoreDialog } = await import("@/features/pdf-editor/components/NotebookRestoreDialog");
+const { GoogleDriveSetup } = await import("@/features/pdf-editor/components/GoogleDriveSetup");
+const { NoteExportMenu } = await import("@/features/pdf-editor/components/NoteExportMenu");
+const { DriveAutosavePanel } = await import("@/features/pdf-editor/components/DriveAutosavePanel");
 const { DriveVersionDialog } = await import("@/features/pdf-editor/components/DriveVersionDialog");
 
 beforeEach(() => { openedHeadings = undefined; pageFails = false; openedPages = undefined; exportedPages.length = 0; states = []; refs = []; stateCursor = 0; refCursor = 0; deleteFails = false; openFails = false; pdfFails = false; persistFails = false; persistWait = null; exportFails = true; exported.length = 0; exportedTexts.length = 0; savedInputs.length = 0; deletedItems.length = 0; openedTexts = undefined; });
@@ -140,15 +143,20 @@ function render() {
 
 function find(node: React.ReactNode, predicate: (element: React.ReactElement) => boolean): React.ReactElement | undefined {
   for (const child of React.Children.toArray(node)) {
-    if (!React.isValidElement<{ children?: React.ReactNode }>(child)) continue;
+    if (!React.isValidElement<{ children?: React.ReactNode; storageControls?: React.ReactNode }>(child)) continue;
     if (predicate(child)) return child;
-    const result = find(child.props.children, predicate);
+    const result = find(child.props.children, predicate) ?? find(child.props.storageControls, predicate);
     if (result) return result;
   }
 }
 
 function props<T>(type: (props: T) => React.ReactNode): T {
   return find(render(), (element) => element.type === type)!.props as T;
+}
+
+function driveSetupProps() {
+  (button("ノート一覧を開く")!.props as { onClick: () => void }).onClick();
+  return props(GoogleDriveSetup);
 }
 
 function setup() {
@@ -170,14 +178,14 @@ test("一覧で選んだ未表示ノートをDrive保存の確認へ渡し、編
   props(NotebookSidebar).onSaveToDrive!("closed-note");
   await new Promise(setImmediate);
   assert.deepEqual(capturedNotes, [{ kind: "note", id: "closed-note" }]);
-  const request = props(NotebookDrawer).driveSaveRequest!;
+  const request = driveSetupProps().saveRequest!;
   assert.ok("backup" in request);
   assert.equal(request.backup, importedBackup);
   assert.equal(props(NotebookSidebar).currentNoteId, "other");
   assert.deepEqual(props(PdfPage).strokes, [red]);
   assert.equal(props(HistoryControls).canUndo, true);
-  props(NotebookDrawer).onDriveSaveRequestClose!();
-  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  driveSetupProps().onSaveRequestClose!();
+  assert.equal(driveSetupProps().saveRequest, null);
 });
 
 test("選択した編集中ノートは最新の確定内容を使い、保存失敗中もDBの古い内容を送らない", async () => {
@@ -187,7 +195,7 @@ test("選択した編集中ノートは最新の確定内容を使い、保存�
   props(NotebookSidebar).onSaveToDrive!("other");
   await new Promise(setImmediate);
   assert.deepEqual(capturedNotes, []);
-  const request = props(NotebookDrawer).driveSaveRequest!;
+  const request = driveSetupProps().saveRequest!;
   assert.ok("backup" in request);
   const snapshot = request.backup;
   assert.equal(snapshot.notes[0].title, "選択したノート");
@@ -200,7 +208,7 @@ test("選択ノートの取得失敗ではDrive保存を開かず、編集中の
   setup(); await openOther(); props(PdfPage).onStrokeComplete(red); captureFails = true;
   props(NotebookSidebar).onSaveToDrive!("missing");
   await new Promise(setImmediate);
-  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  assert.equal(driveSetupProps().saveRequest, null);
   assert.deepEqual(props(PdfPage).strokes, [red]);
   assert.ok(find(render(), (element) => (element.props as { role?: string }).role === "alert"));
 });
@@ -213,7 +221,7 @@ test("一括Drive保存は名前と取得口だけを渡し、編集中の1件�
     { id: "closed", title: "復元用", fileName: file.name, folderId: null, updatedAt: "2026-11-04" },
   ];
   props(NotebookSidebar).onSaveItemsToDrive!(selected);
-  const request = props(NotebookDrawer).driveSaveRequest!;
+  const request = driveSetupProps().saveRequest!;
   assert.ok("sources" in request);
   assert.deepEqual(request.sources.map((source) => source.title), ["編集中", "復元用"]);
   assert.deepEqual(capturedNotes, []);
@@ -226,26 +234,26 @@ test("一括Drive保存は名前と取得口だけを渡し、編集中の1件�
   assert.equal(request.sources[1].title, "復元用");
   assert.equal(props(NotebookSidebar).currentNoteId, "other");
   assert.equal(props(HistoryControls).canUndo, true);
-  props(NotebookDrawer).onClose(); assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  props(NotebookDrawer).onClose(); assert.equal(driveSetupProps().saveRequest, null);
 });
 
 test("一括Drive保存は空選択・整理中・重複IDを受け付けず、既存編集を変えない", () => {
   setup();
   props(NotebookSidebar).onSaveItemsToDrive!([]);
-  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  assert.equal(driveSetupProps().saveRequest, null);
   const selected: SavedNoteSummary = { id: "closed", title: "復元用", fileName: file.name, folderId: null, updatedAt: "2026-11-04" };
   props(NotebookSidebar).onSaveItemsToDrive!([selected, selected]);
-  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  assert.equal(driveSetupProps().saveRequest, null);
   props(NotebookSidebar).onMutationChange(true);
   props(NotebookSidebar).onSaveItemsToDrive!([selected]);
-  assert.equal(props(NotebookDrawer).driveSaveRequest, null);
+  assert.equal(driveSetupProps().saveRequest, null);
   assert.deepEqual(capturedNotes, []);
 });
 
 test("Drive新規保存の取得口は最新の確定内容を渡し、ローカル保存・履歴を変更しない", async () => {
   setup(); await openOther();
   props(NotebookSidebar).onRenamed("other", "Drive保存用");
-  const capture = props(NotebookDrawer).captureDriveNote!;
+  const capture = driveSetupProps().captureNote!;
   props(PdfPage).onStrokeComplete(red);
   const snapshot = capture(); // 取得口を渡した後の描画も、履歴refから読み取る。
   assert.equal(snapshot.notes[0].title, "Drive保存用");
@@ -316,7 +324,7 @@ test("ノートのバックアップは保存失敗中も最新の確定済み�
     setTimeout: (callback: () => void) => { callback(); return 0; },
   } });
   try {
-    (button("ノートのバックアップ")!.props as { onClick: () => void }).onClick();
+    props(NoteExportMenu).onBackup();
     for (let i = 0; i < 20 && refs[1].current; i++) await new Promise(setImmediate);
     assert.deepEqual(downloads, ["試験用.overlay"]);
     assert.deepEqual(backups[0].notes[0].strokesByPage[1], [red]);
@@ -435,7 +443,7 @@ function editorRow(name: string) {
 
 function assertStableToolRows() {
   const row = editorRow("tools");
-  assert.match(row.props.className!, /h-14/);
+  assert.match(row.props.className!, /h-11/);
   assert.match(row.props.className!, /overflow-x-auto/);
   assert.match(row.props.className!, /\[&>\*\]:shrink-0/);
   assert.doesNotMatch(row.props.className!, /flex-wrap/);
@@ -446,7 +454,7 @@ function assertStableToolRows() {
   assert.equal((React.Children.toArray(children[1].props.children)[0] as React.ReactElement).type, HistoryControls);
   assert.equal(children[2].type, ZoomControl);
   assert.equal(find(row, (element) => element.type === PenWidthControl), undefined);
-  assert.match(editorRow("settings").props.className!, /h-14/);
+  assert.match(editorRow("settings").props.className!, /h-11/);
   assert.match(editorRow("settings").props.className!, /overflow-x-auto/);
   assert.equal(find(editorRow("settings"), (element) => element.type === HistoryControls), undefined);
 }
@@ -507,18 +515,33 @@ test("横向き用の配置先を持ち、道具・履歴・ページ・設定�
   assert.equal(props(HistoryControls).canUndo, false);
 });
 
-test("スマホの書き出しメニューにPDFダウンロードと保管案内をまとめ、PCの出力欄も残す", () => {
+test("PCとスマホの書き出しを同じメニューへ接続し、ページ操作と分ける", () => {
   setup();
   const header = find(render(), (element) => element.type === AppHeader)!;
-  const menu = find(header, (element) => element.type === "details")!;
-  const summary = find(menu, (element) => element.type === "summary")!.props as React.ComponentProps<"summary">;
-  assert.equal(summary["aria-label"], "書き出しメニュー");
-  assert.match((menu.props as React.ComponentProps<"details">).className!, /mobile-only/);
-  assert.ok(find(menu, (element) => element.type === "button" && (element.props as { children?: string }).children === "PDFをダウンロード"));
-  assert.ok(find(menu, (element) => "data-pdf-backup-notice" in (element.props as Record<string, unknown>)));
-  const desktop = find(editorRow("actions"), (element) => element.type === "button" && (element.props as { children?: string }).children === "PDFをダウンロード")!;
-  assert.doesNotMatch((desktop.props as React.ComponentProps<"button">).className!, /desktop-only/);
-  assert.ok(find(editorRow("actions"), (element) => (element.props as { className?: string }).className?.includes("desktop-only") === true && !!find(element, (child) => child.type === "button" && (child.props as { children?: string }).children === "PDFをダウンロード")));
+  const mobile = find(header, (element) => element.type === NoteExportMenu)!;
+  const desktop = find(editorRow("title"), (element) => element.type === NoteExportMenu)!;
+  const mobileProps = mobile.props as React.ComponentProps<typeof NoteExportMenu>;
+  const desktopProps = desktop.props as React.ComponentProps<typeof NoteExportMenu>;
+  assert.equal(mobileProps.iconOnly, true);
+  assert.match(mobileProps.className!, /mobile-only/);
+  assert.equal(desktopProps.iconOnly, undefined);
+  assert.equal(mobileProps.disabled, false);
+  assert.equal(desktopProps.disabled, false);
+  assert.equal(find(editorRow("actions"), (element) => element.type === NoteExportMenu), undefined);
+  assert.equal(find(render(), (element) => "data-pdf-backup-notice" in (element.props as Record<string, unknown>)), undefined);
+  props(NotebookSidebar).onMutationChange(true);
+  assert.equal(props(NoteExportMenu).disabled, true);
+});
+
+test("Drive設定を自動保存欄へまとめ、ノート一覧を閉じても自動保存を維持する", () => {
+  setup();
+  assert.equal(props(DriveAutosavePanel).drawerOpen, false);
+  assert.equal(find(render(), (element) => element.type === GoogleDriveSetup), undefined);
+  assert.equal(driveSetupProps().label, "接続設定");
+  assert.equal(props(DriveAutosavePanel).drawerOpen, true);
+  props(NotebookDrawer).onClose();
+  assert.equal(props(DriveAutosavePanel).drawerOpen, false);
+  assert.equal(find(render(), (element) => element.type === GoogleDriveSetup), undefined);
 });
 
 test("長いノート名・保存中・保存完了でも道具の行は移動させず、状態は名前横の同じ欄に表示する", async () => {
@@ -534,7 +557,8 @@ test("長いノート名・保存中・保存完了でも道具の行は移動�
   assert.equal(find(editorRow("tools"), (element) => (element.props as { title?: string }).title === longName), undefined);
   assertStableToolRows();
   const titleChildren = React.Children.toArray(editorRow("title").props.children) as React.ReactElement<Record<string, unknown>>[];
-  assert.equal(titleChildren.length, 2);
+  assert.equal(titleChildren.length, 3);
+  assert.equal(titleChildren[2].type, NoteExportMenu);
   assert.equal(titleChildren[0].props.title, longName);
   assert.equal(titleChildren[1].props["data-editor-row"], "status");
   assert.match(String(titleChildren[1].props.className), /w-20 shrink-0 whitespace-nowrap/);
@@ -713,19 +737,15 @@ test("一覧は初期状態で閉じ、開閉してもPDFの倍率・内容・�
   assert.equal(find(render(), (element) => element.type === "aside"), undefined);
 });
 
-test("編集中はファイル選択枠を隠し、保管案内を出力付近に1つだけ残す。削除後は選択枠へ戻る", async () => {
+test("編集中はファイル選択枠と常設案内を隠し、削除後は選択枠と保管案内へ戻る", async () => {
   setup();
   function uploadArea() {
     return find(render(), (element) => element.type === "div"
       && "data-pdf-upload" in (element.props as Record<string, unknown>))!;
   }
   assert.equal((uploadArea().props as { hidden: boolean }).hidden, true);
-  const actionsContainer = find(render(), (element) => element.type === "div"
-    && React.Children.toArray((element.props as { children?: React.ReactNode }).children).some((child) =>
-      React.isValidElement<{ "data-editor-row"?: string }>(child) && child.props["data-editor-row"] === "actions"))!;
-  const rows = React.Children.toArray((actionsContainer.props as { children: React.ReactNode }).children);
-  assert.equal((rows.at(-1) as React.ReactElement<Record<string, unknown>>).props.className, "desktop-only");
-  assert.ok(find(rows.at(-1), (element) => "data-pdf-backup-notice" in (element.props as Record<string, unknown>)));
+  assert.equal(find(render(), (element) => "data-pdf-backup-notice" in (element.props as Record<string, unknown>)), undefined);
+  assert.ok(find(editorRow("title"), (element) => element.type === NoteExportMenu));
   await props(NotebookSidebar).onDelete("existing");
   assert.equal((uploadArea().props as { hidden: boolean }).hidden, false);
   assert.ok(find(render(), (element) => element.type === "p"
@@ -859,7 +879,7 @@ test("画面のテキストと付箋の更新が保存・Undo・Redo・PDF出力
   props(HistoryControls).onRedo();
   await autosave.flush();
   assert.deepEqual(props(PdfPage).texts, revised);
-  (button("PDFをダウンロード")!.props as { onClick: () => void }).onClick();
+  props(NoteExportMenu).onDownload();
   await new Promise(setImmediate);
   assert.deepEqual(exportedTexts.at(-1), { 1: revised });
   assert.deepEqual(exported.at(-1), openedStrokes);
@@ -879,7 +899,7 @@ test("PDFダウンロードは元ファイル名ではなく、変更後のノ�
   } });
   try {
     // a要素の入口だけを置き換え、OSへの実ファイル出力は行わない。
-    (button("PDFをダウンロード")!.props as { onClick: () => void }).onClick();
+    props(NoteExportMenu).onDownload();
     await new Promise(setImmediate);
     assert.deepEqual(downloads, ["自分の復習メモ.pdf"]);
     assert.equal(file.name, "sample.pdf");
@@ -968,8 +988,7 @@ test("整理中のUndoを拒否し、整理後のPDF出力には取り消し後�
   assert.deepEqual(props(PdfPage).strokes, [red]);
   props(NotebookSidebar).onMutationChange(false);
   props(HistoryControls).onUndo();
-  const download = find(render(), (element) => element.type === "button" && (element.props as { children?: string }).children === "PDFをダウンロード")!;
-  (download.props as { onClick: () => void }).onClick();
+  props(NoteExportMenu).onDownload();
   await new Promise(setImmediate);
   assert.deepEqual(exported, [{}]);
 });
@@ -1079,12 +1098,12 @@ test("白紙追加は直後へ移動して初回保存し、既存ページの�
   (button("次のページ")!.props as { onClick: () => void }).onClick();
   assert.equal(props(PdfPage).pageNumber, 3); assert.deepEqual(props(PdfPage).strokes, openedStrokes[2]);
   const layout = savedInputs.at(-1)!.pages;
-  assert.deepEqual(props(NotebookDrawer).captureDriveNote!().notes[0].pages, layout);
+  assert.deepEqual(driveSetupProps().captureNote!().notes[0].pages, layout);
   props(NotebookSidebar).onSaveItemsToDrive!([{ id: "other", title: "授業メモ" } as SavedNoteSummary]);
-  const request = props(NotebookDrawer).driveSaveRequest!;
+  const request = driveSetupProps().saveRequest!;
   assert.ok("sources" in request); assert.deepEqual((await request.sources[0].load()).notes[0].pages, layout);
-  props(NotebookDrawer).onDriveSaveRequestClose!();
-  (button("PDFをダウンロード")!.props as { onClick: () => void }).onClick(); await new Promise(setImmediate);
+  driveSetupProps().onSaveRequestClose!();
+  props(NoteExportMenu).onDownload(); await new Promise(setImmediate);
   assert.deepEqual(exportedPages.at(-1), layout);
 });
 
@@ -1113,17 +1132,17 @@ test("見出しUIを外しても既存の見出しを通常保存・バックア
   const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
   props(PdfPage).onStrokeComplete(red); await autosave.flush();
   assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);
-  const captured = props(NotebookDrawer).captureDriveNote!();
+  const captured = driveSetupProps().captureNote!();
   assert.equal(captured.schemaVersion, 4); assert.deepEqual(captured.notes[0].headingsByPage, openedHeadings);
   props(NotebookSidebar).onSaveToDrive!("other"); await new Promise(setImmediate);
-  const request = props(NotebookDrawer).driveSaveRequest!; assert.ok("backup" in request);
+  const request = driveSetupProps().saveRequest!; assert.ok("backup" in request);
   assert.deepEqual(request.backup.notes[0].headingsByPage, openedHeadings);
-  props(NotebookDrawer).onDriveSaveRequestClose!();
+  driveSetupProps().onSaveRequestClose!();
   props(NotebookSidebar).onSaveItemsToDrive!([{ id: "other", title: "授業メモ" } as SavedNoteSummary]);
-  const batch = props(NotebookDrawer).driveSaveRequest!; assert.ok("sources" in batch);
+  const batch = driveSetupProps().saveRequest!; assert.ok("sources" in batch);
   assert.deepEqual((await batch.sources[0].load()).notes[0].headingsByPage, openedHeadings);
-  props(NotebookDrawer).onDriveSaveRequestClose!();
-  (button("ノートのバックアップ")!.props as { onClick: () => void }).onClick(); await new Promise(setImmediate);
+  driveSetupProps().onSaveRequestClose!();
+  props(NoteExportMenu).onBackup(); await new Promise(setImmediate);
   assert.deepEqual(backups.at(-1)!.notes[0].headingsByPage, openedHeadings);
   props(HistoryControls).onUndo(); await autosave.flush();
   assert.deepEqual(savedInputs.at(-1)!.headingsByPage, openedHeadings);

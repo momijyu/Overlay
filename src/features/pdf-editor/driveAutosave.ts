@@ -102,7 +102,7 @@ export function createBrowserDriveAutosave() {
     access: async ({ accountId, rootId }) => {
       const token = session.auth.getAccessToken();
       if (verifiedToken !== token) {
-        if ((await client.getAccount()).id !== accountId) throw new Error("連携先のGoogleアカウントが変わりました。");
+        if ((await client.getAccount({ reuseConfirmed: true })).id !== accountId) throw new Error("連携先のGoogleアカウントが変わりました。");
         verifiedToken = token;
       }
       return client.autosaveAccess(accountId, rootId);

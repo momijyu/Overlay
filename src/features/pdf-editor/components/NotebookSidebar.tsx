@@ -8,7 +8,7 @@ import { createNoteFolder, deleteEmptyNoteFolder, loadNoteLibrary, moveNoteFolde
 import { canMoveItem, canMoveItems, libraryItems, noteItemKey, NOTE_DRAG_TYPE, readNoteDrag, type NoteDragItem } from "../noteDrag";
 import { attachNotebookTouchDrag, notebookDropAt } from "../notebookTouchDrag";
 import { toggleNotebookSelection } from "../noteSelection";
-import { buildNoteTree, canDeleteEmptyFolder, folderChoices, hasFolderNameConflict, type NoteTree } from "../noteTree";
+import { buildNoteTree, canDeleteEmptyFolder, hasFolderNameConflict, type NoteTree } from "../noteTree";
 import type { NoteLibrary, SavedNoteSummary } from "../types";
 import { NotebookActionDialog, type NotebookAction } from "./NotebookActionDialog";
 import { NotebookTree } from "./NotebookTree";
@@ -83,11 +83,6 @@ export function NotebookSidebar(props: SidebarProps) {
   );
   const selectedNote = selected?.kind === "note" ? result.library.notes.find((note) => note.id === selected.id) : undefined;
   const selectedFolder = selected?.kind === "folder" ? result.library.folders.find((folder) => folder.id === selected.id) : undefined;
-  const currentNote = result.library.notes.find((note) => note.id === props.currentNoteId);
-  // 選択中のフォルダではなく、実際に開いているノートの所属先を示す。
-  const currentNotePath = currentNote
-    ? folderChoices(result.tree).find((folder) => folder.id === currentNote.folderId)?.path ?? "一番上"
-    : null;
   const unavailable = props.disabled || isMutating || isLoading || result.error !== null;
   const canOrganize = !unavailable && result.library.foldersEnabled;
   const allItems = libraryItems(result.library);
@@ -489,11 +484,8 @@ export function NotebookSidebar(props: SidebarProps) {
   }
 
   return (
-    <nav ref={navRef} aria-labelledby="notebook-heading" className="card border border-base-300 bg-base-100 shadow-sm">
-      <div className="card-body gap-3 p-4">
-        {props.onOpenSticky && <StickyNotesPanel notes={result.library.notes} current={props.currentStickyOutline}
-          currentPageId={props.currentPageId} disabled={unavailable || !!action || selectionMode || bulkMoving || !!deleting}
-          onNavigate={props.onOpenSticky} />}
+    <nav ref={navRef} aria-labelledby="notebook-heading" className="min-w-0">
+      <div className="flex flex-col gap-3 p-4">
         <div className="flex items-center justify-between gap-2">
           <h2 id="notebook-heading" className="font-semibold">ノート</h2>
           <button type="button" className="btn btn-sm" disabled={props.disabled || isMutating || isLoading}
@@ -527,7 +519,7 @@ export function NotebookSidebar(props: SidebarProps) {
                   if (unavailable) return;
                   if (menuRef.current) menuRef.current.open = false;
                   props.onSaveToDrive?.(selectedNote.id);
-                }}>Google Driveに保存</button></li>}
+                }}>Driveにバックアップ</button></li>}
               {selectedNote && <li><button type="button" className="text-error" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "delete-note", note: selectedNote })}>ノート削除</button></li>}
               {selectedFolder && <li><button type="button" disabled={!canOrganize}
@@ -562,15 +554,15 @@ export function NotebookSidebar(props: SidebarProps) {
               if (unavailable || !checked.length) return;
               endDrag();
               props.onBackupItems?.(checked.map((item) => ({ ...item })));
-            }}>ZIPで保存</button>}
+            }}>編集用ZIPで保存</button>}
           {(props.onSaveToDrive || props.onSaveItemsToDrive) && <button type="button" className="btn btn-sm"
             disabled={unavailable || !checkedNotes.length || (!props.onSaveItemsToDrive && checked.length !== 1)}
-            title="選択したノートをDriveに保存" onClick={() => {
+            title="選択したノートをDriveに手動バックアップ" onClick={() => {
               if (unavailable || !checkedNotes.length) return;
               endDrag();
               if (props.onSaveItemsToDrive) props.onSaveItemsToDrive(checkedNotes.map((note) => ({ ...note })));
               else if (checked.length === 1) props.onSaveToDrive?.(checkedNotes[0].id);
-            }}>Driveに保存</button>}
+            }}>Driveにバックアップ</button>}
           <button type="button" className="btn btn-sm text-error" disabled={unavailable || !checked.length}
             onClick={() => {
               setMoveError(null); setMoveMessage(null);
@@ -619,14 +611,11 @@ export function NotebookSidebar(props: SidebarProps) {
                       return next;
                     })} />
                 </ul>}
-              {currentNotePath && (
-                <dl className="border-t border-base-300 pt-3 text-sm">
-                  <dt className="mb-1 text-xs text-base-content/60">開いているノートのフォルダ</dt>
-                  <dd className="break-words">{currentNotePath}</dd>
-                </dl>
-              )}
             </>
           )}
+        {props.onOpenSticky && <StickyNotesPanel notes={result.library.notes} current={props.currentStickyOutline}
+          currentPageId={props.currentPageId} disabled={unavailable || !!action || selectionMode || bulkMoving || !!deleting}
+          onNavigate={props.onOpenSticky} />}
       </div>
       {action && <NotebookActionDialog action={action} library={result.library} driveLinked={driveLinked}
         busy={props.disabled || isMutating} error={moveError} onSubmit={handleSubmit}

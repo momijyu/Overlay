@@ -15,6 +15,7 @@ Google未連携時は端末内だけにノートを保存する。連携後は�
 | ファイル | 役割 |
 | --- | --- |
 | components/PdfWorkspace.tsx | PDF選択・編集状態・ページ・保存・切り替え・書き出しの取りまとめ |
+| components/NoteExportMenu.tsx | PC・タッチ共通のPDF／編集用バックアップの選択。出力処理はWorkspaceへ渡す |
 | components/PdfPage.tsx / PenLayer.tsx | PDF.jsでページ描画、透明SVG上のペン／消しゴム操作 |
 | components/TextLayer.tsx / TextBoxEditor.tsx | テキスト・付箋の直接入力、色・サイズ・移動・確定 |
 | strokeData.ts / textData.ts / textLayout.ts / notePages.ts | 保存データ検証、文字配置、固定IDと白紙の構成 |

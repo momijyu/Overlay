@@ -16,16 +16,20 @@ function fixture() {
   const replies: Reply[] = [];
   const requests: { url: URL; init: RequestInit }[] = [];
   const invalidated: string[] = [];
+  const listeners = new Set<() => void>();
   const auth = { getAccessToken() { if (!token) throw new Error("再接続してください。"); return token; },
-    invalidateAccessToken(value: string) { invalidated.push(value); if (value === token) token = null; } };
-  const client = createGoogleDriveClient(auth, (async (url: string, init: RequestInit) => {
+    invalidateAccessToken(value: string) { invalidated.push(value); if (value === token) { token = null; listeners.forEach((listener) => listener()); } },
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  const requestFetch = (async (url: string, init: RequestInit) => {
     requests.push({ url: new URL(url), init });
     const reply = replies.shift();
     assert.ok(reply, "予定していない通信をしない");
     return reply(url, init);
-  }) as typeof fetch);
-  clients.push(client);
-  return { client, replies, requests, invalidated, changeToken: (value: string | null) => { token = value; } };
+  }) as typeof fetch;
+  const newClient = () => { const client = createGoogleDriveClient(auth, requestFetch); clients.push(client); return client; };
+  const client = newClient();
+  return { client, newClient, replies, requests, invalidated,
+    changeToken: (value: string | null) => { token = value; listeners.forEach((listener) => listener()); } };
 }
 
 async function verify(f: ReturnType<typeof fixture>) {
@@ -233,4 +237,91 @@ test("専用フォルダの重複時はデータを変えず、削除せずに�
   f.replies.push(json({ files: [folder, { ...folder, id: "folder_B" }] }));
   await assert.rejects(f.client.findRoot(user.permissionId), /マイドライブ直下に1つ残し.*別の場所へ移動.*再接続/);
   assert.ok(f.requests.every((request) => request.init.method === "GET"));
+});
+
+async function warm(f: ReturnType<typeof fixture>) {
+  await verify(f); f.replies.push(json({ files: [folder] }));
+  await f.client.findRoot(user.permissionId);
+}
+
+test("同じ認可の別インスタンスは完了済みの接続確認を共有し、応答オブジェクトの変更を持ち込まない", async () => {
+  const f = fixture(); await warm(f);
+  const next = f.newClient();
+  const account = await next.getAccount({ reuseConfirmed: true }); account.id = "changed";
+  await next.autosaveAccess(user.permissionId, folder.id);
+  assert.equal(f.requests.length, 2);
+  assert.equal((await next.getAccount({ reuseConfirmed: true })).id, user.permissionId);
+  await assert.rejects(next.autosaveAccess("other-account", folder.id), /接続確認/);
+  f.replies.push(json({ files: [{ ...folder, id: "other-root" }] }));
+  await assert.rejects(next.autosaveAccess(user.permissionId, folder.id + "_other"), /変更/);
+  assert.equal(f.requests.length, 3);
+});
+
+test("共有結果は取得から30秒で失効し、利用しても期限を延長しない", async () => {
+  let now = 1000; mock.method(Date, "now", () => now);
+  const f = fixture(); await warm(f); const next = f.newClient();
+  now += 29999;
+  await next.getAccount({ reuseConfirmed: true }); await next.autosaveAccess(user.permissionId, folder.id);
+  assert.equal(f.requests.length, 2);
+  now++;
+  f.replies.push(json({ user }), json({ files: [folder] }));
+  await next.getAccount({ reuseConfirmed: true }); await next.autosaveAccess(user.permissionId, folder.id);
+  assert.equal(f.requests.length, 4);
+});
+
+test("同じトークン文字列でも別の認可オブジェクトとは確認を共有しない", async () => {
+  const f = fixture(); await warm(f); const other = fixture();
+  other.replies.push(json({ user }), json({ files: [folder] }));
+  await other.client.getAccount({ reuseConfirmed: true }); await other.client.autosaveAccess(user.permissionId, folder.id);
+  assert.equal(f.requests.length, 2); assert.equal(other.requests.length, 2);
+});
+
+test("認可の変更・失効通知では共有確認を破棄し、同じトークンで再接続しても再確認する", async () => {
+  const f = fixture(); await warm(f); const next = f.newClient();
+  f.changeToken("token_B");
+  f.replies.push(json({ user }), json({ files: [folder] }));
+  await next.getAccount({ reuseConfirmed: true }); await next.autosaveAccess(user.permissionId, folder.id);
+  assert.equal(f.requests.length, 4);
+  f.changeToken(null); f.changeToken("token_B");
+  f.replies.push(json({ user }), json({ files: [folder] }));
+  await next.getAccount({ reuseConfirmed: true }); await next.autosaveAccess(user.permissionId, folder.id);
+  assert.equal(f.requests.length, 6);
+});
+
+test("明示的な接続・ルート再確認は共有結果を使わず、失敗後は古い結果へ戻らない", async () => {
+  const f = fixture(); await warm(f); const next = f.newClient();
+  await next.getAccount({ reuseConfirmed: true });
+  f.replies.push(json({ user })); await f.client.getAccount();
+  assert.equal(f.requests.length, 3);
+  f.replies.push(json({ files: [folder] })); await next.autosaveAccess(user.permissionId, folder.id);
+  f.replies.push(json({}, 403)); await assert.rejects(f.client.findRoot(user.permissionId));
+  f.replies.push(json({ files: [] })); await assert.rejects(next.autosaveAccess(user.permissionId, folder.id), /変更/);
+  assert.equal(f.requests.length, 6);
+  f.replies.push(json({}, 403)); await assert.rejects(f.client.getAccount());
+  f.replies.push(json({ user })); await next.getAccount({ reuseConfirmed: true });
+  assert.equal(f.requests.length, 8);
+});
+
+test("別インスタンスを閉じても進行中の通信を中断せず、完了結果で保存を続けられる", async () => {
+  const f = fixture(); await warm(f); const next = f.newClient();
+  await next.getAccount({ reuseConfirmed: true });
+  const access = await next.autosaveAccess(user.permissionId, folder.id);
+  let release!: (response: Response) => void;
+  f.replies.push(() => new Promise((resolve) => { release = resolve; }));
+  const pending = access.json("files/test-note", {}); const signal = f.requests.at(-1)!.init.signal!;
+  f.client.cancelPending(); assert.equal(signal.aborted, false);
+  release(Response.json({ id: "test-note" })); assert.deepEqual(await pending, { id: "test-note" });
+  f.replies.push(json({ files: [folder] })); await next.autosaveAccess(user.permissionId, folder.id);
+  assert.equal(f.requests.length, 4);
+});
+
+test("再確認中のキャンセル後に届いた結果を共有キャッシュへ戻さない", async () => {
+  const f = fixture(); await warm(f); const next = f.newClient(); await next.getAccount({ reuseConfirmed: true });
+  let release!: (response: Response) => void;
+  f.replies.push(() => new Promise((resolve) => { release = resolve; }));
+  const pending = f.client.findRoot(user.permissionId);
+  f.client.cancelPending(); release(Response.json({ files: [folder] }));
+  await assert.rejects(pending, /キャンセル/);
+  f.replies.push(json({ files: [] })); await assert.rejects(next.autosaveAccess(user.permissionId, folder.id), /変更/);
+  assert.equal(f.requests.length, 4);
 });
