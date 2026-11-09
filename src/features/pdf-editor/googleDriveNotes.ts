@@ -1,5 +1,6 @@
 import { checkPageBindings } from "./notePages";
 import { BACKUP_LIMITS, readNoteBackup, type NoteBackup } from "./noteBackupData";
+import { speedMeasurements } from "./speedMeasurements";
 import { DRIVE_NOTE_FIELDS, DRIVE_NOTE_SUFFIX, driveFile, driveId, driveNoteSummary, driveObject,
   readDriveManifest, singleDriveNote, type DriveNoteManifest, type DriveNoteSummary, type DriveOverwriteTarget } from "./googleDriveNoteData";
 
@@ -119,12 +120,32 @@ export async function loadDriveNote(access: DriveNoteAccess, rootId: string, not
   return (await loadDriveNoteDetails(access, rootId, noteId)).backup;
 }
 
-export async function loadDriveNoteDetails(access: DriveNoteAccess, rootId: string, noteId: string, initialMetadata?: unknown) {
+export async function loadDriveNoteDetails(access: DriveNoteAccess, rootId: string, noteId: string, initialMetadata?: unknown,
+  options: { readCachedPdf?: () => Promise<Blob | undefined> } = {}) {
   const { manifest, metadata, summary, pdfMetadata } = await readDriveSource(access, rootId, noteId, initialMetadata);
   const expectedVersion = version(metadata.version);
+  const readPdf = async () => {
+    const span = speedMeasurements.begin("drive.pdf");
+    try {
+      const { sha256 } = await import("./driveAutosaveRemote");
+      // 保存先・所有者・サイズを今回の通信で検証済み。端末の記録値だけでは再利用しない。
+      const checksum = pdfMetadata.sha256Checksum;
+      if (typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum) && options.readCachedPdf) {
+        const cached = await options.readCachedPdf();
+        if (cached?.size === manifest.pdfBytes && await sha256(cached) === checksum) {
+          span.finish("ok", { pdfReused: true, pdfBytes: cached.size });
+          return { pdf: cached, pdfHash: checksum };
+        }
+      }
+      const pdf = await access.download(manifest.pdfId, BACKUP_LIMITS.bytes);
+      const pdfHash = await sha256(pdf);
+      span.finish("ok", { pdfReused: false, pdfBytes: pdf.size });
+      return { pdf, pdfHash };
+    } catch (error) { span.finish("error"); throw error; }
+  };
   // 早期の二重取得をやめ、PDF取得と並行して後段の版を確認する。
-  const [pdf, latestValue] = await Promise.all([
-    access.download(manifest.pdfId, BACKUP_LIMITS.bytes),
+  const [{ pdf, pdfHash }, latestValue] = await Promise.all([
+    readPdf(),
     access.json(`files/${noteId}`, { fields: DRIVE_NOTE_FIELDS }),
   ]);
   const latest = driveNoteSummary(latestValue, rootId);
@@ -133,7 +154,6 @@ export async function loadDriveNoteDetails(access: DriveNoteAccess, rootId: stri
     throw new Error("取得中にDriveノートが変わりました。再度開いてください。");
   }
   if (pdf.size !== manifest.pdfBytes || !((await pdf.slice(0, 1024).text()).includes("%PDF-"))) throw new Error("DriveノートのPDFが不正です。");
-  const pdfHash = await (await import("./driveAutosaveRemote")).sha256(pdf);
   if (pdfMetadata.sha256Checksum !== undefined && pdfMetadata.sha256Checksum !== pdfHash) throw new Error("DriveのPDFの取得結果が一致しません。");
   if (manifest.pages || manifest.headingsByPage) {
     const { PDFDocument } = await import("pdf-lib");

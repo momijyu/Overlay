@@ -25,22 +25,24 @@ export function NotebookMoveDialog({ items, library, busy, error, onClose, onSub
   }
   return <dialog ref={ref} className="modal" aria-labelledby="notebook-move-heading"
     onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
-    <div className="modal-box max-w-md rounded-box">
-      <h3 id="notebook-move-heading" className="mb-4 text-lg font-semibold">選択した項目を移動</h3>
-      <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-3">
-        <p>{items.length}件選択中</p>
-        <p className="text-sm">選んだフォルダの中身は、そのまま一緒に移動します。</p>
-        <label className="label" htmlFor="notebook-bulk-destination">移動先</label>
-        <select id="notebook-bulk-destination" className="select w-full" value={destination}
-          disabled={busy} onChange={(event) => setDestination(event.target.value)}>
-          <option value="" disabled>移動先を選択</option>
-          {choices.map((choice) => <option key={choice.id} value={choice.id}
-            disabled={!canMoveItems(items, choice.id === "root" ? null : choice.id, library)}>{choice.path}</option>)}
-        </select>
-        {!choices.some((choice) => canMoveItems(items, choice.id === "root" ? null : choice.id, library)) &&
-          <p role="status" className="text-sm">移動先がありません。同名フォルダや選択範囲を確認してください。</p>}
-        {error && <p role="alert" className="text-error">{error}</p>}
-        <div className="modal-action mt-2">
+    <div className="modal-box flex max-h-[calc(100dvh-2rem)] max-w-md flex-col overflow-hidden rounded-box">
+      <h3 id="notebook-move-heading" className="mb-4 shrink-0 text-lg font-semibold">選択した項目を移動</h3>
+      <form onSubmit={(event) => void submit(event)} className="flex min-h-0 flex-1 flex-col">
+        <div data-notebook-move-scroll className="min-h-0 space-y-3 overflow-y-auto overscroll-contain [overflow-wrap:anywhere]">
+          <p>{items.length}件選択中</p>
+          <p className="text-sm">選んだフォルダの中身は、そのまま一緒に移動します。</p>
+          <label className="label" htmlFor="notebook-bulk-destination">移動先</label>
+          <select id="notebook-bulk-destination" className="select w-full" value={destination}
+            disabled={busy} onChange={(event) => setDestination(event.target.value)}>
+            <option value="" disabled>移動先を選択</option>
+            {choices.map((choice) => <option key={choice.id} value={choice.id}
+              disabled={!canMoveItems(items, choice.id === "root" ? null : choice.id, library)}>{choice.path}</option>)}
+          </select>
+          {!choices.some((choice) => canMoveItems(items, choice.id === "root" ? null : choice.id, library)) &&
+            <p role="status" className="text-sm">移動先がありません。同名フォルダや選択範囲を確認してください。</p>}
+          {error && <p role="alert" className="text-error">{error}</p>}
+        </div>
+        <div className="modal-action mt-4 shrink-0 flex-wrap">
           <button type="button" className="btn" disabled={busy} onClick={onClose}>キャンセル</button>
           <button type="submit" className="btn btn-primary" disabled={busy || !valid}>{busy ? "移動中…" : "移動"}</button>
         </div>

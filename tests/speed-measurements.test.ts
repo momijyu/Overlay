@@ -35,11 +35,11 @@ test("停止・開始・消去をまたぐ遅い処理は次の記録へ混入�
 test("ログは許可した数値・列挙値だけを保存し、名前・ID・URL・例外本文を受け入れない", () => {
   const log = createSpeedMeasurements(() => 0); log.start();
   const unsafe = { pdfBytes: 100, pageCount: NaN, height: -1, width: Number.MAX_VALUE,
-    requestKind: "account", method: "GET", firstUpload: false,
+    requestKind: "account", method: "GET", firstUpload: false, pdfReused: true, connectionCheck: "root-hit",
     title: "秘密資料", token: "secret-token", id: "account-id", url: "https://private.example", error: "private-error" } as SpeedInfo;
   log.begin("note.read", unsafe).finish("ok", { bodyMs: Infinity, headersMs: 1.234, method: "secret-token" } as unknown as SpeedInfo);
   const result = log.stop(); const info = result.records[0].info;
-  assert.deepEqual(Object.keys(info).sort(), ["firstUpload", "headersMs", "method", "pdfBytes", "requestKind", "width"]);
+  assert.deepEqual(Object.keys(info).sort(), ["connectionCheck", "firstUpload", "headersMs", "method", "pdfBytes", "pdfReused", "requestKind", "width"]);
   assert.equal(info.headersMs, 1.23); assert.ok(Number.isFinite(info.width));
   assert.doesNotMatch(JSON.stringify(result), /秘密|secret|private|account-id/);
 });
@@ -67,4 +67,11 @@ test("時計が使えない時にもアプリ処理を妨げない", () => {
   const log = createSpeedMeasurements(() => { throw new Error("unavailable"); });
   log.start(); log.begin("note.open").finish();
   assert.equal(log.stop().records[0].durationMs, 0);
+});
+
+
+test("接続判定と元PDF再利用は列挙値・真偽値だけを残す", () => {
+  const log = createSpeedMeasurements(() => 0); log.start();
+  log.begin("drive.connection", { connectionCheck: "secret-account", pdfReused: "secret-file" } as unknown as SpeedInfo).finish();
+  assert.deepEqual(log.stop().records[0].info, {});
 });

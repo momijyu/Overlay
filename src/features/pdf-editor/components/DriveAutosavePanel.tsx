@@ -41,6 +41,7 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange, chi
   useEffect(() => {
     let active = true;
     let refreshing = false;
+    let refreshRequested = false;
     const session = getGoogleDriveSession();
     const runner = createBrowserDriveLibrary();
     runnerRef.current = runner;
@@ -57,24 +58,34 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange, chi
       if (canSync) void runner.tick().then((completed) => { if (active && completed) setError(null); }).catch(showFailure);
     };
     const refresh = async () => {
-      if (refreshing || !active) return;
+      if (!active) return;
+      // DB確認中の接続・送信完了通知も取りこぼさず、重複分は次の1回にまとめる。
+      if (refreshing) { refreshRequested = true; return; }
       refreshing = true;
       try {
         const current = await listDriveBindings();
-        const connection = session.getConnection();
         const library = await readLibraryPending();
         if (!active) return;
+        const connection = session.getConnection();
         setSupported(canSync);
         setRows((previous) => JSON.stringify(previous) === JSON.stringify(current) ? previous : current);
         setConnected((previous) => JSON.stringify(previous) === JSON.stringify(connection) ? previous : connection);
         setScope((previous) => JSON.stringify(previous) === JSON.stringify(library.scope) ? previous : library.scope);
         setTreePending(library.pending);
       } catch (cause) { showFailure(cause); }
-      finally { refreshing = false; }
+      finally {
+        refreshing = false;
+        if (active && refreshRequested) { refreshRequested = false; void refresh(); }
+      }
     };
     const changed = () => { void refresh(); run(); };
+    const connectionChanged = () => {
+      // DBを待たず失効・再接続を表示する。取得完了時も最新の認可を読み直す。
+      if (active) setConnected(session.getConnection());
+      changed();
+    };
     const unsubscribeQueue = subscribeDriveQueue(changed);
-    const unsubscribeSession = session.subscribe(changed);
+    const unsubscribeSession = session.subscribe(connectionChanged);
     // 送信の時刻判定は軽いハートビート。UIは変更通知と別タブ用の低頻度確認で更新する。
     const heartbeat = setInterval(run, 1000);
     const interval = setInterval(() => { void refresh(); }, 5000);

@@ -52,7 +52,7 @@ test("初期状態は閉じた左端のダイアログで、開くボタンは�
   assert.match(html, /max-w-\[calc\(100vw-2rem\)\]/);
   assert.match(html, /motion-reduce:transition-none/);
   assert.match(html, /modal-box[^\"]*rounded-none/);
-  assert.match(html, /class="flex items-center justify-between gap-2 px-4 pt-3 pb-3"/);
+  assert.match(html, /flex shrink-0 items-center justify-between/);
 });
 
 test("開閉状態をnative dialogへ同期し、開いているdialogを二重に開かない", () => {
@@ -74,6 +74,20 @@ test("PDF追加・ノート一覧・Drive設定・バックアップ読み込み
   assert.ok(html.indexOf("PDFを追加") < html.indexOf("ノート一覧の目印"));
   assert.ok(html.indexOf("ノート一覧の目印") < html.indexOf("Drive設定の目印"));
   assert.ok(html.indexOf("Drive設定の目印") < html.indexOf("バックアップを読み込む"));
+});
+
+test("長い一覧だけをスクロールし、閉じるボタンを固定領域へ残す。読み込み候補は本文内に展開する", () => {
+  const node = NotebookDrawer({ open: true, busy: false, pdfOpenDisabled: false, onFileChange: () => {},
+    onBackupFileChange: () => {}, onClose: () => {}, children: React.createElement("nav", null, "長い一覧") });
+  const all = elements(node);
+  const scroll = all.find((entry) => "data-notebook-scroll" in entry.props)!;
+  assert.ok(scroll);
+  assert.match(String(scroll.props.className), /min-h-0 flex-1 overflow-y-auto/);
+  const content = elements(scroll);
+  assert.equal(content.find((entry) => entry.props["aria-label"] === "ノート一覧を閉じる"), undefined);
+  assert.ok(all.some((entry) => entry.props["aria-label"] === "ノート一覧を閉じる"));
+  assert.ok(content.some((entry) => entry.props.children === "ファイルから読み込む"));
+  assert.doesNotMatch(renderToStaticMarkup(node), /dropdown-content|class="dropdown/);
 });
 
 test("閉じる、背景ボタンを閉じる処理へ接続する", () => {

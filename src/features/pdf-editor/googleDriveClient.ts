@@ -190,9 +190,12 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     const token = currentToken();
     const cached = shared.account;
     if (options.reuseConfirmed && cached && Date.now() >= cached.at && Date.now() - cached.at < CHECK_TTL_MS) {
+      speedMeasurements.begin("drive.connection", { connectionCheck: "account-hit" }).finish();
       verified = { token, accountId: cached.value.id };
       return { ...cached.value };
     }
+    speedMeasurements.begin("drive.connection", { connectionCheck: !options.reuseConfirmed ? "account-explicit"
+      : cached ? "account-expired" : "account-missing" }).finish();
     // 通常のgetAccountは明示的な接続確認。短期キャッシュがあってもAPIで再確認する。
     verified = null; clearChecks();
     const revision = shared.revision;
@@ -207,8 +210,13 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
   }
 
   async function findRoot(accountId: string): Promise<GoogleDriveRoot | null> {
+    return lookupRoot(accountId, "root-explicit");
+  }
+
+  async function lookupRoot(accountId: string, reason: import("./speedMeasurements").ConnectionCheck): Promise<GoogleDriveRoot | null> {
     const token = accountToken(accountId);
     if (rootLookup?.token === token && rootLookup.accountId === accountId) return rootLookup.result;
+    speedMeasurements.begin("drive.connection", { connectionCheck: reason }).finish();
     // findRootの明示呼び出しは必ず再検索する。失敗・未検出時に古い共有結果へ戻らない。
     shared.root = undefined;
     const revision = ++shared.revision;
@@ -260,9 +268,12 @@ export function createGoogleDriveClient(auth: DriveAuthorization, requestFetch: 
     const operationVersion = cancellationVersion;
     const token = accountToken(accountId);
     const cached = shared.root;
-    const currentRoot = cached?.accountId === accountId && cached.value.id === rootId
+    const reuseRoot = cached?.accountId === accountId && cached.value.id === rootId
       && Date.now() >= cached.at && Date.now() - cached.at < CHECK_TTL_MS
-      ? cached.value : await findRoot(accountId);
+      ? cached.value : undefined;
+    if (reuseRoot) speedMeasurements.begin("drive.connection", { connectionCheck: "root-hit" }).finish();
+    const currentRoot = reuseRoot ?? await lookupRoot(accountId, !cached ? "root-missing"
+      : cached.accountId !== accountId || cached.value.id !== rootId ? "root-mismatch" : "root-expired");
     assertToken(token);
     assertOperation(operationVersion);
     if (!currentRoot || currentRoot.id !== rootId) throw new Error("専用フォルダが変更されました。接続確認をやり直してください。");

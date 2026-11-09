@@ -173,8 +173,19 @@ function checkDuplicate(name: string, parentId: string | null, library: NoteLibr
   if (hasFolderNameConflict(name, parentId, library, exceptId)) throw new Error("同じ場所に同じ名前のフォルダがあります。");
 }
 
-export async function loadNoteLibrary(): Promise<NoteLibrary> {
-  return withLocalTransaction(["noteSummaries", "folders"], "readonly", readLibrary);
+export async function loadNoteLibrary(options: { localOnly?: boolean } = {}): Promise<NoteLibrary> {
+  if (!options.localOnly) return withLocalTransaction(["noteSummaries", "folders"], "readonly", readLibrary);
+  return withLocalTransaction(["noteSummaries", "folders", "notes", "pdfs"], "readonly", async (transaction) => {
+    // 一覧要約はキャッシュ整理後も残る。本文・PDFを読む代わりにキーだけで両方の存在を確認する。
+    // 表示だけを絞り、Drive参照・階層・未送信内容は書き換えない。
+    const [library, noteKeys, pdfKeys] = await Promise.all([
+      readLibrary(transaction),
+      readRequest(transaction.objectStore("notes").getAllKeys()),
+      readRequest(transaction.objectStore("pdfs").getAllKeys()),
+    ]);
+    const noteIds = new Set(noteKeys), pdfIds = new Set(pdfKeys);
+    return { ...library, notes: library.notes.filter((note) => noteIds.has(note.id) && pdfIds.has(note.id)) };
+  });
 }
 
 export async function saveLocalNote(input: {

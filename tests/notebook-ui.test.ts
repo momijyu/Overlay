@@ -102,6 +102,28 @@ function dialog(action: NotebookAction, busy = false, error: string | null = nul
   }));
 }
 
+test("名前変更・削除・移動・復元の長い本文はスクロールし、操作ボタンはその外へ残す", () => {
+  const nodes = [
+    createElement(NotebookActionDialog, { action: { kind: "edit-note", note: library.notes[0] }, library,
+      busy: false, error: "長いエラー".repeat(100), onClose() {}, onSubmit: async () => {} }),
+    createElement(NotebookDeleteDialog, { items: libraryItems(library), library,
+      busy: false, error: null, onClose() {}, onSubmit: async () => {} }),
+    createElement(NotebookMoveDialog, { items: [{ kind: "note", id: "note" }], library,
+      busy: false, error: null, onClose() {}, onSubmit: async () => {} }),
+    createElement(NotebookRestoreDialog, { backup: { schemaVersion: 1, kind: "folder", name: "バックアップ", folders: [], notes: [] },
+      busy: false, error: null, onClose() {}, onRestore() {} }),
+  ];
+  for (const node of nodes) {
+    const html = renderToStaticMarkup(node);
+    assert.match(html, /max-h-\[calc\(100dvh-2rem\)\]/);
+    const contentStart = html.indexOf("data-notebook-");
+    const actionsStart = html.indexOf('class="modal-action');
+    assert.ok(contentStart > 0 && actionsStart > contentStart);
+    assert.doesNotMatch(html.slice(contentStart, actionsStart), />キャンセル</);
+    assert.match(html.slice(actionsStart), /shrink-0.*キャンセル/);
+  }
+});
+
 test("一括削除の確認は子を含む件数・名前・階層と取消不可を表示し、キャンセルを残す", () => {
   const html = renderToStaticMarkup(createElement(NotebookDeleteDialog, {
     items: libraryItems(library), library, busy: false, error: null, onClose: () => {}, onSubmit: async () => {},
@@ -115,7 +137,7 @@ test("一括削除の確認は子を含む件数・名前・階層と取消不�
   assert.match(html, /未保存の変更も失われます/);
   assert.match(html, /キャンセル/);
   assert.match(html, /type="submit" class="btn btn-error">削除/);
-  assert.match(html, /modal-box max-w-md rounded-box/);
+  assert.match(html, /modal-box[^"]*max-w-md[^"]*rounded-box/);
 });
 
 test("未選択の子を含むフォルダは確認でも削除を拒否し、処理中・失敗の表示に対応する", () => {
@@ -142,7 +164,7 @@ test("ノート・フォルダの管理画面はサイドメニューの片側�
   ];
   for (const action of actions) {
     const html = dialog(action);
-    assert.match(html, /<div class="modal-box max-w-md rounded-box">/);
+    assert.match(html, /<div class="modal-box[^"]*max-w-md[^"]*rounded-box">/);
     assert.doesNotMatch(html, /modal-start|rounded-none/);
   }
 });
@@ -342,7 +364,7 @@ test("一括移動画面は移動先の指定を要求し、自己・子孫・�
   assert.match(html, /type="submit"[^>]*disabled=""/);
   assert.match(html, /キャンセル/);
   assert.match(html, /role="alert"[^>]*>保存失敗/);
-  assert.match(html, /modal-box max-w-md rounded-box/);
+  assert.match(html, /modal-box[^"]*max-w-md[^"]*rounded-box/);
 });
 
 test("一覧は名前を直接操作でき、選択・移動先を強調する", () => {

@@ -5,6 +5,7 @@ import { fitTextNote, textNoteLayout, TEXT_PADDING, STICKY_BACKGROUND } from "..
 import type { TextNote } from "../types";
 import { TextSizeControl } from "./TextSizeControl";
 import { isPenColor, PEN_COLOR } from "../penStyle";
+import { textEditorOptionsPosition } from "../textEditorPlacement";
 
 export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, existing, openedByPointer = false, onCommit, onCancel, onDelete, onPreview }: {
   note: TextNote;
@@ -140,6 +141,44 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
   try { layout = textNoteLayout(fitted, pageWidth, font, pageHeight); }
   catch { layout = textNoteLayout({ ...fitted, text: "" }, pageWidth, font, pageHeight); }
   const leading = layout.lineHeight - (font.ascent - font.descent) / font.unitsPerEm * fitted.fontSize;
+  const optionsRef = useRef<HTMLDivElement>(null);
+  const repositionRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const panel = root.current, options = optionsRef.current;
+    if (!panel || !options || typeof window.getComputedStyle !== "function") return;
+    function reposition() {
+      // タッチ用の下部入力パネルはCSS側で配置する。向き変更後も同じ要素を使う。
+      if (window.getComputedStyle(options!).position !== "absolute") return;
+      const visual = window.visualViewport;
+      const viewport = { left: visual?.offsetLeft ?? 0, top: visual?.offsetTop ?? 0,
+        right: (visual?.offsetLeft ?? 0) + (visual?.width ?? window.innerWidth),
+        bottom: (visual?.offsetTop ?? 0) + (visual?.height ?? window.innerHeight) };
+      const clipping = panel!.closest(".pdf-viewport")?.getBoundingClientRect();
+      if (clipping) {
+        viewport.left = Math.max(viewport.left, clipping.left); viewport.top = Math.max(viewport.top, clipping.top);
+        viewport.right = Math.min(viewport.right, clipping.right); viewport.bottom = Math.min(viewport.bottom, clipping.bottom);
+      }
+      const size = options!.getBoundingClientRect();
+      const position = textEditorOptionsPosition(panel!.getBoundingClientRect(), size.width, size.height, viewport, pageScale);
+      for (const [name, value] of Object.entries(position)) options!.style.setProperty(`--editor-options-${name}`, `${value}px`);
+    }
+    repositionRef.current = reposition;
+    reposition();
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(reposition);
+    observer?.observe(panel); observer?.observe(options);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    window.visualViewport?.addEventListener("resize", reposition);
+    window.visualViewport?.addEventListener("scroll", reposition);
+    return () => {
+      repositionRef.current = () => {};
+      observer?.disconnect(); window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+      window.visualViewport?.removeEventListener("resize", reposition);
+      window.visualViewport?.removeEventListener("scroll", reposition);
+    };
+  }, [pageScale]);
+  useEffect(() => { repositionRef.current(); }, [fitted.x, fitted.y, layout.width, layout.height]);
 
   return <div className="text-editor-surface absolute left-0 top-0 pointer-events-none" style={{ width: pageWidth, height: pageHeight,
     transform: `scale(${pageScale})`, transformOrigin: "top left" }}>
@@ -172,9 +211,9 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
           if (event.key === "Escape") { event.preventDefault(); cancel(); }
           else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); finish(); }
         }} />
-      <div className="text-editor-options absolute left-0 w-max max-w-none space-y-1 bg-base-100 p-1"
-        style={fitted.y * pageHeight * pageScale < 90 ? { top: "100%", transform: `scale(${1 / pageScale})`, transformOrigin: "top left" }
-          : { bottom: "100%", transform: `scale(${1 / pageScale})`, transformOrigin: "bottom left" }}>
+      <div ref={optionsRef} className="text-editor-options absolute w-72 space-y-1 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm"
+        style={{ left: "var(--editor-options-left, 0px)", top: "var(--editor-options-top, 100%)",
+          transform: `scale(${1 / pageScale})`, transformOrigin: "top left" }}>
         <TextSizeControl value={fontSize} onChange={changeSize} />
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1 text-sm">文字色
@@ -187,7 +226,8 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
               onChange={(event) => changeColor("backgroundColor", event.target.value)} />
           </label>}
         </div>
-        <div className="text-editor-actions flex gap-1" onPointerDown={(event) => event.preventDefault()}>
+        {error && <p className="text-editor-error text-sm text-error [overflow-wrap:anywhere]" role="alert">{error}</p>}
+        <div className="text-editor-actions flex flex-wrap gap-1" onPointerDown={(event) => event.preventDefault()}>
           <button type="button" className="btn btn-xs" onClick={() => finish()}>完了</button>
           <button type="button" className="btn btn-xs" onClick={cancel}>キャンセル</button>
           {onDelete && <button type="button" className="btn btn-xs" onClick={() => {
@@ -195,7 +235,6 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
           }}>削除</button>}
         </div>
       </div>
-      {error && <p className="text-editor-error absolute left-0 top-full bg-base-100 p-1 text-sm text-error" role="alert">{error}</p>}
     </div>
   </div>;
 }

@@ -18,6 +18,11 @@ import { StickyNotesPanel } from "./StickyNotesPanel";
 import type { CurrentStickyOutline } from "../stickyOutline";
 import { readNoteDriveStatuses, type NoteDriveStatus } from "../noteDriveStatus";
 import { subscribeDriveQueue } from "../driveQueueEvents";
+import { getGoogleDriveSession } from "../googleDriveSession";
+
+function connectionKey(connection: ReturnType<ReturnType<typeof getGoogleDriveSession>["getConnection"]>) {
+  return connection?.root ? JSON.stringify([connection.account.id, connection.root.id]) : null;
+}
 
 type SidebarProps = {
   refreshVersion: number;
@@ -44,7 +49,6 @@ const emptyLibrary: NoteLibrary = { notes: [], folders: [], foldersEnabled: true
 
 export function NotebookSidebar(props: SidebarProps) {
   const [retry, setRetry] = useState(0);
-  const requestKey = `${props.refreshVersion}:${retry}`;
   const [result, setResult] = useState<{
     key: string;
     library: NoteLibrary;
@@ -76,20 +80,32 @@ export function NotebookSidebar(props: SidebarProps) {
   const [driveLinked, setDriveLinked] = useState(false);
   const [driveStatuses, setDriveStatuses] = useState<Record<string, NoteDriveStatus>>({});
   const [driveStatusError, setDriveStatusError] = useState<string | null>(null);
+  const [connectedScope, setConnectedScope] = useState<string | null>(null);
+  const requestKey = `${props.refreshVersion}:${retry}${connectedScope ? `:${connectedScope}` : ""}`;
   const { onDestinationChange } = props;
   const isLoading = result.key !== requestKey;
+  // 接続が切り替わった直後も、前の取得結果や付箋を読み込み中の画面へ残さない。
+  const library = isLoading ? emptyLibrary : result.library;
   const selected = selection === "root" ? null : selection ?? (
     props.currentNoteId ? { kind: "note" as const, id: props.currentNoteId } : null
   );
-  const selectedNote = selected?.kind === "note" ? result.library.notes.find((note) => note.id === selected.id) : undefined;
-  const selectedFolder = selected?.kind === "folder" ? result.library.folders.find((folder) => folder.id === selected.id) : undefined;
+  const selectedNote = selected?.kind === "note" ? library.notes.find((note) => note.id === selected.id) : undefined;
+  const selectedFolder = selected?.kind === "folder" ? library.folders.find((folder) => folder.id === selected.id) : undefined;
   const unavailable = props.disabled || isMutating || isLoading || result.error !== null;
-  const canOrganize = !unavailable && result.library.foldersEnabled;
-  const allItems = libraryItems(result.library);
+  const canOrganize = !unavailable && library.foldersEnabled;
+  const allItems = libraryItems(library);
   const checked = allItems.filter((item) => checkedItems.has(noteItemKey(item)));
-  const checkedNotes = result.library.notes.filter((note) => checkedItems.has(`note:${note.id}`));
+  const checkedNotes = library.notes.filter((note) => checkedItems.has(`note:${note.id}`));
 
   useEffect(() => subscribeLibraryChanged(() => setRetry((value) => value + 1)), []);
+
+  useEffect(() => {
+    const session = getGoogleDriveSession();
+    const changed = () => setConnectedScope(connectionKey(session.getConnection()));
+    const unsubscribe = session.subscribe(changed);
+    changed();
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     if (props.visible === false) return;
@@ -135,8 +151,8 @@ export function NotebookSidebar(props: SidebarProps) {
         setMoveError(null);
         setMoveMessage(null);
         const name = item.kind === "folder"
-          ? result.library.folders.find((folder) => folder.id === item.id)?.name
-          : result.library.notes.find((note) => note.id === item.id)?.title;
+          ? library.folders.find((folder) => folder.id === item.id)?.name
+          : library.notes.find((note) => note.id === item.id)?.title;
         setTouchPreview({ ...point, name: name ?? "" });
         touchCallbacks.current?.onMove(point);
       },
@@ -164,7 +180,7 @@ export function NotebookSidebar(props: SidebarProps) {
         const item = dragRef.current;
         const destination = navRef.current ? notebookDropAt(navRef.current, point.x, point.y) : undefined;
         endDrag();
-        if (item && destination !== undefined && canMoveItem(item, destination, result.library)) void handleMove(item, destination);
+        if (item && destination !== undefined && canMoveItem(item, destination, library)) void handleMove(item, destination);
       },
       onCancel: endDrag,
     };
@@ -194,8 +210,9 @@ export function NotebookSidebar(props: SidebarProps) {
     let active = true;
     async function refresh() {
       try {
-        const library = await loadNoteLibrary();
         const linked = await getLibraryScope();
+        const showCloud = !!linked && connectedScope === JSON.stringify([linked.accountId, linked.rootId]);
+        const library = await loadNoteLibrary({ localOnly: !showCloud });
         if (active) setDriveLinked(!!linked);
         const tree = buildNoteTree(library.folders, library.notes);
         if (active) setResult({ key: requestKey, library, tree, error: null });
@@ -210,7 +227,7 @@ export function NotebookSidebar(props: SidebarProps) {
     }
     void refresh();
     return () => { active = false; };
-  }, [requestKey]);
+  }, [requestKey, connectedScope]);
 
   useEffect(() => {
     if (moveMessage !== "移動しました。") return;
@@ -227,7 +244,7 @@ export function NotebookSidebar(props: SidebarProps) {
       while (id && !visited.has(id)) {
         visited.add(id);
         next.add(id);
-        id = result.library.folders.find((folder) => folder.id === id)?.parentId ?? null;
+        id = library.folders.find((folder) => folder.id === id)?.parentId ?? null;
       }
       return next;
     });
@@ -248,13 +265,13 @@ export function NotebookSidebar(props: SidebarProps) {
       return;
     }
     // 確認画面の表示後も、APIを呼ぶ直前に表示中の一覧で検証する。
-    if (action.kind === "delete-folder" && !canDeleteEmptyFolder(action.folder.id, result.library)) {
+    if (action.kind === "delete-folder" && !canDeleteEmptyFolder(action.folder.id, library)) {
       setMoveError("空のフォルダだけ削除できます。");
       return;
     }
     if ((action.kind === "create-folder" || action.kind === "rename-folder")
       && hasFolderNameConflict(name, action.kind === "rename-folder" ? action.folder.parentId : folderId,
-        result.library, action.kind === "rename-folder" ? action.folder.id : undefined)) {
+        library, action.kind === "rename-folder" ? action.folder.id : undefined)) {
       setMoveError("同じ場所に同じ名前のフォルダがあります。");
       return;
     }
@@ -324,7 +341,7 @@ export function NotebookSidebar(props: SidebarProps) {
   }
 
   function startDrag(event: DragEvent<HTMLElement>, item: NoteDragItem) {
-    if (unavailable || action !== null || selectionMode || bulkMoving || !result.library.foldersEnabled || mutationRef.current) {
+    if (unavailable || action !== null || selectionMode || bulkMoving || !library.foldersEnabled || mutationRef.current) {
       event.preventDefault();
       return;
     }
@@ -348,10 +365,10 @@ export function NotebookSidebar(props: SidebarProps) {
 
   function updateDropTarget(folderId: string | null): boolean {
     const item = dragRef.current;
-    const canMove = !!item && canMoveItem(item, folderId, result.library);
+    const canMove = !!item && canMoveItem(item, folderId, library);
     const sourceParent = item?.kind === "folder"
-      ? result.library.folders.find((folder) => folder.id === item.id)?.parentId
-      : result.library.notes.find((note) => note.id === item?.id)?.folderId;
+      ? library.folders.find((folder) => folder.id === item.id)?.parentId
+      : library.notes.find((note) => note.id === item?.id)?.folderId;
     // 現在の親も開けるようにして、その中の子フォルダを移動先として選べるようにする。
     if (!unavailable && !action && item && folderId && !expanded.has(folderId)
       && (canMove || sourceParent === folderId)) {
@@ -394,9 +411,9 @@ export function NotebookSidebar(props: SidebarProps) {
 
   async function handleMove(item: NoteDragItem, folderId: string | null): Promise<boolean> {
     if (unavailable || mutationRef.current) return false;
-    if (!canMoveItem(item, folderId, result.library)) {
-      const folder = item.kind === "folder" ? result.library.folders.find((folder) => folder.id === item.id) : undefined;
-      setMoveError(folder && hasFolderNameConflict(folder.name, folderId, result.library, folder.id)
+    if (!canMoveItem(item, folderId, library)) {
+      const folder = item.kind === "folder" ? library.folders.find((folder) => folder.id === item.id) : undefined;
+      setMoveError(folder && hasFolderNameConflict(folder.name, folderId, library, folder.id)
         ? "移動先に同じ名前のフォルダがあります。"
         : "移動先を変更してください。自分自身や子フォルダの中へは移動できません。");
       return false;
@@ -432,7 +449,7 @@ export function NotebookSidebar(props: SidebarProps) {
 
   function toggleChecked(item: NoteDragItem) {
     if (unavailable) return;
-    setCheckedItems((previous) => toggleNotebookSelection(previous, item, result.library));
+    setCheckedItems((previous) => toggleNotebookSelection(previous, item, library));
   }
 
   async function deleteChecked() {
@@ -461,7 +478,7 @@ export function NotebookSidebar(props: SidebarProps) {
   }
 
   async function moveChecked(folderId: string | null) {
-    if (unavailable || mutationRef.current || !canMoveItems(checked, folderId, result.library)) return;
+    if (unavailable || mutationRef.current || !canMoveItems(checked, folderId, library)) return;
     mutationRef.current = true;
     setIsMutating(true);
     props.onMutationChange(true);
@@ -527,8 +544,8 @@ export function NotebookSidebar(props: SidebarProps) {
               {selectedFolder && <li><button type="button" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "rename-folder", folder: selectedFolder })}>名前変更</button></li>}
               {selectedFolder && <li><button type="button"
-                disabled={!canOrganize || !canDeleteEmptyFolder(selectedFolder.id, result.library)}
-                title={canDeleteEmptyFolder(selectedFolder.id, result.library) ? undefined : "空のフォルダだけ削除できます。"}
+                disabled={!canOrganize || !canDeleteEmptyFolder(selectedFolder.id, library)}
+                title={canDeleteEmptyFolder(selectedFolder.id, library) ? undefined : "空のフォルダだけ削除できます。"}
                 onClick={() => beginAction({ kind: "delete-folder", folder: selectedFolder })}>空フォルダ削除</button></li>}
             </ul>
           </details>
@@ -566,7 +583,7 @@ export function NotebookSidebar(props: SidebarProps) {
           <button type="button" className="btn btn-sm text-error" disabled={unavailable || !checked.length}
             onClick={() => {
               setMoveError(null); setMoveMessage(null);
-              setDeleting({ items: checked.map((item) => ({ ...item })), library: result.library });
+              setDeleting({ items: checked.map((item) => ({ ...item })), library: library });
             }}>削除</button>
         </div>}
         {moveMessage && <p role="status" className="text-sm">{moveMessage}</p>}
@@ -576,7 +593,7 @@ export function NotebookSidebar(props: SidebarProps) {
           : result.error ? <p role="alert" className="text-error">{result.error}</p>
           : (
             <>
-              {result.library.foldersEnabled && (
+              {library.foldersEnabled && (
                 <button type="button" disabled={unavailable}
                   className={`btn btn-sm btn-ghost w-full justify-start ${selection === "root" ? "bg-base-200" : ""} ${dropTarget === "root" ? "outline-2 outline-primary bg-base-200" : ""}`}
                   aria-label="一番上" data-notebook-drop="root"
@@ -586,7 +603,7 @@ export function NotebookSidebar(props: SidebarProps) {
                   onDrop={(event) => drop(event, null)}
                 >一番上</button>
               )}
-              {result.library.notes.length === 0 && result.library.folders.length === 0
+              {library.notes.length === 0 && library.folders.length === 0
                 ? <p>ノートはありません。</p>
                 : <ul className="menu menu-sm notebook-tree w-full max-h-[70vh] flex-nowrap overflow-auto p-0"
                   data-notebook-drop="root" data-selecting={selectionMode}
@@ -613,16 +630,16 @@ export function NotebookSidebar(props: SidebarProps) {
                 </ul>}
             </>
           )}
-        {props.onOpenSticky && <StickyNotesPanel notes={result.library.notes} current={props.currentStickyOutline}
+        {props.onOpenSticky && <StickyNotesPanel notes={library.notes} current={props.currentStickyOutline}
           currentPageId={props.currentPageId} disabled={unavailable || !!action || selectionMode || bulkMoving || !!deleting}
           onNavigate={props.onOpenSticky} />}
       </div>
-      {action && <NotebookActionDialog action={action} library={result.library} driveLinked={driveLinked}
+      {action && <NotebookActionDialog action={action} library={library} driveLinked={driveLinked}
         busy={props.disabled || isMutating} error={moveError} onSubmit={handleSubmit}
         onClose={() => {
           if (!mutationRef.current) { setAction(null); setMoveError(null); }
         }} />}
-      {bulkMoving && <NotebookMoveDialog items={checked} library={result.library}
+      {bulkMoving && <NotebookMoveDialog items={checked} library={library}
         busy={props.disabled || isMutating} error={moveError} onSubmit={moveChecked}
         onClose={() => { if (!mutationRef.current) { setBulkMoving(false); setMoveError(null); } }} />}
       {deleting && <NotebookDeleteDialog items={deleting.items} library={deleting.library} driveLinked={driveLinked}

@@ -27,6 +27,40 @@ beforeEach(() => {
 });
 afterEach(() => mock.restoreAll());
 
+test("未接続用の一覧は本文とPDFがそろうノートだけ表示し、Driveの要約・階層は削除しない", async () => {
+  const folder = await createNoteFolder("講義", null);
+  const local = await saveLocalNote({ file, noteId: null, strokesByPage: strokes, initialFolderId: folder });
+  await withLocalTransaction(["notes", "pdfs", "noteSummaries"], "readwrite", async (tx) => {
+    const template = (await readRequest<{ title: string }>(tx.objectStore("noteSummaries").get(local)));
+    for (const id of ["cloud-only", "body-only", "pdf-only"]) {
+      await readRequest(tx.objectStore("noteSummaries").put({ ...template, id, title: id,
+        stickyNotes: [{ pageId: 1, pageNumber: 1, textId: "sticky", label: "クラウドの付箋" }] }));
+    }
+    await readRequest(tx.objectStore("notes").put({ id: "body-only", strokesByPage: {} }));
+    await readRequest(tx.objectStore("pdfs").put({ id: "pdf-only", blob: file }));
+  });
+  const all = await loadNoteLibrary();
+  const localOnly = await loadNoteLibrary({ localOnly: true });
+  assert.deepEqual(localOnly.notes.map((note) => note.id), [local]);
+  assert.deepEqual(localOnly.folders, all.folders);
+  assert.equal(all.notes.length, 4);
+  assert.deepEqual(await loadNoteLibrary(), all);
+  assert.equal((await loadLocalNote(local)).file.size, file.size);
+});
+
+test("ローカルだけの一覧取得もPDFと編集本文を読み込まず、キーだけで存在を確認する", async () => {
+  const id = await saveLocalNote({ file, noteId: null, strokesByPage: strokes });
+  const get = IDBObjectStore.prototype.get, getAll = IDBObjectStore.prototype.getAll;
+  const rejectBodyRead = (name: string) => { assert.ok(name !== "notes" && name !== "pdfs", "大きな本文を一覧で読まない"); };
+  mock.method(IDBObjectStore.prototype, "get", function (this: IDBObjectStore, ...args: Parameters<typeof get>) {
+    rejectBodyRead(this.name); return get.apply(this, args);
+  });
+  mock.method(IDBObjectStore.prototype, "getAll", function (this: IDBObjectStore, ...args: Parameters<typeof getAll>) {
+    rejectBodyRead(this.name); return getAll.apply(this, args);
+  });
+  assert.deepEqual((await loadNoteLibrary({ localOnly: true })).notes.map((note) => note.id), [id]);
+});
+
 test("一括移動は親子の選択をまとめ、中の所属・PDF・線・文章・更新番号を維持する", async () => {
   const parent = await createNoteFolder("講義", null);
   const child = await createNoteFolder("情報", parent);

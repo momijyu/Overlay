@@ -42,8 +42,8 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
           if (!busy) onClose();
         }}
         onClose={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-        <div className="modal-box h-dvh w-80 max-w-[calc(100vw-2rem)] rounded-none p-0 motion-reduce:transition-none">
-          <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-3">
+        <div className="notebook-drawer modal-box flex h-dvh max-h-none w-80 max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-none p-0 motion-reduce:transition-none">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-4 py-3">
             {/* モーダル内の選択欄を使い、編集中のPDFは選択に成功するまで維持する。 */}
             <button type="button" className="btn btn-sm" disabled={pdfOpenDisabled}
               onClick={() => { if (!pdfOpenDisabled) fileInputRef.current?.click(); }}>PDFを追加</button>
@@ -57,13 +57,14 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
               </svg>
             </button>
           </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-notebook-scroll>
           {children}
           {storageControls}
           {onBackupFileChange && <div className="mx-4 border-t border-base-300 py-3">
-            <details ref={backupMenuRef} className="dropdown w-full">
+            <details ref={backupMenuRef} className="w-full">
               <summary className="btn btn-sm" aria-disabled={pdfOpenDisabled}
                 onClick={(event) => { if (pdfOpenDisabled) event.preventDefault(); }}>バックアップを読み込む</summary>
-              <ul className="dropdown-content menu z-10 mt-2 w-full rounded-box border border-base-300 bg-base-100 p-2 shadow">
+              <ul className="menu mt-2 w-full rounded-box border border-base-300 bg-base-100 p-2">
                 <li><button type="button" disabled={pdfOpenDisabled} onClick={() => {
                   if (pdfOpenDisabled) return;
                   if (backupMenuRef.current) backupMenuRef.current.open = false;
@@ -79,6 +80,7 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
             <input ref={backupInputRef} type="file" accept=".overlay,.zip" hidden
               aria-label="読み込むOverlayバックアップ" disabled={pdfOpenDisabled} onChange={onBackupFileChange} />
           </div>}
+          </div>
         </div>
         <div className="modal-backdrop">
           <button type="button" aria-label="ノート一覧の外側を押して閉じる" tabIndex={-1}

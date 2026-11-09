@@ -29,22 +29,24 @@ export function NotebookDeleteDialog({ items, library, busy, error, onClose, onS
   }
   return <dialog ref={ref} className="modal" aria-labelledby="notebook-delete-heading"
     onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
-    <div className="modal-box max-w-md rounded-box">
-      <h3 id="notebook-delete-heading" className="mb-4 text-lg font-semibold">選択した項目を削除</h3>
-      <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-3">
-        <p>ノート{noteCount}件・フォルダ{folderCount}件を削除します。</p>
-        <ul aria-label="削除する項目" className="max-h-48 overflow-auto rounded-box border border-base-content/25 p-3 text-sm">
-          {items.map((item) => {
-            const note = item.kind === "note" ? library.notes.find((note) => note.id === item.id) : undefined;
-            const path = item.kind === "folder" ? folders.find((folder) => folder.id === item.id)?.path
-              : `${folders.find((folder) => folder.id === note?.folderId)?.path ?? "一番上"} / ${note?.title ?? "不明なノート"}`;
-            return <li key={noteItemKey(item)} className="break-all py-1">{item.kind === "folder" ? "フォルダ：" : "ノート："}{path ?? "不明なフォルダ"}</li>;
-          })}
-        </ul>
-        <p className="text-xs leading-relaxed text-red-600 dark:text-red-400" data-bulk-delete-warning>※ 表示したノートの元PDF・書き込みとフォルダを、このブラウザから削除します。元に戻せません。開いているノートが含まれる場合は未保存の変更も失われます。</p>
-        {driveLinked && <p className="text-xs text-error">※ 他端末の連携一覧からも削除します。Drive内の元データは残ります。</p>}
-        {(error || validationError) && <p role="alert" className="text-error">{error || validationError}</p>}
-        <div className="modal-action mt-2">
+    <div className="modal-box flex max-h-[calc(100dvh-2rem)] max-w-md flex-col overflow-hidden rounded-box">
+      <h3 id="notebook-delete-heading" className="mb-4 shrink-0 text-lg font-semibold">選択した項目を削除</h3>
+      <form onSubmit={(event) => void submit(event)} className="flex min-h-0 flex-1 flex-col">
+        <div data-notebook-delete-scroll className="min-h-0 space-y-3 overflow-y-auto overscroll-contain [overflow-wrap:anywhere]">
+          <p>ノート{noteCount}件・フォルダ{folderCount}件を削除します。</p>
+          <ul aria-label="削除する項目" className="max-h-48 overflow-auto rounded-box border border-base-content/25 p-3 text-sm">
+            {items.map((item) => {
+              const note = item.kind === "note" ? library.notes.find((note) => note.id === item.id) : undefined;
+              const path = item.kind === "folder" ? folders.find((folder) => folder.id === item.id)?.path
+                : `${folders.find((folder) => folder.id === note?.folderId)?.path ?? "一番上"} / ${note?.title ?? "不明なノート"}`;
+              return <li key={noteItemKey(item)} className="break-all py-1">{item.kind === "folder" ? "フォルダ：" : "ノート："}{path ?? "不明なフォルダ"}</li>;
+            })}
+          </ul>
+          <p className="text-xs leading-relaxed text-red-600 dark:text-red-400" data-bulk-delete-warning>※ 表示したノートの元PDF・書き込みとフォルダを、このブラウザから削除します。元に戻せません。開いているノートが含まれる場合は未保存の変更も失われます。</p>
+          {driveLinked && <p className="text-xs text-error">※ 他端末の連携一覧からも削除します。Drive内の元データは残ります。</p>}
+          {(error || validationError) && <p role="alert" className="text-error">{error || validationError}</p>}
+        </div>
+        <div className="modal-action mt-4 shrink-0 flex-wrap">
           <button type="button" className="btn" disabled={busy} onClick={onClose}>キャンセル</button>
           <button type="submit" className="btn btn-error" disabled={busy || !!validationError}>{busy ? "削除中…" : "削除"}</button>
         </div>

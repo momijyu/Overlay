@@ -66,47 +66,49 @@ export function NotebookActionDialog({ action, library, busy, error, onClose, on
     <dialog ref={dialogRef} className="modal" aria-labelledby="notebook-action-heading"
       onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
       {/* 一覧のmodal-startから継承する左右別の角丸を、確認画面では使わない。 */}
-      <div className="modal-box max-w-md rounded-box">
-        <h3 id="notebook-action-heading" className="mb-4 text-lg font-semibold">{title}</h3>
-        <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-3">
-          {action.kind === "delete-note" ? <p className="break-all">{action.note.title}</p>
-            : action.kind === "move-folder" || action.kind === "delete-folder" ? <p className="break-all">{action.folder.name}</p> : (
-            <div>
-              <label className="label" htmlFor="notebook-name">{action.kind === "edit-note" ? "ノート名" : "フォルダ名"}</label>
-              <input id="notebook-name" className="input w-full" required
-                maxLength={action.kind === "edit-note" ? 120 : 100} value={name}
-                disabled={busy} onChange={(event) => setName(event.target.value)} />
-            </div>
-          )}
-          {showDestination && <div>
-            <label className="label" htmlFor="notebook-destination">{action.kind === "create-folder" ? "作成先" : "移動先"}</label>
-            <select id="notebook-destination" className="select w-full" value={destination}
-              disabled={busy} onChange={(event) => setDestination(event.target.value)}>
-              <option value="root" disabled={movingItem !== null && !canMoveItem(movingItem, null, library)}>
-                一番上{movingItem && initialParent === null ? "（現在）" : ""}
-              </option>
-              {choices.filter((folder) => !movingItem || folder.id === initialParent || canMoveItem(movingItem, folder.id, library))
-                .map((folder) => (
-                  <option key={folder.id} value={folder.id} disabled={movingItem !== null && folder.id === initialParent}>
-                    {folder.path}{movingItem && folder.id === initialParent ? "（現在）" : ""}
-                  </option>
-                ))}
-            </select>
-            {movingItem && !canSubmit && <p className="mt-2 text-sm" role="status">
-              {hasDestination ? "別の移動先を選択してください。" : "移動先がありません。先に別のフォルダを作成してください。"}
+      <div className="modal-box flex max-h-[calc(100dvh-2rem)] max-w-md flex-col overflow-hidden rounded-box">
+        <h3 id="notebook-action-heading" className="mb-4 shrink-0 text-lg font-semibold">{title}</h3>
+        <form onSubmit={(event) => void submit(event)} className="flex min-h-0 flex-1 flex-col">
+          <div data-notebook-action-scroll className="min-h-0 space-y-3 overflow-y-auto overscroll-contain [overflow-wrap:anywhere]">
+            {action.kind === "delete-note" ? <p className="break-all">{action.note.title}</p>
+              : action.kind === "move-folder" || action.kind === "delete-folder" ? <p className="break-all">{action.folder.name}</p> : (
+              <div>
+                <label className="label" htmlFor="notebook-name">{action.kind === "edit-note" ? "ノート名" : "フォルダ名"}</label>
+                <input id="notebook-name" className="input w-full" required
+                  maxLength={action.kind === "edit-note" ? 120 : 100} value={name}
+                  disabled={busy} onChange={(event) => setName(event.target.value)} />
+              </div>
+            )}
+            {showDestination && <div>
+              <label className="label" htmlFor="notebook-destination">{action.kind === "create-folder" ? "作成先" : "移動先"}</label>
+              <select id="notebook-destination" className="select w-full" value={destination}
+                disabled={busy} onChange={(event) => setDestination(event.target.value)}>
+                <option value="root" disabled={movingItem !== null && !canMoveItem(movingItem, null, library)}>
+                  一番上{movingItem && initialParent === null ? "（現在）" : ""}
+                </option>
+                {choices.filter((folder) => !movingItem || folder.id === initialParent || canMoveItem(movingItem, folder.id, library))
+                  .map((folder) => (
+                    <option key={folder.id} value={folder.id} disabled={movingItem !== null && folder.id === initialParent}>
+                      {folder.path}{movingItem && folder.id === initialParent ? "（現在）" : ""}
+                    </option>
+                  ))}
+              </select>
+              {movingItem && !canSubmit && <p className="mt-2 text-sm" role="status">
+                {hasDestination ? "別の移動先を選択してください。" : "移動先がありません。先に別のフォルダを作成してください。"}
+              </p>}
+            </div>}
+            {nameConflict && <p className="text-error" role="alert">同じ場所に同じ名前のフォルダがあります。</p>}
+            {deleting && <p role="status" className="text-sm">
+              {action.kind === "delete-note"
+                ? canSubmit ? "このノートの元PDFと書き込みをブラウザ内から削除します。元に戻せません。開いている場合は未保存の変更も失われます。"
+                  : "削除するノートが見つかりません。一覧を更新してください。"
+                : canSubmit ? "この空フォルダを削除します。元に戻せません。"
+                : "空のフォルダだけ削除できます。中のノートやフォルダを先に移動してください。"}
             </p>}
-          </div>}
-          {nameConflict && <p className="text-error" role="alert">同じ場所に同じ名前のフォルダがあります。</p>}
-          {deleting && <p role="status" className="text-sm">
-            {action.kind === "delete-note"
-              ? canSubmit ? "このノートの元PDFと書き込みをブラウザ内から削除します。元に戻せません。開いている場合は未保存の変更も失われます。"
-                : "削除するノートが見つかりません。一覧を更新してください。"
-              : canSubmit ? "この空フォルダを削除します。元に戻せません。"
-              : "空のフォルダだけ削除できます。中のノートやフォルダを先に移動してください。"}
-          </p>}
-          {deleting && driveLinked && <p className="text-xs text-error">※ 他端末の連携一覧からも削除します。Drive内の元データは残ります。</p>}
-          {error && <p className="text-error" role="alert">{error}</p>}
-          <div className="modal-action mt-2">
+            {deleting && driveLinked && <p className="text-xs text-error">※ 他端末の連携一覧からも削除します。Drive内の元データは残ります。</p>}
+            {error && <p className="text-error" role="alert">{error}</p>}
+          </div>
+          <div className="modal-action mt-4 shrink-0 flex-wrap">
             <button type="button" className="btn" disabled={busy} onClick={onClose}>キャンセル</button>
             <button type="submit" className={`btn ${deleting ? "btn-error" : "btn-primary"}`} disabled={busy || !canSubmit}>
               {busy ? deleting ? "削除中…" : "保存中…" : deleting ? "削除" : action.kind === "create-folder" ? "作成" : action.kind === "move-folder" ? "移動" : "変更"}

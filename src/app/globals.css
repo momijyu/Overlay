@@ -27,6 +27,11 @@ body {
 .editor-toolbar [data-editor-row="actions"] { grid-column: 2; grid-row: 3; }
 .editor-toolbar [data-editor-row="actions"] .btn { height: 2.75rem; min-height: 2.75rem; }
 .note-export-content { max-height: min(24rem, calc(100dvh - 8rem)); overflow-y: auto; overscroll-behavior: contain; }
+.text-editor-options {
+  max-width: var(--editor-options-maxWidth, calc(100vw - 1rem));
+  max-height: var(--editor-options-maxHeight, calc(100dvh - 1rem));
+  overflow: auto; overscroll-behavior: contain;
+}
 @media (640px <= width < 900px) {
   .editor-settings { grid-column: 1 / -1; }
   .editor-toolbar [data-editor-row="actions"] { grid-column: 1 / -1; grid-row: 4; justify-content: flex-end; }
@@ -107,7 +112,8 @@ body {
   .text-editor-panel textarea { min-height: 6rem !important; max-height: 25dvh; font-size: 16px !important; line-height: 1.5 !important; }
   .text-editor-panel textarea[data-note-kind="text"] { background: white !important; }
   .text-editor-panel input[type="number"] { font-size: 16px; min-height: 2.75rem; }
-  .text-editor-options { position: static; width: 100%; transform: none !important; margin-top: 0.5rem; }
+  .text-editor-options { position: static; width: 100%; max-width: none; max-height: none; overflow: visible;
+    transform: none !important; margin-top: 0.5rem; border: 0; box-shadow: none; }
   .text-editor-options .btn { min-height: 2.75rem; height: 2.75rem; padding-inline: 0.75rem; }
   .text-editor-error { position: static; }
   .editing-note-preview [visibility="hidden"] { visibility: visible; }
@@ -226,6 +232,7 @@ body {
 }
 
 @media (pointer: coarse) {
+  .notebook-drawer .btn { min-width: 2.75rem; min-height: 2.75rem; height: auto; }
   .notebook-tree .notebook-row { min-height: 2.75rem; }
   .notebook-tree .notebook-check { top: 0.75rem; }
 }

@@ -1061,6 +1061,9 @@ test("採用履歴の送信応答が失われても同じIDで再試行し、二
 
 test("採用中にPDF取得が失敗した場合は採用履歴も本文も変更しない", async () => {
   const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
+  // チェックサムのない旧PDFでは従来どおり取得し、通信失敗時の保護を確認する。
+  const sourcePdf = JSON.parse(await f.files.get(f.original)!.data!.text()).pdfId;
+  delete f.files.get(sourcePdf)!.sha256Checksum;
   const previous = await bodyCount(); const download = f.access.download.bind(f.access);
   f.access.download = async (...args) => { if (f.files.get(args[0])?.mimeType === "application/pdf") throw new DriveHttpError(0, "offline"); return download(...args); };
   await assert.rejects(loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }));
@@ -1112,7 +1115,7 @@ test("採用履歴の端末書込が失敗した場合は、取得した本文�
 test("採用途中に認可が変わった場合は、同じアカウントでも結果を採用しない", async () => {
   const f = await twoVersionFixture(); const choice = await chooseVersion(f.note);
   const download = f.access.download.bind(f.access);
-  f.access.download = async (...args) => { const blob = await download(...args); if (f.files.get(args[0])?.mimeType === "application/pdf") mock.method(getGoogleDriveSession().auth, "getAccessToken", () => "new-token"); return blob; };
+  f.access.download = async (...args) => { const blob = await download(...args); if (args[0] === f.original) mock.method(getGoogleDriveSession().auth, "getAccessToken", () => "new-token"); return blob; };
   await assert.rejects(loadLocalNote(f.note, { sourceId: f.original, acceptVersion: choice }), /連携先/);
   assert.equal((await readLibraryState()).events.filter((e) => e.event.adoption).length, 0);
 });
@@ -1129,4 +1132,20 @@ test("採用後のクラウド付箋一覧には使う版だけを載せ、旧�
   const summary = (await loadNoteLibrary()).notes.find((n) => n.id === f.note)!;
   assert.deepEqual(summary.stickyNotes?.map((s) => s.label), ["採用する付箋"]);
   assert.equal(summary.stickyNotes?.[0].sourceId, other); assert.ok(f.files.has(original));
+});
+
+
+test("取得済みの元PDFを照合して再利用し、編集JSONの新版だけを取得して反映する", async () => {
+  const f = await fixture(); authorize(f);
+  const source = (await readLibraryState()).entities.find((row) => row.entry.id === f.note)!.sources[0];
+  const row = f.files.get(source.noteId)!;
+  // 内容は同じでもDrive版番号が進んだ状況。通常キャッシュ返却を避け再取得経路を通す。
+  f.files.set(row.id, { ...row, version: String(Number(row.version) + 1) });
+  f.calls.length = 0;
+  const loaded = await loadLocalNote(f.note, { refresh: true });
+  assert.deepEqual(loaded.strokesByPage, {});
+  assert.equal(f.calls.filter((call) => call === `download ${source.noteId}`).length, 1);
+  assert.equal(f.calls.some((call) => call.startsWith("download ") && f.files.get(call.slice(9))?.mimeType === "application/pdf"), false);
+  assert.deepEqual(await bodyCount(), [1, 1]);
+  assert.equal((await readLibraryState()).entities.find((row) => row.entry.id === f.note)!.cachedVersion, "2");
 });

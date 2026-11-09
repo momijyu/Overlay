@@ -51,7 +51,8 @@ test("HTTP計測は応答待ちと本文受信を区別し、通信回数・応�
   const f = fixture(); speedMeasurements.start();
   assert.equal((await verify(f)).id, user.permissionId);
   f.replies.push(json({}, 403)); await assert.rejects(f.client.findRoot(user.permissionId), /アクセス/);
-  const report = speedMeasurements.stop();
+  const snapshot = speedMeasurements.stop();
+  const report = { ...snapshot, records: snapshot.records.filter(row => row.phase === "drive.http") };
   assert.equal(f.requests.length, 2); assert.equal(report.records.length, 2);
   assert.deepEqual(report.records.map((row) => row.info.httpStatus), [200, 403]);
   assert.deepEqual(report.records.map((row) => row.outcome), ["ok", "error"]);
@@ -60,7 +61,7 @@ test("HTTP計測は応答待ちと本文受信を区別し、通信回数・応�
   assert.doesNotMatch(JSON.stringify(report), /account_A|token_A|test@example|Test User|googleapis/);
   speedMeasurements.start(); f.replies.push(async () => { throw new Error("private-network-error"); });
   await assert.rejects(f.client.getAccount());
-  const failed = speedMeasurements.stop().records[0];
+  const failed = speedMeasurements.stop().records.find(row => row.phase === "drive.http")!;
   assert.equal(failed.info.httpStatus, 0); assert.equal(failed.info.bodyMs, 0);
   assert.doesNotMatch(JSON.stringify(failed), /private-network-error/);
 });
@@ -324,4 +325,21 @@ test("再確認中のキャンセル後に届いた結果を共有キャッシ�
   await assert.rejects(pending, /キャンセル/);
   f.replies.push(json({ files: [] })); await assert.rejects(next.autosaveAccess(user.permissionId, folder.id), /変更/);
   assert.equal(f.requests.length, 4);
+});
+
+
+test("接続共有の利用・期限切れ・明示確認を区別して記録し、IDや認証情報は含めない", async () => {
+  let now = 1000; mock.method(Date, "now", () => now);
+  const f = fixture(); speedMeasurements.start(); await warm(f);
+  const next = f.newClient();
+  await next.getAccount({ reuseConfirmed: true }); await next.autosaveAccess(user.permissionId, folder.id);
+  now += 30000;
+  f.replies.push(json({ files: [folder] })); await next.autosaveAccess(user.permissionId, folder.id);
+  f.replies.push(json({ user }), json({ files: [folder] }));
+  await next.getAccount({ reuseConfirmed: true }); await next.autosaveAccess(user.permissionId, folder.id);
+  const result = speedMeasurements.stop();
+  assert.deepEqual(result.records.filter(r => r.phase === "drive.connection").map(r => r.info.connectionCheck),
+    ["account-explicit", "root-explicit", "account-hit", "root-hit", "root-expired", "account-expired", "root-missing"]);
+  assert.equal(f.requests.length, 5);
+  assert.doesNotMatch(JSON.stringify(result), /account_A|token_A|test@example|Test User|googleapis/);
 });

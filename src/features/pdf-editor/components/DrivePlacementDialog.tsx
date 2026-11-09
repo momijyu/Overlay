@@ -16,16 +16,18 @@ export function DrivePlacementDialog({ conflict, entities, busy, onChoose, onClo
     return parts.length ? parts.join(" / ") : "一番上";
   }
   return <dialog ref={ref} className="modal" aria-labelledby="drive-placement-title" onCancel={(event) => { event.preventDefault(); event.stopPropagation(); if (!busy) onClose(); }}>
-    <div className="modal-box rounded-box space-y-3">
-      <h2 id="drive-placement-title" className="text-lg font-bold">名前・配置の競合</h2>
+    <div className="modal-box flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-box p-0">
+      <h2 id="drive-placement-title" className="shrink-0 border-b border-base-300 px-5 py-4 text-lg font-bold">名前・配置の競合</h2>
+      <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain px-5 py-4" data-conflict-scroll>
       <p className="text-sm">採用する名前・配置を選んでください。各端末の編集内容は残ります。</p>
       {deletions && <p className="text-sm text-error">削除が含まれるため停止しています。必要なノートを書き出して保管してください。</p>}
       <ul className="space-y-2">{conflict.versions.map((version) => <li key={version.head}>
-        <button type="button" className="btn h-auto min-h-12 w-full flex-col items-start py-2 text-start" disabled={busy || deletions} onClick={() => onChoose(version.head)}>
+        <button type="button" className="btn h-auto min-h-12 w-full flex-col items-start whitespace-normal py-2 text-start [overflow-wrap:anywhere]" disabled={busy || deletions} onClick={() => onChoose(version.head)}>
           <span>{version.entry.name}</span><span className="text-xs font-normal break-words">{path(version.entry.parentId)} · 端末 {version.deviceId.slice(0, 8)}</span>
         </button>
       </li>)}</ul>
-      <div className="modal-action"><button type="button" className="btn" disabled={busy} onClick={onClose}>キャンセル</button></div>
+      </div>
+      <div className="flex shrink-0 justify-end border-t border-base-300 px-5 py-3"><button type="button" className="btn" disabled={busy} onClick={onClose}>キャンセル</button></div>
     </div>
   </dialog>;
 }

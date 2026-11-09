@@ -3,7 +3,7 @@ import test, { afterEach, mock } from "node:test";
 import { createGoogleDriveClient } from "@/features/pdf-editor/googleDriveClient";
 import { DRIVE_NOTE_SUFFIX } from "@/features/pdf-editor/googleDriveNoteData";
 import { reserveDriveIds, sendDriveAutosave, sha256 } from "@/features/pdf-editor/driveAutosaveRemote";
-import { listDriveNotes } from "@/features/pdf-editor/googleDriveNotes";
+import { listDriveNotes, loadDriveNoteDetails } from "@/features/pdf-editor/googleDriveNotes";
 import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
 import type { HeadingsByPage } from "@/features/pdf-editor/types";
 import { PDFDocument } from "pdf-lib";
@@ -684,4 +684,55 @@ test("送信中の閉鎖で通信を中断し、遅れて返ったPDF応答か�
   release(Response.json({}));
   await assert.rejects(pending, /キャンセル/);
   assert.equal(f.calls.filter(({ url, init }) => url.pathname.startsWith("/upload/") && init.method === "POST").length, 1);
+});
+
+
+for (const scenario of ["一致", "サイズ不一致", "同サイズで内容不一致", "なし", "チェックサムなし"] as const) {
+  test(`元PDFキャッシュ照合：${scenario}。今回確認したDriveのSHA-256と一致する場合だけダウンロードを省く`, async () => {
+    const f = await verified(); const saved = await save(f);
+    const manifest = JSON.parse(await f.files.get(saved.id)!.data!.text());
+    if (scenario === "チェックサムなし") delete f.files.get(manifest.pdfId)!.sha256Checksum;
+    const access = await f.client.autosaveAccess("account_A", root.id);
+    f.calls.length = 0; let reads = 0;
+    const result = await loadDriveNoteDetails(access, root.id, saved.id, undefined, { readCachedPdf: async () => {
+      reads++;
+      if (scenario === "なし") return undefined;
+      if (scenario === "サイズ不一致") return new Blob(["short"]);
+      if (scenario === "同サイズで内容不一致") return new Blob(["x".repeat(backup.notes[0].pdf.size)]);
+      return backup.notes[0].pdf;
+    } });
+    const pdfDownloads = f.calls.filter(({ url }) => url.pathname.endsWith(`/${manifest.pdfId}`) && url.searchParams.get("alt") === "media");
+    assert.equal(pdfDownloads.length, scenario === "一致" ? 0 : 1);
+    assert.equal(reads, scenario === "チェックサムなし" ? 0 : 1);
+    assert.equal(await result.backup.notes[0].pdf.text(), await backup.notes[0].pdf.text());
+    // 省略するのはPDF本文だけ。元PDFのメタデータ・JSON・後段の版確認は維持する。
+    assert.ok(f.calls.some(({ url }) => url.pathname.endsWith(`/${manifest.pdfId}`) && !url.searchParams.has("alt")));
+    assert.equal(f.calls.filter(({ url }) => url.pathname.endsWith(`/${saved.id}`) && !url.searchParams.has("alt")).length, 2);
+  });
+}
+
+test("元PDFを再利用しても後段の編集版変更を拒否する", async () => {
+  const f = await verified(); const saved = await save(f);
+  const access = await f.client.autosaveAccess("account_A", root.id);
+  let reads = 0;
+  f.intercept(async ({ url }) => {
+    if (url.pathname.endsWith(`/${saved.id}`) && !url.searchParams.has("alt") && ++reads === 2) {
+      return Response.json({ ...metadata(f.files.get(saved.id)!), version: "2" });
+    }
+    return undefined;
+  });
+  await assert.rejects(loadDriveNoteDetails(access, root.id, saved.id, undefined,
+    { readCachedPdf: async () => backup.notes[0].pdf }), /取得中にDriveノートが変わりました/);
+});
+
+test("保存先・所有者が不正なら端末PDFの照合にも進まない", async () => {
+  for (const field of ["ownedByMe", "parents"] as const) {
+    const f = await verified(); const saved = await save(f);
+    const manifest = JSON.parse(await f.files.get(saved.id)!.data!.text());
+    Object.assign(f.files.get(manifest.pdfId)!, { [field]: field === "ownedByMe" ? false : ["outside"] });
+    let reads = 0;
+    await assert.rejects(loadDriveNoteDetails(await f.client.autosaveAccess("account_A", root.id), root.id, saved.id, undefined,
+      { readCachedPdf: async () => { reads++; return backup.notes[0].pdf; } }));
+    assert.equal(reads, 0);
+  }
 });

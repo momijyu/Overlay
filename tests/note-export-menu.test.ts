@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
-import test, { mock } from "node:test";
+import test, { mock, beforeEach } from "node:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const details = { open: true };
-mock.module("react", { exports: { ...React, useRef: () => ({ current: details }) } });
+let focusCount = 0;
+const inside = {};
+const details = { open: true, contains: (target: unknown) => target === inside,
+  querySelector: () => ({ focus() { focusCount++; } }) };
+let effect: (() => void | (() => void)) | undefined;
+const events = new EventTarget();
+beforeEach(() => { focusCount = 0; effect = undefined; details.open = true; });
+
+mock.module("react", { exports: { ...React, useRef: () => ({ current: details }), useEffect: (next: typeof effect) => { effect = next; } } });
 const { NoteExportMenu } = await import("@/features/pdf-editor/components/NoteExportMenu");
 
 function buttons(node: React.ReactNode): React.ReactElement<React.ComponentProps<"button">>[] {
@@ -42,5 +49,33 @@ test("メニューを閉じて選んだ出力だけを呼び出し、処理中�
       if (disabled) assert.equal(details.open, true);
     }
     assert.deepEqual(calls, disabled ? [] : ["pdf", "backup"]);
+  }
+});
+
+
+test("外側のクリック・フォーカス移動とEscapeで閉じ、内部操作や出力を勝手に実行しない", () => {
+  let calls = 0;
+  const tree = NoteExportMenu({ disabled: false, onDownload() { calls++; }, onBackup() { calls++; } });
+  const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", { configurable: true, value: events });
+  const cleanup = effect!();
+  try {
+    for (const type of ["pointerdown", "focusin"]) {
+      details.open = true;
+      const internal = new Event(type); Object.defineProperty(internal, "target", { value: inside });
+      events.dispatchEvent(internal); assert.equal(details.open, true);
+      events.dispatchEvent(new Event(type)); assert.equal(details.open, false);
+    }
+    details.open = true;
+    const props = tree.props as React.ComponentProps<"details">;
+    let prevented = 0, stopped = 0;
+    props.onKeyDown!({ key: "Escape", preventDefault() { prevented++; }, stopPropagation() { stopped++; } } as unknown as React.KeyboardEvent<HTMLDetailsElement>);
+    assert.equal(details.open, false); assert.equal(focusCount, 1);
+    assert.equal(prevented, 1); assert.equal(stopped, 1); assert.equal(calls, 0);
+    cleanup?.(); details.open = true;
+    events.dispatchEvent(new Event("pointerdown")); assert.equal(details.open, true);
+  } finally {
+    cleanup?.();
+    if (original) Object.defineProperty(globalThis, "document", original); else Reflect.deleteProperty(globalThis, "document");
   }
 });

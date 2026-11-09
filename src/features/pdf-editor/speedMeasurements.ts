@@ -12,16 +12,22 @@ export const SPEED_PHASES = {
   "drive.library": "Drive一覧・階層同期",
   "drive.index": "付箋索引の背景同期",
   "drive.http": "Drive HTTP応答・受信",
+  "drive.pdf": "Drive元PDFの照合・取得",
+  "drive.connection": "Drive接続確認の再利用判定",
 } as const;
 export type SpeedPhase = keyof typeof SPEED_PHASES;
 export type SpeedOutcome = "ok" | "error" | "cancelled" | "choice" | "incomplete";
 type RequestKind = "account" | "list" | "metadata" | "download" | "upload";
 type Method = "GET" | "POST" | "PUT" | "PATCH";
+const connectionChecks = ["account-hit", "account-expired", "account-missing", "account-explicit",
+  "root-hit", "root-expired", "root-missing", "root-mismatch", "root-explicit"] as const;
+export type ConnectionCheck = typeof connectionChecks[number];
 export type SpeedInfo = {
   pdfBytes?: number; pageCount?: number; width?: number; height?: number;
   queueWaitMs?: number; sinceLastChangeMs?: number; pendingMs?: number;
   headersMs?: number; bodyMs?: number; httpStatus?: number;
-  firstUpload?: boolean; requestKind?: RequestKind; method?: Method;
+  firstUpload?: boolean; pdfReused?: boolean; requestKind?: RequestKind; method?: Method;
+  connectionCheck?: ConnectionCheck;
 };
 export type SpeedRecord = {
   id: number; parentId?: number; phase: SpeedPhase; startMs: number; durationMs: number;
@@ -37,6 +43,8 @@ function safeInfo(input: SpeedInfo = {}): SpeedInfo {
   const info: SpeedInfo = {};
   for (const key of numericFields) { const value = numeric(input[key]); if (value !== undefined) info[key] = value; }
   if (typeof input.firstUpload === "boolean") info.firstUpload = input.firstUpload;
+  if (typeof input.pdfReused === "boolean") info.pdfReused = input.pdfReused;
+  if (connectionChecks.includes(input.connectionCheck as ConnectionCheck)) info.connectionCheck = input.connectionCheck;
   if (["account", "list", "metadata", "download", "upload"].includes(input.requestKind ?? "")) info.requestKind = input.requestKind;
   if (["GET", "POST", "PUT", "PATCH"].includes(input.method ?? "")) info.method = input.method;
   return info;

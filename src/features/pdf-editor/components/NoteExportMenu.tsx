@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { EditorIcon } from "./EditorIcon";
 
 // PCとタッチで、閲覧用PDFと再編集用バックアップの入口・説明をそろえる。
@@ -7,12 +7,29 @@ export function NoteExportMenu({ disabled, iconOnly = false, className = "", onD
   onDownload: () => void; onBackup: () => void;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    function outside(event: Event) {
+      const menu = ref.current;
+      if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+    }
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("focusin", outside);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("focusin", outside);
+    };
+  }, []);
   function choose(action: () => void) {
     if (disabled) return;
     if (ref.current) ref.current.open = false;
     action();
   }
-  return <details ref={ref} className={`dropdown dropdown-end ${className}`}>
+  return <details ref={ref} className={`dropdown dropdown-end ${className}`} onKeyDown={(event) => {
+    if (event.key !== "Escape" || !ref.current?.open) return;
+    event.preventDefault(); event.stopPropagation();
+    ref.current.open = false;
+    ref.current.querySelector("summary")?.focus();
+  }}>
     <summary className={`btn btn-sm ${iconOnly ? "btn-square btn-ghost" : ""}`}
       aria-label="書き出しメニュー" title="書き出しメニュー">
       {iconOnly ? <EditorIcon name="more" /> : "書き出し"}
