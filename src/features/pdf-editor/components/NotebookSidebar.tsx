@@ -11,6 +11,7 @@ import { toggleNotebookSelection } from "../noteSelection";
 import { buildNoteTree, canDeleteEmptyFolder, hasFolderNameConflict, type NoteTree } from "../noteTree";
 import type { NoteLibrary, SavedNoteSummary } from "../types";
 import { NotebookActionDialog, type NotebookAction } from "./NotebookActionDialog";
+import { NotebookActionsMenu } from "./NotebookActionsMenu";
 import { NotebookTree } from "./NotebookTree";
 import { NotebookMoveDialog } from "./NotebookMoveDialog";
 import { NotebookDeleteDialog } from "./NotebookDeleteDialog";
@@ -514,9 +515,7 @@ export function NotebookSidebar(props: SidebarProps) {
             onClick={() => beginAction({
               kind: "create-folder", parentId: selectedFolder?.id ?? selectedNote?.folderId ?? null,
             })}>フォルダ作成</button>
-          <details ref={menuRef} className="dropdown static">
-            {/* summaryは常に開閉可能。処理中の制限は各メニュー項目で行う。 */}
-            <summary className="btn btn-sm">操作</summary>
+          <NotebookActionsMenu menuRef={menuRef} visible={props.visible}>
             {/* ボタンでなく操作行の左端を基準にし、狭い一覧の外へはみ出さない幅で開く。 */}
             <ul className="menu dropdown-content start-0 z-10 mt-2 w-full min-w-0 max-w-64 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm [&_button]:whitespace-normal [&_button]:break-words">
               {!selectedNote && !selectedFolder && <li><button type="button" disabled>
@@ -548,7 +547,7 @@ export function NotebookSidebar(props: SidebarProps) {
                 title={canDeleteEmptyFolder(selectedFolder.id, library) ? undefined : "空のフォルダだけ削除できます。"}
                 onClick={() => beginAction({ kind: "delete-folder", folder: selectedFolder })}>空フォルダ削除</button></li>}
             </ul>
-          </details>
+          </NotebookActionsMenu>
           </>}
           <button type="button" className="btn btn-sm" disabled={!canOrganize || !!action || bulkMoving || !!deleting}
             aria-pressed={selectionMode} onClick={() => {

@@ -15,6 +15,7 @@ function fixture(hand = false) {
   const interaction = createPageInteraction();
   interaction.cancellations.add(() => { cancelled++; });
   const viewport = {
+    dataset: {} as DOMStringMap,
     clientWidth: 400, clientHeight: 300, clientLeft: 0, clientTop: 0, scrollLeft: 0, scrollTop: 0,
     ownerDocument: { defaultView: win },
     getBoundingClientRect: () => ({ left: 0, top: 0 }) as DOMRect,
@@ -99,16 +100,18 @@ test("三本目の追加・解除で倍率が飛ばず、残った二本で続�
   f.cleanup();
 });
 
-test("移動・閲覧では一本指・マウスのドラッグでも書かずに移動する", () => {
+test("ページを動かす道具では一本指・マウスのドラッグでも書かずに移動し、掴んでいる表示を解除する", () => {
   for (const type of ["touch", "mouse", "pen"]) {
     const f = fixture(true);
     assert.equal(f.emit("pointerdown", 1, 100, 100, type).stopped, true);
+    assert.equal(f.viewport.dataset.panning, "true");
     f.emit("pointermove", 1, 40, 50, type);
     assert.equal(f.zoom(), 1);
     assert.equal(f.viewport.scrollLeft, 60);
     assert.equal(f.viewport.scrollTop, 50);
     f.emit("pointerup", 1, 40, 50, type);
     assert.equal(f.interaction.blocked, false);
+    assert.equal(f.viewport.dataset.panning, undefined);
     f.cleanup();
   }
 });
@@ -133,6 +136,7 @@ test("cancel・親capture解除・フォーカス喪失・破棄では未確定�
   f.emit("pointerdown"); f.emit("pointerdown", 2, 200);
   f.win.dispatchEvent(new Event("blur"));
   assert.equal(f.interaction.blocked, false);
+  assert.equal(f.viewport.dataset.panning, undefined);
   assert.equal(f.captures.size, 0);
   f.cleanup();
   assert.equal(f.listeners.size, 0);
@@ -157,6 +161,7 @@ test("回転・リサイズでは途中編集を中断し、残った指を全�
     f.emit("pointerdown", 2, 200);
     const before = f.transformed();
     f.win.dispatchEvent(new Event(name));
+    assert.equal(f.viewport.dataset.panning, undefined);
     assert.equal(f.cancelled(), 2);
     assert.equal(f.interaction.blocked, true);
     f.emit("pointermove", 1, 20);

@@ -185,7 +185,7 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
     <div ref={root} data-text-editor className="text-editor-panel absolute pointer-events-auto" style={{ left: fitted.x * pageWidth, top: fitted.y * pageHeight,
       width: layout.width, height: layout.height }} onPointerDown={(event) => event.stopPropagation()}>
       <textarea ref={textarea} data-note-kind={note.kind} aria-label={note.kind === "sticky" ? "付箋" : "テキストボックス"} className="textarea block rounded-none"
-        autoFocus value={text} maxLength={MAX_NOTE_TEXT_LENGTH} spellCheck={false} wrap="soft"
+        autoFocus value={text} placeholder="入力する" maxLength={MAX_NOTE_TEXT_LENGTH} spellCheck={false} wrap="soft"
         style={{ width: "100%", height: "100%", minHeight: 0, resize: "none", overflow: "auto", boxSizing: "border-box",
           padding: `${TEXT_PADDING - leading / 2}px ${TEXT_PADDING}px`, border: "none", outline: "1px solid #666666", outlineOffset: -1,
           background: note.kind === "sticky" ? fitted.backgroundColor ?? STICKY_BACKGROUND : "transparent",

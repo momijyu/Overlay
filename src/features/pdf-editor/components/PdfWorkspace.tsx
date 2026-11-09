@@ -6,6 +6,8 @@ import { AppHeader } from "@/components/layout/AppHeader";
 
 import { readPageHeadings } from "../pageHeadings";
 import { createStickyOutline, stickyDestination } from "../stickyOutline";
+import type { StickyFocusRequest } from "../stickyNavigation";
+import { CurrentStickyNotes } from "./CurrentStickyNotes";
 import { checkPageBindings, resolveNotePages, insertBlankPage, MAX_NOTE_PAGES } from "../notePages";
 import { exportAnnotatedPdf } from "../exportAnnotatedPdf";
 import { pdfDownloadName } from "../pdfDownloadName";
@@ -50,9 +52,9 @@ const editorTools: { tool: EditorTool; label: string }[] = [
   { tool: "pen", label: "ペン" },
   { tool: "marker", label: "マーカー" },
   { tool: "eraser", label: "消しゴム" },
-  { tool: "text", label: "テキスト" },
+  { tool: "text", label: "テキストボックス" },
   { tool: "sticky", label: "付箋" },
-  { tool: "hand", label: "移動・閲覧" },
+  { tool: "hand", label: "ページを動かす" },
 ];
 
 export function PdfWorkspace() {
@@ -99,6 +101,8 @@ export function PdfWorkspace() {
   const openTimingRef = useRef<SpeedSpan | null>(null);
   const [versionChoice, setVersionChoice] = useState<{ error: DriveVersionRequired; destination?: { pageId: number; textId: string } } | null>(null);
   const [openTiming, setOpenTiming] = useState<SpeedSpan | null>(null);
+  const [stickyFocus, setStickyFocus] = useState<(StickyFocusRequest & { pageId: number }) | null>(null);
+  const stickyRequestRef = useRef(0);
   useEffect(() => noteId ? pinDriveNote(noteId) : undefined, [noteId]);
   useEffect(() => subscribeDriveCacheIssue((id, message) => {
     if (mountedRef.current && autosaveRef.current?.getState().noteId === id) setError(message);
@@ -194,6 +198,7 @@ export function PdfWorkspace() {
       setNoteId(input.id);
       setNoteName(input.name ?? (input.file.name.replace(/\.pdf$/i, "") || input.file.name));
       setPageNumber(initialPage);
+      setStickyFocus(destination ? { ...destination, request: ++stickyRequestRef.current } : null);
       setZoom(1);
       setPenTool("pen");
       setSaveError(null);
@@ -269,6 +274,7 @@ export function PdfWorkspace() {
 
   function applyHistory(next: StrokeHistory, revealPage = false) {
     if (next === historyRef.current) return;
+    setStickyFocus(null);
     historyRef.current = next;
     setHistory(next);
     if (revealPage && next.changedPage !== null && document) {
@@ -286,6 +292,7 @@ export function PdfWorkspace() {
       try {
         const content = historyRef.current;
         setPageNumber(stickyDestination(resolveNotePages(content.pages, document.numPages), content.textsByPage, targetPageId, textId));
+        setStickyFocus({ pageId: targetPageId, textId, request: ++stickyRequestRef.current });
         setError(null); setSidebarVisible(false);
       } catch (failure) {
         setError(failure instanceof Error ? failure.message : "付箋のページを開けませんでした。");
@@ -353,6 +360,7 @@ export function PdfWorkspace() {
     setNoteId(null);
     setNoteName("");
     setPageNumber(1);
+    setStickyFocus(null);
     setZoom(1);
     setIsSaving(false);
     setSaveError(null);
@@ -602,6 +610,9 @@ export function PdfWorkspace() {
             onRestore={() => void handleRestoreBackup()}
             onClose={() => { if (!operationRef.current) { setPendingBackup(null); setBackupError(null); } }} />}
       </NotebookDrawer>
+      {document && file && <CurrentStickyNotes entries={createStickyOutline(history.textsByPage, pages)}
+        currentPageId={pageId} disabled={isBusy}
+        onNavigate={(targetPageId, textId) => openStickyPage(null, targetPageId, textId)} />}
       <main className="editor-main mx-auto w-full max-w-6xl p-4 sm:p-6">
         <section className="workspace-card card min-w-0 w-full border border-base-300 bg-base-100 shadow-sm">
           <div className="workspace-body card-body gap-5">
@@ -656,7 +667,7 @@ export function PdfWorkspace() {
                       {editorTools.map(({ tool, label }) => <button key={tool} type="button"
                         className={`btn btn-square btn-ghost join-item ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
                         aria-label={label} title={label} aria-pressed={penTool === tool} disabled={isBusy}
-                        onClick={() => { if (!isBusy) { setPenTool(tool); if (tool === "text" || tool === "sticky") setMobileSettingsOpen(true); } }}>
+                        onClick={() => { if (!isBusy) { setPenTool(tool); if (tool === "text" || tool === "sticky" || tool === "hand") setMobileSettingsOpen(true); } }}>
                         <EditorIcon name={tool} />
                       </button>)}
                     </div>
@@ -691,6 +702,7 @@ export function PdfWorkspace() {
                     {(penTool === "text" || penTool === "sticky") && <div
                       ref={setTextControlsContainer} data-text-controls
                       className="flex items-center gap-2" />}
+                    {penTool === "hand" && <p className="text-sm text-base-content/70">ドラッグでページを移動</p>}
                     <div className="mobile-zoom mobile-only"><ZoomControl id="mobile-pdf-zoom" value={zoom} disabled={isBusy} onChange={setZoom} /></div>
                   </div>
                   <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
@@ -707,7 +719,7 @@ export function PdfWorkspace() {
                         type="button"
                         aria-label="前のページ" title="前のページ"
                         disabled={isBusy || pageNumber === 1}
-                        onClick={() => { if (!isBusy && pageNumber > 1) setPageNumber((page) => page - 1); }}
+                        onClick={() => { if (!isBusy && pageNumber > 1) { setStickyFocus(null); setPageNumber((page) => page - 1); } }}
                       >
                         <EditorIcon name="previous-page" />
                       </button>
@@ -719,7 +731,7 @@ export function PdfWorkspace() {
                         type="button"
                         aria-label="次のページ" title="次のページ"
                         disabled={isBusy || pageNumber === pages.length}
-                        onClick={() => { if (!isBusy && pageNumber < pages.length) setPageNumber((page) => page + 1); }}
+                        onClick={() => { if (!isBusy && pageNumber < pages.length) { setStickyFocus(null); setPageNumber((page) => page + 1); } }}
                       >
                         <EditorIcon name="next-page" />
                       </button>
@@ -734,6 +746,7 @@ export function PdfWorkspace() {
                   notePage={currentPage}
                   strokes={strokesByPage[pageId] ?? []}
                   texts={history.textsByPage[pageId] ?? []}
+                  stickyFocus={stickyFocus?.pageId === pageId ? stickyFocus : undefined}
                   textControlsContainer={textControlsContainer}
                   onTextsChange={updatePageTexts}
                   editVersion={history.version}

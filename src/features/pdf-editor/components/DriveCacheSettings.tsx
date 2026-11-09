@@ -13,29 +13,36 @@ export function DriveCacheSettings({ visible = true }: { visible?: boolean } = {
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const [message, setMessage] = useState("");
   useEffect(() => {
     // 一覧を閉じた編集画面では、非表示の容量表示のために全キャッシュを走査しない。
     // 自動保存・未送信の監視とキャッシュ整理は別のrunnerが継続する。
     if (!visible) return;
-    let active = true; let reading = false;
+    let active = true; let reading = false; let again = false;
     async function refresh() {
-      if (reading) return;
+      if (!active) return;
+      if (reading) { again = true; return; }
       reading = true;
       try {
         const summary = await readDriveCacheSummary();
         if (!active) return;
         setBytes(summary.bytes); setLimit(summary.limitMB); setReady(true);
+        setReadError(null);
         // 入力途中の数値は定期更新で書き換えない。
         setDraft((previous) => previous === String(limit) ? String(summary.limitMB) : previous);
-      } catch (cause) { if (active) setError(cause instanceof Error ? cause.message : "容量を確認できませんでした。"); }
-      finally { reading = false; }
+      } catch (cause) { if (active) setReadError(cause instanceof Error ? cause.message : "容量を確認できませんでした。"); }
+      finally {
+        reading = false;
+        if (again && active) { again = false; void refresh(); }
+      }
     }
     void refresh();
     const unsubscribe = open ? subscribeDriveQueue(() => { void refresh(); }) : () => {};
     const interval = open ? setInterval(() => { void refresh(); }, 5000) : undefined;
     return () => { active = false; unsubscribe(); clearInterval(interval); };
-  }, [open, limit, visible]);
+  }, [open, limit, visible, retry]);
   const value = Number(draft);
   const valid = draft.trim() !== "" && Number.isInteger(value) && value >= MIN_DRIVE_CACHE_MB && value <= MAX_DRIVE_CACHE_MB;
   async function apply() {
@@ -58,10 +65,14 @@ export function DriveCacheSettings({ visible = true }: { visible?: boolean } = {
         <span className="text-xs">MB</span>
         <button type="submit" className="btn btn-sm" disabled={!ready || busy || !valid || value === limit}>適用</button>
       </div>
-      <p className="text-xs">{ready ? `使用量：約${(bytes / 1_000_000).toLocaleString("ja-JP", { maximumFractionDigits: 1 })}MB ／ 上限${limit}MB` : "容量を確認中…"}</p>
+      <p className="text-xs">{ready ? `使用量：約${(bytes / 1_000_000).toLocaleString("ja-JP", { maximumFractionDigits: 1 })}MB ／ 上限${limit}MB` : readError ? "容量を取得できませんでした。" : "容量を確認中…"}</p>
       <p className="text-xs text-base-content/70">このブラウザに適用。未送信・使用中のデータは上限を超えても保持します。</p>
       {message && <p role="status" className="text-xs">{message}</p>}
       {error && <p role="alert" className="text-xs text-error">{error}</p>}
+      {readError && <div className="flex min-w-0 items-center gap-2">
+        <p role="alert" className="min-w-0 break-words text-xs text-error">{readError}</p>
+        <button type="button" className="btn btn-sm shrink-0" disabled={busy} onClick={() => setRetry((value) => value + 1)}>再取得</button>
+      </div>}
     </form>
   </details>;
 }

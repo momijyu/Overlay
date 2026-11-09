@@ -1,4 +1,5 @@
 import { readRequest, withLocalTransaction } from "./localDatabase";
+import { notifyLibraryChanged } from "./driveLibraryEvents";
 import { getLibraryScope, libraryScope, recordVersionAdoption } from "./driveLibraryLocal";
 import { activeDriveSources, adoptionSignature, sameSourceVersion, type SourceVersion } from "./driveVersionData";
 import { readDriveVersions } from "./driveVersionRemote";
@@ -172,7 +173,7 @@ export async function hydrateDriveNote(id: string, sourceId?: string, preferCach
     // 別端末の版を選んだ場合も旧送信先を上書きしない。次の編集で新しい枝を作る。
     if (liveBinding && liveBinding.ids?.note !== source.noteId) await readRequest(tx.objectStore("driveBindings").delete(id));
   }, false);
-  if (acceptVersion) (await import("./driveLibraryEvents")).notifyLibraryChanged();
+  notifyLibraryChanged();
 }
 async function touch(id: string) {
   await withLocalTransaction(["driveEntities"], "readwrite", async (tx) => {
@@ -188,23 +189,31 @@ export async function pruneDriveCache(options: { now?: number; activeIds?: Set<s
     limitBytes: await readDriveCacheLimit(tx) * 1_000_000,
   }));
   let bytes = rows.reduce((sum, row) => sum + (row.cachedBytes ?? 0), 0);
-  for (const candidate of rows.sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0))) {
-    if (!candidate.cachedBytes || !candidate.cachedSource || !candidate.sources.some((s) => s.noteId === candidate.cachedSource)
-      || bytes <= limitBytes && now - (candidate.lastUsed ?? now) < DRIVE_CACHE_RETENTION_MS) continue;
-    if (activeNotes.has(candidate.entry.id) || options.activeIds?.has(candidate.entry.id)) continue;
-    const work = async () => {
-      await withLocalTransaction(["notes", "pdfs", "driveEntities", "driveBindings"], "readwrite", async (tx) => {
-        const store = tx.objectStore("driveEntities"); const row = await readRequest<LibraryEntity | undefined>(store.get(candidate.id));
-        const binding = await readRequest<DriveBinding | undefined>(tx.objectStore("driveBindings").get(candidate.entry.id));
-        if (!row || row.head !== candidate.head || row.lastUsed !== candidate.lastUsed || row.cachedSource !== candidate.cachedSource
-          || binding && (binding.error || binding.generation !== binding.uploadedGeneration || binding.ids?.note !== row.cachedSource)
-          || activeNotes.has(candidate.entry.id)) return;
-        await readRequest(tx.objectStore("notes").delete(row.entry.id)); await readRequest(tx.objectStore("pdfs").delete(row.entry.id));
-        await readRequest(store.put({ ...row, cachedBytes: 0, cachedVersion: undefined })); removed++; bytes -= row.cachedBytes ?? 0;
-      }, false);
-    };
-    if (options.lock) await options.lock(candidate.entry.id, work);
-    else if (typeof navigator !== "undefined" && navigator.locks) await navigator.locks.request(`overlay-note-use-${candidate.entry.id}`, { ifAvailable: true }, async (lock) => { if (lock) await work(); });
+  try {
+    for (const candidate of rows.sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0))) {
+      if (!candidate.cachedBytes || !candidate.cachedSource || !candidate.sources.some((s) => s.noteId === candidate.cachedSource)
+        || bytes <= limitBytes && now - (candidate.lastUsed ?? now) < DRIVE_CACHE_RETENTION_MS) continue;
+      if (activeNotes.has(candidate.entry.id) || options.activeIds?.has(candidate.entry.id)) continue;
+      const work = async () => {
+        const evictedBytes = await withLocalTransaction(["notes", "pdfs", "driveEntities", "driveBindings"], "readwrite", async (tx) => {
+          const store = tx.objectStore("driveEntities"); const row = await readRequest<LibraryEntity | undefined>(store.get(candidate.id));
+          const binding = await readRequest<DriveBinding | undefined>(tx.objectStore("driveBindings").get(candidate.entry.id));
+          if (!row || row.head !== candidate.head || row.lastUsed !== candidate.lastUsed || row.cachedSource !== candidate.cachedSource
+            || binding && (binding.error || binding.generation !== binding.uploadedGeneration || binding.ids?.note !== row.cachedSource)
+            || activeNotes.has(candidate.entry.id)) return null;
+          await readRequest(tx.objectStore("notes").delete(row.entry.id)); await readRequest(tx.objectStore("pdfs").delete(row.entry.id));
+          await readRequest(store.put({ ...row, cachedBytes: 0, cachedVersion: undefined }));
+          return row.cachedBytes ?? 0;
+        }, false);
+        // 完了した削除だけを数える。途中で中断したトランザクションは通知しない。
+        if (evictedBytes !== null) { removed++; bytes -= evictedBytes; }
+      };
+      if (options.lock) await options.lock(candidate.entry.id, work);
+      else if (typeof navigator !== "undefined" && navigator.locks) await navigator.locks.request(`overlay-note-use-${candidate.entry.id}`, { ifAvailable: true }, async (lock) => { if (lock) await work(); });
+    }
+  } finally {
+    // 後続の整理が失敗しても、既に完了した整理分は一覧と付箋へ反映する。
+    if (removed) notifyLibraryChanged();
   }
   return removed;
 }

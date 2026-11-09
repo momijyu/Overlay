@@ -6,6 +6,7 @@ import { readRequest, withLocalTransaction } from "@/features/pdf-editor/localDa
 import * as libraryLocal from "@/features/pdf-editor/driveLibraryLocal";
 import * as noteDriveStatus from "@/features/pdf-editor/noteDriveStatus";
 import type { LibraryScope } from "@/features/pdf-editor/driveLibraryData";
+import { notifyLibraryChanged } from "@/features/pdf-editor/driveLibraryEvents";
 
 type Effect = { dependencies?: React.DependencyList; cleanup?: () => void };
 let states: unknown[], refs: { current: unknown }[], effects: Effect[];
@@ -126,4 +127,36 @@ test("切断前に始めた遅い取得は、切断後のローカル一覧を�
   assert.deepEqual(notes().map((note) => note.id), ["local"]);
   release(scope); await settle();
   assert.deepEqual(notes().map((note) => note.id), ["local"]);
+});
+
+test("切断時にDriveの空階層を隠し、本文整理の通知で不要になった祖先も一覧から除く", async () => {
+  await withLocalTransaction(["folders", "noteSummaries", "driveEntities", "driveSettings", "driveTreeEvents"], "readwrite", async (tx) => {
+    const changes = ["parent", "remote-empty"].map((id) => ({ before: null,
+      entry: { id, kind: "folder" as const, name: id, parentId: null } }));
+    await readRequest(tx.objectStore("driveSettings").put({ id: "library", value: scope }));
+    await readRequest(tx.objectStore("driveTreeEvents").put({ id: "creation", sent: true,
+      event: { id: "creation", schemaVersion: 1, kind: "overlay-library-event", deviceId: "other", changes } }));
+    for (const { entry } of changes) {
+      await readRequest(tx.objectStore("folders").put({ ...entry }));
+      await readRequest(tx.objectStore("driveEntities").put({ id: `folder:${entry.id}`, entry, head: "creation", sources: [] }));
+    }
+    await readRequest(tx.objectStore("folders").put({ id: "local-empty", name: "local-empty", parentId: null }));
+    const store = tx.objectStore("noteSummaries"), local = await readRequest(store.get("local"));
+    await readRequest(store.put({ ...local, folderId: "parent" }));
+  }, false);
+  const folderIds = () => (entries(node).find((entry) => entry.type === NotebookTree)!.props.tree as { folders: { id: string }[] })
+    .folders.map((folder) => folder.id).sort();
+  render(); await settle();
+  assert.deepEqual(folderIds(), ["local-empty", "parent"]);
+  connect({ account: { id: "account" }, root: { id: "root" } }); await settle();
+  assert.deepEqual(folderIds(), ["local-empty", "parent", "remote-empty"]);
+  connect(null); await settle();
+  assert.deepEqual(folderIds(), ["local-empty", "parent"]);
+  await withLocalTransaction(["notes", "pdfs"], "readwrite", async (tx) => {
+    await readRequest(tx.objectStore("notes").delete("local"));
+    await readRequest(tx.objectStore("pdfs").delete("local"));
+  }, false);
+  notifyLibraryChanged(); await settle();
+  assert.deepEqual(notes(), []);
+  assert.deepEqual(folderIds(), ["local-empty"]);
 });

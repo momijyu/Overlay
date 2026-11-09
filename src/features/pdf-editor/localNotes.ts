@@ -10,7 +10,8 @@ import { readTextNotes } from "./textData";
 import type { HeadingsByPage, NotePage, LoadedNote, NoteFolder, NoteLibrary, PenStroke, SavedNoteSummary, TextNotesByPage } from "./types";
 import { BACKUP_LIMITS, readNoteBackup, type NoteBackup } from "./noteBackupData";
 import { toLocalNoteSummary } from "./localNoteSummary";
-import { checkDriveFolderDeletion, enrollDriveNote, LIBRARY_STORES, recordDriveLibrary } from "./driveLibraryLocal";
+import { checkDriveFolderDeletion, enrollDriveNote, libraryScope, LIBRARY_STORES, recordDriveLibrary } from "./driveLibraryLocal";
+import type { LibraryEntity, LibraryEventRow } from "./driveLibraryData";
 
 type LocalNote = SavedNoteSummary & { strokesByPage: Record<number, PenStroke[]>; textsByPage?: TextNotesByPage; pages?: NotePage[]; headingsByPage?: HeadingsByPage; revision?: number };
 type LocalPdf = { id: string; blob: Blob };
@@ -175,16 +176,49 @@ function checkDuplicate(name: string, parentId: string | null, library: NoteLibr
 
 export async function loadNoteLibrary(options: { localOnly?: boolean } = {}): Promise<NoteLibrary> {
   if (!options.localOnly) return withLocalTransaction(["noteSummaries", "folders"], "readonly", readLibrary);
-  return withLocalTransaction(["noteSummaries", "folders", "notes", "pdfs"], "readonly", async (transaction) => {
+  return withLocalTransaction(["noteSummaries", "folders", "notes", "pdfs", "driveEntities", "driveSettings", "driveTreeEvents"], "readonly", async (transaction) => {
     // 一覧要約はキャッシュ整理後も残る。本文・PDFを読む代わりにキーだけで両方の存在を確認する。
     // 表示だけを絞り、Drive参照・階層・未送信内容は書き換えない。
-    const [library, noteKeys, pdfKeys] = await Promise.all([
+    const [library, noteKeys, pdfKeys, scope] = await Promise.all([
       readLibrary(transaction),
       readRequest(transaction.objectStore("notes").getAllKeys()),
       readRequest(transaction.objectStore("pdfs").getAllKeys()),
+      libraryScope(transaction),
     ]);
     const noteIds = new Set(noteKeys), pdfIds = new Set(pdfKeys);
-    return { ...library, notes: library.notes.filter((note) => noteIds.has(note.id) && pdfIds.has(note.id)) };
+    const notes = library.notes.filter((note) => noteIds.has(note.id) && pdfIds.has(note.id));
+    if (!scope) return { ...library, notes };
+    const folders = new Map(library.folders.map((folder) => [folder.id, folder]));
+    const visible = new Set<string>();
+    function includeParents(id: string | null) {
+      while (id && !visible.has(id)) {
+        visible.add(id); id = folders.get(id)?.parentId ?? null;
+      }
+    }
+    for (const note of notes) includeParents(note.folderId);
+    // 既存の作成履歴で由来を判定する。移動・改名した端末を作成元と誤認しない。
+    // 必要な履歴だけID指定で読み、PDF・全履歴の一括取得やDB形式変更は行わない。
+    const events = new Map<string, Promise<LibraryEventRow | undefined>>();
+    const createdHere = await Promise.all(library.folders.map(async (folder) => {
+      if (visible.has(folder.id)) return false;
+      const entity = await readRequest<LibraryEntity | undefined>(transaction.objectStore("driveEntities").get(`folder:${folder.id}`));
+      if (!entity) return true; // Drive未登録のローカル空フォルダ。
+      const pending = [entity.head], visited = new Set<string>();
+      while (pending.length) {
+        const id = pending.pop()!;
+        if (visited.has(id)) continue;
+        visited.add(id);
+        if (!events.has(id)) events.set(id, readRequest(transaction.objectStore("driveTreeEvents").get(id)));
+        const row = await events.get(id)!;
+        const change = row?.event.changes.find((item) => item.entry.kind === "folder" && item.entry.id === folder.id);
+        if (!change) return true; // 由来不明の旧データは隠さない。
+        if (change.before === null) return row!.event.deviceId === scope.deviceId;
+        pending.push(...(Array.isArray(change.before) ? change.before : [change.before]));
+      }
+      return true;
+    }));
+    library.folders.forEach((folder, index) => { if (createdHere[index]) includeParents(folder.id); });
+    return { ...library, notes, folders: library.folders.filter((folder) => visible.has(folder.id)) };
   });
 }
 

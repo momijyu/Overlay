@@ -6,6 +6,7 @@ import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { NotePage, PenStroke, EditorTool, TextNote } from "../types";
 import { PenLayer } from "./PenLayer";
 import { TextLayer } from "./TextLayer";
+import type { StickyFocusRequest } from "../stickyNavigation";
 import { bindPageZoomWheel, capturePageZoomAnchor, capturePageResizeAnchor, restorePageZoomAnchor, type PageZoomAnchor } from "../pageZoom";
 import { bindPageGestures, createPageInteraction } from "../pageGestures";
 import { speedMeasurements, type SpeedSpan } from "../speedMeasurements";
@@ -20,6 +21,7 @@ type PdfPageProps = {
   penColor: string;
   tool: EditorTool;
   texts?: TextNote[];
+  stickyFocus?: StickyFocusRequest;
   textControlsContainer?: HTMLDivElement | null;
   onTextsChange: (notes: TextNote[]) => void;
   eraserWidth: number;
@@ -41,6 +43,7 @@ export function PdfPage({
   penColor,
   tool,
   texts = [],
+  stickyFocus,
   textControlsContainer = null,
   onTextsChange,
   eraserWidth,
@@ -269,6 +272,7 @@ export function PdfPage({
           )}
         {/* 倍率・幅の再描画中も入力欄をアンマウントせず、入力中の文章を維持する。 */}
         {renderedPage && (texts.length > 0 || tool === "text" || tool === "sticky") && <TextLayer notes={texts} tool={tool}
+          stickyFocus={stickyFocus}
           controlsContainer={textControlsContainer}
           interaction={interaction}
           disabled={disabled || !!error || displayScale <= 0}

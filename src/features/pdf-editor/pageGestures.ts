@@ -42,6 +42,7 @@ export function bindPageGestures(viewport: HTMLElement, options: {
     if (!anchor) return;
     cancelEditing();
     gesture = { zoom: options.getZoom(), distance: distance(), pinch: touches.size >= 2, anchor };
+    viewport.dataset.panning = "true";
     for (const id of touches.keys()) {
       try { viewport.setPointerCapture(id); } catch { /* 既に終了したポインターは次のupで取り除く。 */ }
     }
@@ -82,6 +83,7 @@ export function bindPageGestures(viewport: HTMLElement, options: {
     if (interaction.blocked) stop(event);
     if (touches.size === 0 && mouse === null) {
       gesture = null;
+      delete viewport.dataset.panning;
       interrupted = false;
       interaction.blocked = false;
     } else if (touches.size >= 2 && !interrupted) {
@@ -92,7 +94,7 @@ export function bindPageGestures(viewport: HTMLElement, options: {
   function lost(event: PointerEvent) {
     // 子から親へcaptureを移しただけなら、指が離れたとは扱わない。
     if (event.target === viewport && (touches.has(event.pointerId) || mouse === event.pointerId)) {
-      cancelEditing(); gesture = null;
+      cancelEditing(); gesture = null; delete viewport.dataset.panning;
     }
   }
   function reset() {
@@ -101,11 +103,13 @@ export function bindPageGestures(viewport: HTMLElement, options: {
       try { if (viewport.hasPointerCapture(id)) viewport.releasePointerCapture(id); } catch { /* 切断済み */ }
     }
     touches.clear(); mouse = null; gesture = null; interrupted = false; interaction.blocked = false;
+    delete viewport.dataset.panning;
   }
   function resized() {
     // 回転中の座標変化を描画・消去・ドラッグへ確定しない。文章の草稿は維持する。
     cancelEditing();
     gesture = null;
+    delete viewport.dataset.panning;
     interrupted = touches.size > 0 || mouse !== null;
     interaction.blocked = interrupted;
   }

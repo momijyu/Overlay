@@ -100,6 +100,14 @@ function fixture(existing = true, initial = note, openedByPointer = false) {
   return { render, input, size, change, key, inside, commits, cssVariables, getCancelled: () => cancelled, getRemoved: () => removed, getFocused: () => focused };
 }
 
+test("新規の空欄には入力案内を出し、案内自体は保存せず取消できる", () => {
+  const f = fixture(false, { ...note, text: "", autoSize: true });
+  assert.equal(f.input().placeholder, "入力する");
+  assert.equal(f.input().value, "");
+  f.key("Escape");
+  assert.equal(f.getCancelled(), 1); assert.deepEqual(f.commits, []);
+});
+
 test("スマホのキーボード表示に合わせて入力欄の下端と高さを補正し、破棄時は監視を外す", () => {
   const viewport = Object.assign(new Events(), { height: 400, offsetTop: 0 });
   Object.assign(win, { visualViewport: viewport, innerHeight: 800 });

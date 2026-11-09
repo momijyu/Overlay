@@ -10,6 +10,7 @@ let cleanups: (void | (() => void))[] = [];
 let reads = 0;
 const listeners = new Set<() => void>();
 let saved: number[] = []; let failed = false;
+let readSummary = async () => ({ limitMB: 400, bytes: 3_450_000 });
 mock.module("react", { exports: { ...React,
   useState(initial: unknown) {
     const slot = index++; if (!(slot in states)) states[slot] = initial;
@@ -23,7 +24,7 @@ mock.module("react", { exports: { ...React,
   },
 } });
 mock.module("@/features/pdf-editor/driveLibraryCache", { exports: {
-  readDriveCacheSummary: async () => { reads++; return { limitMB: 400, bytes: 3_450_000 }; },
+  readDriveCacheSummary: async () => { reads++; return readSummary(); },
 } });
 mock.module("@/features/pdf-editor/driveQueueEvents", { exports: {
   subscribeDriveQueue: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -36,6 +37,7 @@ const { DriveCacheSettings } = await import("@/features/pdf-editor/components/Dr
 beforeEach(() => {
   states = []; effects = []; effectDeps = []; cleanups = []; index = effectIndex = reads = 0;
   listeners.clear(); saved = []; failed = false;
+  readSummary = async () => ({ limitMB: 400, bytes: 3_450_000 });
 });
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   return React.Children.toArray(node).flatMap((child) => React.isValidElement<Record<string, unknown>>(child)
@@ -110,4 +112,62 @@ test("一覧を閉じると容量走査と通知監視を止め、再表示で�
     assert.equal(render().entries.find((entry) => entry.type === "input" && entry.props.type === "number")!.props.value, "375");
     assert.equal(listeners.size, 1);
   } finally { cleanups.forEach((cleanup) => cleanup?.()); mock.timers.reset(); }
+});
+
+function openSettings() {
+  (render().entries.find((entry) => entry.type === "details")!.props.onToggle as (event: unknown) => void)({ currentTarget: { open: true } });
+}
+
+test("容量取得の失敗は再取得で回復し、古いエラーと取得中表示を残さない", async () => {
+  readSummary = async () => { throw new Error("容量の読込失敗"); };
+  const close = await mount();
+  try {
+    assert.match(render().html, /容量の読込失敗/);
+    assert.doesNotMatch(render().html, /容量を確認中/);
+    const retry = render().entries.find((entry) => entry.type === "button" && entry.props.type === "button")!;
+    readSummary = async () => ({ limitMB: 400, bytes: 7_000_000 });
+    (retry.props.onClick as () => void)(); render(); flushEffects(); await settle();
+    assert.match(render().html, /約7MB/);
+    assert.doesNotMatch(render().html, /role="alert"|再取得|容量を確認中/);
+  } finally { close(); }
+});
+
+test("容量の定期取得が成功しても、設定の保存失敗を消さない", async () => {
+  const close = await mount();
+  try {
+    openSettings(); render(); flushEffects(); await settle();
+    change("number", "375"); failed = true; await submit();
+    assert.match(render().html, /保存失敗/);
+    listeners.forEach((listener) => listener()); await settle();
+    assert.match(render().html, /保存失敗/);
+    assert.equal(render().entries.find((entry) => entry.type === "input" && entry.props.type === "number")!.props.value, "375");
+    assert.deepEqual(saved, []);
+  } finally { close(); }
+});
+
+test("容量取得中に届いた通知を取りこぼさず、非表示後の遅い結果は使わない", async () => {
+  const close = await mount();
+  try {
+    render(); flushEffects(); await settle();
+    openSettings(); render(); flushEffects(); await settle();
+    let release!: (value: { limitMB: number; bytes: number }) => void;
+    readSummary = () => new Promise((resolve) => { release = resolve; });
+    const before = reads;
+    listeners.forEach((listener) => listener());
+    listeners.forEach((listener) => listener());
+    listeners.forEach((listener) => listener());
+    assert.equal(reads, before + 1);
+    readSummary = async () => ({ limitMB: 400, bytes: 8_000_000 });
+    release({ limitMB: 400, bytes: 4_000_000 }); await settle();
+    assert.equal(reads, before + 2, "重なった通知は1回にまとめて再取得する");
+    assert.match(render().html, /約8MB/);
+
+    readSummary = () => new Promise((resolve) => { release = resolve; });
+    listeners.forEach((listener) => listener());
+    listeners.forEach((listener) => listener());
+    render(false); flushEffects(); const hiddenReads = reads;
+    release({ limitMB: 400, bytes: 99_000_000 }); await settle();
+    assert.equal(reads, hiddenReads);
+    assert.match(render(false).html, /約8MB/);
+  } finally { close(); }
 });

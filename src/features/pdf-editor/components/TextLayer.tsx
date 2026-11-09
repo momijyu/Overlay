@@ -5,11 +5,14 @@ import { fitTextNote, textNoteLayout, TEXT_PADDING, STICKY_BACKGROUND } from "..
 import { readTextNotes } from "../textData";
 import type { EditorTool, TextNote } from "../types";
 import { TextBoxEditor } from "./TextBoxEditor";
+import { StickyFocusIndicator } from "./StickyFocusIndicator";
+import type { StickyFocusRequest } from "../stickyNavigation";
 import { PEN_COLOR } from "../penStyle";
 import type { PageInteraction } from "../pageGestures";
 
-export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, disabled = false, controlsContainer = null, interaction, onChange }: {
+export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, disabled = false, controlsContainer = null, interaction, onChange, stickyFocus }: {
   notes: TextNote[];
+  stickyFocus?: StickyFocusRequest;
   tool: EditorTool;
   pageWidth: number;
   pageHeight: number;
@@ -31,6 +34,7 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
   const drag = useRef<{ id: number; note: TextNote; x: number; y: number; moved: boolean } | null>(null);
   const committed = useRef<TextNote | null>(null);
   const placement = useRef<{ id: number; x: number; y: number; clientX: number; clientY: number; moved: boolean } | null>(null);
+  const surface = useRef<SVGSVGElement | null>(null);
   const [touchSelection, setTouchSelection] = useState(false);
   const active = !disabled && (tool === "text" || tool === "sticky");
   const preview = previewState?.notes === notes && !disabled
@@ -83,6 +87,22 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
     setPreview(null);
   }
 
+  function createVisibleNote() {
+    const bounds = surface.current?.getBoundingClientRect();
+    const viewport = surface.current?.closest(".pdf-viewport")?.getBoundingClientRect();
+    let x = 0.1, y = 0.1;
+    if (bounds && viewport && bounds.width > 0 && bounds.height > 0) {
+      // 倍率・スクロール位置を変えず、表示中のPDFの範囲に追加する。
+      const left = Math.max(bounds.left, viewport.left), top = Math.max(bounds.top, viewport.top);
+      const right = Math.min(bounds.right, viewport.right), bottom = Math.min(bounds.bottom, viewport.bottom);
+      if (right > left && bottom > top) {
+        x = (left + (right - left) * 0.1 - bounds.left) / bounds.width;
+        y = (top + (bottom - top) * 0.1 - bounds.top) / bounds.height;
+      }
+    }
+    createNote(x, y, tool === "sticky" ? "sticky" : "text");
+  }
+
   function pointerDown(event: PointerEvent<SVGSVGElement>) {
     if (!active || !font || interaction?.blocked || drag.current || (event.pointerType === "mouse" && event.button !== 0)) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -100,7 +120,7 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
       setSelected(note.id);
       try { fitTextNote(note, pageWidth, pageHeight, font.font); }
       catch { event.preventDefault(); setOpenedByPointer(true); setEditing(note); return; } // 未対応の文字を含むデータも修正できる。
-      // 指では本文を移動に使う。入力は上部の「文章編集」から開始する。
+      // 指では本文を移動に使う。入力は上部の「編集」から開始する。
       if (!action && !touch) { event.preventDefault(); setOpenedByPointer(true); setEditing(note); return; }
       drag.current = { id: event.pointerId, note, x, y, moved: false };
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -163,7 +183,7 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
   </div>;
 
   return <div className="pointer-events-none absolute inset-0">
-    <svg className={`absolute inset-0 h-full w-full ${active ? "pointer-events-auto touch-none" : "pointer-events-none"}`}
+    <svg ref={surface} className={`absolute inset-0 h-full w-full ${active ? "text-layer-active pointer-events-auto touch-none cursor-crosshair" : "pointer-events-none"}`}
       viewBox={`0 0 ${pageWidth} ${pageHeight}`} preserveAspectRatio="none" aria-label="テキストと付箋"
       onPointerDown={pointerDown} onPointerMove={move} onPointerUp={up} onPointerCancel={cancel} onLostPointerCapture={cancel}>
       {active && <rect width={pageWidth} height={pageHeight} fill="transparent" />}
@@ -175,24 +195,33 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
         const x = note.x * pageWidth;
         const y = note.y * pageHeight;
         const isEditing = editing?.id === note.id;
-        return <g key={note.id} data-note-id={note.id} className={isEditing ? "editing-note-preview" : undefined}>
-          <rect x={x} y={y} width={layout.width} height={layout.height}
+        return <g key={note.id} data-note-id={note.id} className={isEditing ? "editing-note-preview" : undefined}
+          style={active ? { cursor: "text" } : undefined}>
+          <rect className="text-note-outline" x={x} y={y} width={layout.width} height={layout.height}
             fill={note.kind === "sticky" ? note.backgroundColor ?? STICKY_BACKGROUND : "transparent"}
-            stroke="none" visibility={isEditing ? "hidden" : "visible"} />
+            stroke="none" strokeWidth={1 / pageScale} strokeDasharray={`${4 / pageScale} ${3 / pageScale}`}
+            visibility={isEditing ? "hidden" : "visible"} />
           <text fontFamily="OverlayNotes" fontSize={note.fontSize} fill={note.color ?? PEN_COLOR} visibility={isEditing ? "hidden" : "visible"} style={{ fontKerning: "none", fontVariantLigatures: "none", whiteSpace: "pre" }}>
             {layout.lines.map((line, index) => <tspan key={index} x={x + TEXT_PADDING} y={y + layout.baseline + layout.lineHeight * index}>{line}</tspan>)}
           </text>
+          {note.kind === "sticky" && stickyFocus?.textId === note.id && <StickyFocusIndicator
+            key={stickyFocus.request} textId={note.id} request={stickyFocus.request}
+            x={x} y={y} width={layout.width} height={layout.height} />}
         </g>;
       })}
     </svg>
     {/* 操作と選択状態はここで保持し、ボタンの表示先だけを上部の設定行へ移す。 */}
     {active && controlsContainer && createPortal(<div className="flex items-center gap-2 pointer-events-auto"
       role="group" aria-label={tool === "sticky" ? "付箋の操作" : "テキストの操作"}>
-      <button className="btn btn-sm" type="button" onClick={() => createNote(0.1, 0.1, tool === "sticky" ? "sticky" : "text")}>
+      <button className="btn btn-sm" type="button" onClick={createVisibleNote}>
         {tool === "sticky" ? "付箋を追加" : "テキストを追加"}
       </button>
+      {!editing && !selected && <span className="text-sm text-base-content/70">
+        <span className="desktop-only">PDF上をクリックして追加</span>
+        <span className="mobile-only">PDF上をタップして追加</span>
+      </span>}
       {!editing && selected && notes.some((note) => note.id === selected) && <>
-        <button className="btn btn-sm" type="button" onClick={() => { setOpenedByPointer(false); setEditing(notes.find((note) => note.id === selected)!); }}>文章編集</button>
+        <button className="btn btn-sm" type="button" onClick={() => { setOpenedByPointer(false); setEditing(notes.find((note) => note.id === selected)!); }}>編集</button>
         <button className="btn btn-sm" type="button" onClick={() => { onChange(notes.filter((note) => note.id !== selected)); setSelected(null); }}>削除</button>
       </>}
     </div>, controlsContainer)}

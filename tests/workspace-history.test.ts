@@ -8,6 +8,7 @@ import type { NoteDragItem } from "@/features/pdf-editor/noteDrag";
 import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
 import { DriveVersionRequired } from "@/features/pdf-editor/driveLibraryCache";
 import { speedMeasurements } from "@/features/pdf-editor/speedMeasurements";
+import { CurrentStickyNotes } from "@/features/pdf-editor/components/CurrentStickyNotes";
 
 // Hooksの保持だけを代用し、Workspace内のイベント・状態・保存の接続を検証する。
 // DOM・実際のReact再描画・ブラウザ操作を再現するテストではない。
@@ -461,10 +462,10 @@ function assertStableToolRows() {
 
 test("道具切替で編集操作の並びを変えず、テキスト・付箋も同じ高さの設定欄を使う", () => {
   const { calls } = setup();
-  for (const label of ["ペン", "マーカー", "消しゴム", "テキスト", "付箋", "移動・閲覧"]) {
+  for (const label of ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす"]) {
     (button(label)!.props as { onClick: () => void }).onClick();
     assertStableToolRows();
-    if (label === "テキスト" || label === "付箋") {
+    if (label === "テキストボックス" || label === "付箋") {
       const children = React.Children.toArray(editorRow("settings").props.children) as React.ReactElement<React.ComponentProps<"div">>[];
       assert.equal(children.length, 2); // 操作ボタンの表示先とスマホ用の倍率。
       assert.equal(children[0].props["data-text-controls" as keyof React.ComponentProps<"div">], true);
@@ -483,15 +484,17 @@ test("道具切替で編集操作の並びを変えず、テキスト・付箋�
   assert.equal(props(HistoryControls).canUndo, false);
 });
 
-test("スマホ設定は初期状態で閉じ、必要時に開ける。移動・閲覧や倍率変更では保存・履歴を増やさない", () => {
+test("スマホ設定は初期状態で閉じ、必要時に開ける。ページを動かすや倍率変更では保存・履歴を増やさない", () => {
   const { calls } = setup();
   assert.equal(editorRow("settings").props["data-mobile-open" as keyof React.ComponentProps<"div">], false);
   const settings = button("道具の設定")!.props as React.ComponentProps<"button">;
   assert.equal(settings["aria-expanded"], false);
   settings.onClick!({} as React.MouseEvent<HTMLButtonElement>);
   assert.equal(editorRow("settings").props["data-mobile-open" as keyof React.ComponentProps<"div">], true);
-  (button("移動・閲覧")!.props as { onClick: () => void }).onClick();
+  (button("ページを動かす")!.props as { onClick: () => void }).onClick();
   assert.equal(props(PdfPage).tool, "hand");
+  assert.ok(find(editorRow("settings"), (element) => element.type === "p"
+    && (element.props as { children?: string }).children === "ドラッグでページを移動"));
   props(PdfPage).onZoomChange(1.5);
   assert.equal(props(PdfPage).zoom, 1.5);
   assert.equal(calls.length, 0);
@@ -504,7 +507,7 @@ test("横向き用の配置先を持ち、道具・履歴・ページ・設定�
   const tools = find(render(), (element) => (element.props as { "aria-label"?: string })["aria-label"] === "編集ツール")!;
   assert.match((tools.props as React.ComponentProps<"div">).className!, /editor-tool-buttons/);
   const buttons = React.Children.toArray((tools.props as React.ComponentProps<"div">).children) as React.ReactElement<React.ComponentProps<"button">>[];
-  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), ["ペン", "マーカー", "消しゴム", "テキスト", "付箋", "移動・閲覧"]);
+  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす"]);
   assert.equal(buttons.length, 6);
   const header = find(render(), (element) => element.type === AppHeader)!;
   const heading = find(header, (element) => String((element.props as { className?: string }).className).includes("editor-mobile-heading"))!;
@@ -652,7 +655,7 @@ test("スライダーとPDF上のズームを相互に反映し、保存や編�
 
 test("道具はアイコンだけを表示し、名前・選択状態・道具切替の接続を維持する", () => {
   const { calls } = setup();
-  const tools = [["ペン", "pen"], ["マーカー", "marker"], ["消しゴム", "eraser"], ["テキスト", "text"], ["付箋", "sticky"]] as const;
+  const tools = [["ペン", "pen"], ["マーカー", "marker"], ["消しゴム", "eraser"], ["テキストボックス", "text"], ["付箋", "sticky"]] as const;
   for (const [label, tool] of tools) {
     const control = button(label)!;
     const controlProps = control.props as React.ComponentProps<"button">;
@@ -676,7 +679,7 @@ test("道具はアイコンだけを表示し、名前・選択状態・道具�
 test("処理中はアイコンの道具切替を無効にし、現在の道具を保持する", () => {
   setup();
   props(NotebookSidebar).onMutationChange(true);
-  for (const label of ["ペン", "マーカー", "消しゴム", "テキスト", "付箋"]) {
+  for (const label of ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋"]) {
     const control = button(label)!.props as React.ComponentProps<"button">;
     assert.equal(control.disabled, true);
     (control.onClick as () => void)();
@@ -1254,4 +1257,35 @@ test("PDF読み込みには同梱CMap・標準フォントの配信先を指定�
   assert.equal(documentOptions.at(-1)!.standardFontDataUrl, "/pdfjs/standard_fonts/");
   assert.equal(documentOptions.at(-1)!.cMapUrl, "/pdfjs/cmaps/");
   assert.equal(documentOptions.at(-1)!.cMapPacked, true);
+});
+
+test("資料専用付箋は最新編集・削除・Undoへ連動し、全体一覧も残す", async () => {
+  setup(); openedTexts = { 1: [{ id: "s", kind: "sticky", text: "元の付箋", x: .1, y: .8, width: .3, fontSize: 14 }] };
+  await openOther();
+  assert.equal(props(CurrentStickyNotes).entries[0].label, "元の付箋");
+  props(PdfPage).onTextsChange([{ ...openedTexts[1][0], text: "更新後" }]);
+  assert.equal(props(CurrentStickyNotes).entries[0].label, "更新後");
+  assert.deepEqual(props(CurrentStickyNotes).entries, props(NotebookSidebar).currentStickyOutline!.entries);
+  props(PdfPage).onTextsChange([]); assert.deepEqual(props(CurrentStickyNotes).entries, []);
+  props(HistoryControls).onUndo(); assert.equal(props(CurrentStickyNotes).entries[0].label, "更新後");
+});
+
+test("同じページの付箋も繰り返し移動でき、ズーム・履歴・保存を変えず削除済みは拒否する", async () => {
+  setup(); openedTexts = { 2: [{ id: "s", kind: "sticky", text: "下端", x: .1, y: .8, width: .3, fontSize: 14 }] };
+  await openOther();
+  const autosave = refs[3].current;
+  const originalZoom = props(PdfPage).zoom;
+  props(CurrentStickyNotes).onNavigate(2, "s");
+  assert.equal(props(PdfPage).pageNumber, 2);
+  const request = props(PdfPage).stickyFocus!;
+  props(CurrentStickyNotes).onNavigate(2, "s");
+  assert.ok(props(PdfPage).stickyFocus!.request > request.request);
+  assert.equal(props(PdfPage).stickyFocus!.textId, "s");
+  assert.equal(props(PdfPage).zoom, originalZoom);
+  assert.equal(props(HistoryControls).canUndo, false);
+  assert.equal(refs[3].current, autosave); assert.equal(savedInputs.length, 0);
+  props(CurrentStickyNotes).onNavigate(1, "deleted");
+  assert.equal(props(PdfPage).pageNumber, 2);
+  (button("次のページ")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).stickyFocus, undefined);
 });

@@ -7,6 +7,8 @@ import fontkit from "@pdf-lib/fontkit";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { EditorTool, TextNote } from "@/features/pdf-editor/types";
 import { createPageInteraction, type PageInteraction } from "@/features/pdf-editor/pageGestures";
+import type { StickyFocusRequest } from "@/features/pdf-editor/stickyNavigation";
+import { StickyFocusIndicator } from "@/features/pdf-editor/components/StickyFocusIndicator";
 
 const bytes = new Uint8Array(readFileSync(new URL("../public/fonts/NotoSansJP-Regular.otf", import.meta.url)));
 const font = { bytes, font: fontkit.create(bytes) };
@@ -53,7 +55,7 @@ function find(node: React.ReactNode, predicate: (element: React.ReactElement) =>
 
 const note: TextNote = { id: "one", kind: "text", text: "授業", x: 0.1, y: 0.1, width: 0.5, fontSize: 14 };
 
-function fixture(tool: EditorTool, initial: TextNote[] = [], interaction?: PageInteraction) {
+function fixture(tool: EditorTool, initial: TextNote[] = [], interaction?: PageInteraction, stickyFocus?: StickyFocusRequest) {
   let notes = initial;
   let updates = 0;
   let disabled = false;
@@ -61,7 +63,7 @@ function fixture(tool: EditorTool, initial: TextNote[] = [], interaction?: PageI
   function render() {
     stateCursor = 0;
     refCursor = 0;
-    return TextLayer({ notes, tool, pageWidth: 400, pageHeight: 600, controlsContainer, disabled, interaction,
+    return TextLayer({ notes, tool, pageWidth: 400, pageHeight: 600, controlsContainer, disabled, interaction, stickyFocus,
       onChange: (next) => { updates++; notes = next; } });
   }
   function handlers() {
@@ -79,6 +81,18 @@ function fixture(tool: EditorTool, initial: TextNote[] = [], interaction?: PageI
     getControlsContainer: () => controlsContainer,
     removeControlsContainer: () => { controlsContainer = null; }, disable: () => { disabled = true; } };
 }
+
+test("付箋への移動は対象だけを強調し、文章編集・保存データを変更しない", () => {
+  const sticky = { ...note, id: "sticky", kind: "sticky" as const, y: .8 };
+  const f = fixture("pen", [note, sticky], undefined, { textId: "sticky", request: 7 });
+  const marker = find(f.render(), (element) => element.type === StickyFocusIndicator)!;
+  assert.ok(marker);
+  const props = marker.props as React.ComponentProps<typeof StickyFocusIndicator>;
+  assert.equal(props.textId, "sticky"); assert.equal(props.request, 7);
+  assert.equal(props.x, 40); assert.equal(props.y, 480);
+  assert.equal(find(f.render(), (element) => element.type === TextBoxEditor), undefined);
+  assert.equal(f.getUpdates(), 0); assert.deepEqual(f.getNotes(), [note, sticky]);
+});
 
 test("テキスト・付箋のボタンは設定行へ渡し、PDF右上に操作欄を重ねない", () => {
   for (const tool of ["text", "sticky"] as const) {
@@ -106,6 +120,27 @@ test("設定行がない間・操作不可・ペン選択中はボタンをPDF�
   }
 });
 
+test("追加ボタンは拡大・スクロール後も表示中のPDFへ空の草稿を置き、確定まで保存しない", () => {
+  for (const tool of ["text", "sticky"] as const) {
+    states = []; refs = [];
+    const f = fixture(tool);
+    const tree = f.render();
+    const svg = find(tree, (element) => element.type === "svg")!.props as React.ComponentProps<"svg">;
+    (svg.ref as React.RefObject<SVGSVGElement | null>).current = {
+      getBoundingClientRect: () => ({ left: -200, top: -900, right: 600, bottom: 300, width: 800, height: 1200 }),
+      closest: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0, right: 400, bottom: 300 }) }),
+    } as unknown as SVGSVGElement;
+    const add = find(tree, (element) => element.type === "button")!.props as React.ComponentProps<"button">;
+    add.onClick!({} as React.MouseEvent<HTMLButtonElement>);
+    const draft = f.editor().note;
+    assert.equal(draft.x, 0.3); assert.equal(draft.y, 0.775);
+    assert.equal(draft.kind, tool); assert.equal(draft.text, "");
+    assert.equal(f.getUpdates(), 0);
+    f.editor().onCancel();
+    assert.equal(f.getUpdates(), 0); assert.deepEqual(f.getNotes(), []);
+  }
+});
+
 test("設定行へ移した文章編集・削除ボタンも選択中のメモだけを操作する", () => {
   const f = fixture("text", [note, { ...note, id: "two", text: "別のメモ" }]);
   f.handlers().onPointerDown(f.event(50, 80, note.id));
@@ -115,7 +150,7 @@ test("設定行へ移した文章編集・削除ボタンも選択中のメモ�
       && (element.props as { children?: string }).children === label)!;
     (button.props as React.ComponentProps<"button">).onClick!({} as React.MouseEvent<HTMLButtonElement>);
   }
-  click("文章編集");
+  click("編集");
   assert.equal(f.editor().note.id, note.id);
   f.editor().onCommit({ ...note, text: "修正" });
   assert.equal(f.getUpdates(), 1);
@@ -309,7 +344,7 @@ test("指では付箋・テキストの本文を選択・移動に使い、編�
     f.handlers().onPointerUp(f.event(90, 120));
     assert.equal(f.getUpdates(), 1);
     assert.ok(Math.abs(f.getNotes()[0].x - 0.2) < 1e-8);
-    const edit = find(f.render(), (element) => element.type === "button" && (element.props as { children?: string }).children === "文章編集")!;
+    const edit = find(f.render(), (element) => element.type === "button" && (element.props as { children?: string }).children === "編集")!;
     (edit.props as React.ComponentProps<"button">).onClick!({} as React.MouseEvent<HTMLButtonElement>);
     assert.equal(f.editor().note.id, note.id);
   }

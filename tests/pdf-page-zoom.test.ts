@@ -57,6 +57,7 @@ function fixture(notePage?: NotePage, openTiming?: SpeedSpan) {
     getContext: () => ({ drawImage: (image: unknown) => { draws.push(image); } }),
   };
   const viewport = Object.assign(new EventTarget(), {
+    dataset: {} as DOMStringMap,
     clientWidth: 400, clientHeight: 300, clientLeft: 0, clientTop: 0, scrollLeft: 0, scrollTop: 0,
     getBoundingClientRect: () => ({ left: 0, top: 0 }),
   });

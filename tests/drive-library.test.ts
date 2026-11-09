@@ -22,6 +22,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { publishDriveStickyIndexes, refreshDriveStickyIndexes } from "@/features/pdf-editor/driveStickyIndexRemote";
 import { stickyDestination } from "@/features/pdf-editor/stickyOutline";
+import { subscribeLibraryChanged } from "@/features/pdf-editor/driveLibraryEvents";
 import { resolveNotePages } from "@/features/pdf-editor/notePages";
 
 const connection = { accountId: "accountA", rootId: "rootA" };
@@ -281,6 +282,47 @@ test("同期済みの未使用本文だけを整理し、一覧・階層・Drive
   authorize(f); assert.equal((await loadLocalNote(f.note)).id, f.note);
 });
 
+test("未接続一覧ではDrive由来の空階層を隠し、取得・整理後の通知でローカル一覧を更新する", async () => {
+  const f = await fixture(); const remoteCount = f.files.size;
+  selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  assert.equal((await loadNoteLibrary()).folders.length, 2);
+  assert.deepEqual((await loadNoteLibrary({ localOnly: true })).folders, []);
+  const empty = await createNoteFolder("端末で作った空フォルダ", null);
+  assert.deepEqual((await loadNoteLibrary({ localOnly: true })).folders.map((folder) => folder.id), [empty]);
+  let notifications = 0;
+  const unsubscribe = subscribeLibraryChanged(() => { notifications++; });
+  try {
+    authorize(f); await loadLocalNote(f.note);
+    assert.equal(notifications, 1);
+    const local = await loadNoteLibrary({ localOnly: true });
+    assert.deepEqual(local.notes.map((note) => note.id), [f.note]);
+    assert.deepEqual(new Set(local.folders.map((folder) => folder.id)), new Set([empty, f.parent, f.folder]));
+    assert.equal(await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() }), 1);
+    assert.equal(notifications, 2);
+    const after = await loadNoteLibrary({ localOnly: true });
+    assert.deepEqual(after.notes, []);
+    assert.deepEqual(after.folders.map((folder) => folder.id), [empty]);
+    assert.equal(await pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 2000, lock: async (_id, work) => work() }), 0);
+    assert.equal(notifications, 2);
+    assert.equal((await loadNoteLibrary()).folders.length, 3);
+    assert.equal((await loadNoteLibrary()).notes.length, 1);
+    assert.equal(f.files.size, remoteCount);
+  } finally { unsubscribe(); }
+});
+
+test("フォルダの作成元は改名後も維持し、ローカル空フォルダと必要な祖先を残す", async () => {
+  const f = await fixture();
+  const originalEmpty = await createNoteFolder("元の端末で作成", null); await sync(f);
+  const deviceB = selectDevice(); await enableDriveLibrary(connection.accountId, connection.rootId); await sync(f);
+  await renameNoteFolder(originalEmpty, "別端末で名前変更"); await sync(f);
+  assert.equal((await loadNoteLibrary({ localOnly: true })).folders.length, 0);
+  const child = await createNoteFolder("端末内の空フォルダ", f.folder);
+  assert.deepEqual(new Set((await loadNoteLibrary({ localOnly: true })).folders.map((folder) => folder.id)), new Set([f.parent, f.folder, child]));
+  selectDevice(f.db); await sync(f);
+  assert.ok((await loadNoteLibrary({ localOnly: true })).folders.some((folder) => folder.id === originalEmpty && folder.name === "別端末で名前変更"));
+  selectDevice(deviceB);
+});
+
 test("未送信・保存失敗・編集中のノートはキャッシュ整理で削除しない", async () => {
   const f = await fixture(); const locked = { now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id: string, work: () => Promise<void>) => work() };
   assert.equal(await pruneDriveCache({ ...locked, activeIds: new Set([f.note]) }), 0);
@@ -404,8 +446,13 @@ test("キャッシュの削除途中で失敗しても元PDF・本文・一覧�
     if (this.name === "pdfs") throw new DOMException("failed", "UnknownError");
     return remove.apply(this, args);
   });
-  await assert.rejects(pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() }), /保存場所へアクセス/);
-  assert.deepEqual(await bodyCount(), [1, 1]); assert.equal((await loadNoteLibrary()).notes[0].id, f.note);
+  let notifications = 0;
+  const unsubscribe = subscribeLibraryChanged(() => { notifications++; });
+  try {
+    await assert.rejects(pruneDriveCache({ now: Date.now() + DRIVE_CACHE_RETENTION_MS + 1000, lock: async (_id, work) => work() }), /保存場所へアクセス/);
+    assert.deepEqual(await bodyCount(), [1, 1]); assert.equal((await loadNoteLibrary()).notes[0].id, f.note);
+    assert.equal(notifications, 0);
+  } finally { unsubscribe(); }
 });
 
 test("競合の確認後にさらに移動した場合は、古い選択で上書きしない", async () => {

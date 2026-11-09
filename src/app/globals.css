@@ -1,6 +1,73 @@
 @import "tailwindcss";
 @plugin "daisyui";
 
+/* 一覧は画面に重ね、開閉でPDFの幅・倍率を変更しない。 */
+.current-sticky-nav {
+  position: fixed;
+  z-index: 30;
+  top: clamp(7rem, 20dvh, 12rem);
+  right: max(0.5rem, env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+  max-width: calc(100vw - 1rem);
+  pointer-events: none;
+}
+.current-sticky-trigger { pointer-events: auto; }
+.current-sticky-edge { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .current-sticky-edge {
+    display: block;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 0.5rem;
+    pointer-events: auto;
+  }
+  /* PCは画面の右端を入口とする。キーボード利用時だけ入口ボタンを見せる。 */
+  .current-sticky-trigger { opacity: 0; pointer-events: none; }
+  .current-sticky-trigger:focus-visible { opacity: 1; pointer-events: auto; }
+}
+.current-sticky-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(18rem, calc(100vw - 1rem));
+  max-height: min(65dvh, calc(100dvh - 16rem));
+  overflow: hidden;
+  transform: translateX(calc(100% + 2rem + env(safe-area-inset-right)));
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 220ms ease-out, visibility 0s 220ms;
+}
+.current-sticky-nav[data-open="true"] .current-sticky-panel {
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+@media (min-width: 92rem) and (hover: hover) and (pointer: fine) {
+  .current-sticky-panel {
+    width: clamp(10rem, calc((100vw - 72rem) / 2 - 1.5rem), 16rem);
+  }
+}
+@media (hover: none) and (pointer: coarse) and (orientation: landscape) {
+  .current-sticky-nav {
+    top: 3.25rem;
+  }
+  .current-sticky-panel { max-height: calc(100dvh - 6.75rem); }
+}
+.sticky-jump-highlight { animation: sticky-jump-fade 1.8s forwards; }
+@keyframes sticky-jump-fade {
+  0%, 75% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .current-sticky-panel { transition: none; }
+  .sticky-jump-highlight { animation-timing-function: steps(1, end); }
+}
+
 html,
 body {
   min-height: 100%;
@@ -24,6 +91,8 @@ body {
 .editor-tools { grid-column: 1 / -1; grid-row: 2; }
 .editor-tools .btn { width: 2.75rem; height: 2.75rem; min-height: 2.75rem; }
 .editor-settings { grid-column: 1; grid-row: 3; }
+.text-layer-active [data-note-id]:hover .text-note-outline { stroke: #666; }
+.pdf-viewport.cursor-grab[data-panning="true"] { cursor: grabbing; }
 .editor-toolbar [data-editor-row="actions"] { grid-column: 2; grid-row: 3; }
 .editor-toolbar [data-editor-row="actions"] .btn { height: 2.75rem; min-height: 2.75rem; }
 .note-export-content { max-height: min(24rem, calc(100dvh - 8rem)); overflow-y: auto; overscroll-behavior: contain; }
