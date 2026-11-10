@@ -102,6 +102,7 @@ body {
   max-height: var(--editor-options-maxHeight, calc(100dvh - 1rem));
   overflow: auto; overscroll-behavior: contain;
 }
+.text-editor-actions { margin-top: 0.25rem; }
 @media (640px <= width < 900px) {
   .editor-settings { grid-column: 1 / -1; }
   .editor-toolbar [data-editor-row="actions"] { grid-column: 1 / -1; grid-row: 4; justify-content: flex-end; }
@@ -199,24 +200,28 @@ body {
   }
   .text-editor-panel {
     position: relative; left: auto !important; top: auto !important; width: 100% !important; height: auto !important;
-    max-height: min(65dvh, var(--editor-visible-height, 65dvh)); overflow: auto; overscroll-behavior: contain; padding: 0.75rem;
-    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 0.5rem;
+    max-height: min(65dvh, var(--editor-visible-height, 65dvh)); overflow: hidden; padding: 0.5rem;
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
     background: var(--color-base-100); border-top: 1px solid var(--color-base-300);
   }
-  .text-editor-panel textarea { min-height: 6rem !important; max-height: 25dvh; font-size: 16px !important; line-height: 1.5 !important; }
+  .text-editor-panel textarea { flex: 1 1 6rem; height: 6rem !important; min-height: 3rem !important; max-height: 25dvh; font-size: 16px !important; line-height: 1.5 !important; }
   .text-editor-panel textarea[data-note-kind="text"] { background: white !important; }
   .text-editor-panel input[type="number"] { font-size: 16px; min-height: 2.75rem; }
-  .text-editor-options { position: static; width: 100%; max-width: none; max-height: none; overflow: visible;
-    transform: none !important; margin-top: 0.5rem; border: 0; box-shadow: none; }
+  .text-editor-options { position: static; display: contents; }
+  .text-editor-settings { flex: 0 1 auto; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; }
   .text-editor-options .btn { min-height: 2.75rem; height: 2.75rem; padding-inline: 0.75rem; }
+  .text-editor-settings input[type="color"] { min-width: 2.75rem; min-height: 2.75rem; }
   .text-editor-error { position: static; }
   .editing-note-preview [visibility="hidden"] { visibility: visible; }
-  .text-editor-actions { position: sticky; bottom: 0; z-index: 1; background: var(--color-base-100); padding-block: 0.25rem; flex-wrap: wrap; }
+  /* キーボードで高さが減っても、確定・取消を設定のスクロール外へ残す。 */
+  .text-editor-actions { order: -1; flex-shrink: 0; margin: 0; justify-content: flex-end; gap: 0.5rem; background: var(--color-base-100); }
+  .text-editor-actions .btn { min-width: 2.75rem; }
   @media (width >= 640px) {
-    .text-editor-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 0.5rem; padding: 0.5rem; }
+    .text-editor-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); align-items: start; }
+    .text-editor-actions { grid-column: 1 / -1; grid-row: 1; }
     .text-editor-panel textarea { min-height: 3rem !important; height: clamp(3rem, 24dvh, 8rem) !important; }
-    .text-editor-options { margin-top: 0; padding: 0; }
-    .text-editor-error { grid-column: 1 / -1; }
+    .text-editor-settings { max-height: 100%; }
   }
 
   /* 横向きのタッチ画面だけ、既存の操作を同じDOMのまま「上の設定・左の道具・右のPDF」へ配置する。

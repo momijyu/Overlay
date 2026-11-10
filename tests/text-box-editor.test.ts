@@ -144,6 +144,29 @@ test("横向きへの回転・キーボード開閉でも文章の草稿を失�
   assert.equal(f.getCancelled(), 0);
 });
 
+test("キーボードで表示範囲が減っても完了から草稿を一度だけ確定し、IME変換中は保留する", () => {
+  const viewport = Object.assign(new Events(), { height: 600, offsetTop: 0 });
+  Object.assign(win, { visualViewport: viewport, innerHeight: 800 });
+  const f = fixture(true, { ...note, kind: "sticky" });
+  f.change("変換中");
+  f.input().onCompositionStart!({} as React.CompositionEvent<HTMLTextAreaElement>);
+  const done = () => {
+    const button = find(f.render(), (element) => element.type === "button"
+      && (element.props as { children?: string }).children === "完了")!;
+    (button.props as React.ComponentProps<"button">).onClick!({} as React.MouseEvent<HTMLButtonElement>);
+  };
+  viewport.height = 180; viewport.offsetTop = 40; viewport.emit("resize");
+  done();
+  assert.equal(f.commits.length, 0);
+  assert.equal(f.input().value, "変換中");
+  f.input().onCompositionEnd!({} as React.CompositionEvent<HTMLTextAreaElement>);
+  f.change("確定した付箋");
+  done();
+  doc.emit("click");
+  assert.equal(f.commits.length, 1);
+  assert.equal(f.commits[0].text, "確定した付箋");
+});
+
 test("ページ上のtextareaで入力し、外へフォーカスを移すと1回だけ確定する", () => {
   const f = fixture();
   f.change("日本語\r\n補足");

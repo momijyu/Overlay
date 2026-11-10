@@ -211,22 +211,24 @@ export function TextBoxEditor({ note, font, pageWidth, pageHeight, pageScale, ex
           if (event.key === "Escape") { event.preventDefault(); cancel(); }
           else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); finish(); }
         }} />
-      <div ref={optionsRef} className="text-editor-options absolute w-72 space-y-1 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm"
+      <div ref={optionsRef} className="text-editor-options absolute w-72 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm"
         style={{ left: "var(--editor-options-left, 0px)", top: "var(--editor-options-top, 100%)",
           transform: `scale(${1 / pageScale})`, transformOrigin: "top left" }}>
-        <TextSizeControl value={fontSize} onChange={changeSize} />
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1 text-sm">文字色
-            <input type="color" className="input input-xs w-10 p-0.5" aria-label="文字色"
-              value={colors.color ?? PEN_COLOR} onChange={(event) => changeColor("color", event.target.value)} />
-          </label>
-          {note.kind === "sticky" && <label className="flex items-center gap-1 text-sm">背景色
-            <input type="color" className="input input-xs w-10 p-0.5" aria-label="付箋の背景色"
-              value={colors.backgroundColor ?? STICKY_BACKGROUND}
-              onChange={(event) => changeColor("backgroundColor", event.target.value)} />
-          </label>}
+        <div className="text-editor-settings space-y-1">
+          <TextSizeControl value={fontSize} onChange={changeSize} />
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1 text-sm">文字色
+              <input type="color" className="input input-xs w-10 p-0.5" aria-label="文字色"
+                value={colors.color ?? PEN_COLOR} onChange={(event) => changeColor("color", event.target.value)} />
+            </label>
+            {note.kind === "sticky" && <label className="flex items-center gap-1 text-sm">背景色
+              <input type="color" className="input input-xs w-10 p-0.5" aria-label="付箋の背景色"
+                value={colors.backgroundColor ?? STICKY_BACKGROUND}
+                onChange={(event) => changeColor("backgroundColor", event.target.value)} />
+            </label>}
+          </div>
+          {error && <p className="text-editor-error text-sm text-error [overflow-wrap:anywhere]" role="alert">{error}</p>}
         </div>
-        {error && <p className="text-editor-error text-sm text-error [overflow-wrap:anywhere]" role="alert">{error}</p>}
         <div className="text-editor-actions flex flex-wrap gap-1" onPointerDown={(event) => event.preventDefault()}>
           <button type="button" className="btn btn-xs" onClick={() => finish()}>完了</button>
           <button type="button" className="btn btn-xs" onClick={cancel}>キャンセル</button>

@@ -32,7 +32,7 @@ test("横向き相当の幅ではページ操作を同じ行へ置き、設定�
   assert.match(css, /@media \(width >= 640px\)\s*\{\s*\.editor-toolbar \{ display: grid/);
   assert.match(css, /\[data-editor-row="actions"\] \{ grid-column: 2; grid-row: 1/);
   assert.match(css, /\.text-editor-panel \{ display: grid; grid-template-columns/);
-  assert.match(css, /\.text-editor-actions \{ position: sticky; bottom: 0/);
+  assert.match(css, /\.text-editor-actions \{ order: -1; flex-shrink: 0/);
 });
 
 test("設定・書き出し・ノート名の表示は幅だけのsm指定へ依存しない", () => {
