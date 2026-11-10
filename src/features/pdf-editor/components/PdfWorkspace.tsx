@@ -549,6 +549,9 @@ export function PdfWorkspace() {
             <p className="truncate text-sm" title={noteName || file.name}>{noteName}</p>
             <p data-editor-mobile-status role="status" className={`min-h-4 text-xs ${saveError ? "text-error" : "text-base-content/60"}`}>{statusText}</p>
           </div>
+          <CurrentStickyNotes entries={createStickyOutline(history.textsByPage, pages)}
+            currentPageId={pageId} disabled={isBusy}
+            onNavigate={(targetPageId, textId) => openStickyPage(null, targetPageId, textId)} />
           <button type="button" className="editor-settings-toggle btn btn-square btn-ghost mobile-only" aria-label="道具の設定"
             title="道具の設定" aria-expanded={mobileSettingsOpen} aria-controls="editor-settings"
             onClick={() => setMobileSettingsOpen((open) => !open)}><EditorIcon name="settings" /></button>
@@ -610,9 +613,6 @@ export function PdfWorkspace() {
             onRestore={() => void handleRestoreBackup()}
             onClose={() => { if (!operationRef.current) { setPendingBackup(null); setBackupError(null); } }} />}
       </NotebookDrawer>
-      {document && file && <CurrentStickyNotes entries={createStickyOutline(history.textsByPage, pages)}
-        currentPageId={pageId} disabled={isBusy}
-        onNavigate={(targetPageId, textId) => openStickyPage(null, targetPageId, textId)} />}
       <main className="editor-main mx-auto w-full max-w-6xl p-4 sm:p-6">
         <section className="workspace-card card min-w-0 w-full border border-base-300 bg-base-100 shadow-sm">
           <div className="workspace-body card-body gap-5">

@@ -49,8 +49,10 @@ export function CurrentStickyNotes({ entries, currentPageId, disabled, onNavigat
       if (!open) { hoverOpened.current = true; setOpen(true); }
     }} />
     <button ref={trigger} type="button" className="current-sticky-trigger btn btn-sm min-h-11 min-w-11 shadow-sm"
-      aria-expanded={open} aria-controls="current-sticky-list"
+      aria-label="この資料の付箋" aria-expanded={open} aria-controls="current-sticky-list"
       onClick={() => { cancelClose(); hoverOpened.current = false; setOpen((value) => !value); }}>付箋</button>
+    {open && <button type="button" className="current-sticky-backdrop" tabIndex={-1}
+      aria-label="付箋一覧の外側を押して閉じる" onClick={() => close(false)} />}
     <section id="current-sticky-list" aria-hidden={!open} inert={!open}
       className="current-sticky-panel rounded-box border border-base-300 bg-base-100 shadow-md">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-3 py-2">

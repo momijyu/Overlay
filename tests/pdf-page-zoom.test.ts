@@ -259,3 +259,45 @@ test("表示番号と元PDF番号が異なるときは元PDF番号を描画す�
   f.render(); await flush(); assert.deepEqual(f.requestedPages, [2]);
   f.tasks[0].resolve(); await flush(); f.render(); f.cleanup();
 });
+
+test("タッチでは小さいPDFも横幅いっぱいに表示し、画面条件の変更後もPDF・線・文章の倍率を一致させる", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let changed!: () => void;
+  let removed = false;
+  const media = { matches: true,
+    addEventListener: (_: string, listener: () => void) => { changed = listener; },
+    removeEventListener: (_: string, listener: () => void) => { removed = listener === changed; },
+  };
+  Object.assign(window, { matchMedia: () => media });
+  const f = fixture();
+  try {
+    f.render(); await flush(); f.tasks[0].resolve(); await flush(); f.render();
+    f.resize(900, 300);
+    const fitted = f.render();
+    assert.equal(f.zoom(), 1); assert.equal(f.canvas.style.width, "900px");
+    assert.equal(childProps(fitted, PenLayer).pageScale, 1.5);
+    assert.equal(childProps(fitted, TextLayer).pageScale, 1.5);
+    t.mock.timers.tick(100); await flush();
+    assert.equal(f.tasks.at(-1)!.scale, 1.5);
+    f.tasks.at(-1)!.resolve(); await flush();
+    media.matches = false; changed();
+    const desktop = f.render();
+    assert.equal(f.canvas.style.width, "600px");
+    assert.equal(childProps(desktop, TextLayer).pageScale, 1);
+    assert.equal(f.zoom(), 1);
+  } finally { f.cleanup(); }
+  assert.equal(removed, true);
+});
+
+test("タッチの白紙も同じ横幅基準を使い、PDFを取得せず表示する", async () => {
+  Object.assign(window, { matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) });
+  const f = fixture({ id: 4, kind: "blank", width: 200, height: 300 });
+  try {
+    f.render(); await flush();
+    const rendered = f.render();
+    assert.equal(f.canvas.style.width, "400px");
+    assert.equal(childProps(rendered, PenLayer).pageScale, 2);
+    assert.equal(childProps(rendered, TextLayer).pageScale, 2);
+    assert.deepEqual(f.requestedPages, []);
+  } finally { f.cleanup(); }
+});

@@ -149,3 +149,12 @@ test("右端以外への接近では開かず、閉じた一覧は操作・読�
   const visible = all(f.render()).find(child => child.props.id === "current-sticky-list")!;
   assert.equal(visible.props.inert, false); assert.equal(visible.props["aria-hidden"], false);
 });
+
+test("付箋一覧の外側をタップすると移動せず閉じ、フォーカスを奪わない", () => {
+  const f = fixture(); f.toggle();
+  const backdrop = f.buttons().find(child => child.props.className === "current-sticky-backdrop")!;
+  assert.equal(backdrop.props.tabIndex, -1);
+  (backdrop.props.onClick as () => void)();
+  assert.equal(open, false); assert.equal(focused, 0); assert.deepEqual(f.jumps, []);
+  assert.ok(!f.buttons().some(child => child.props.className === "current-sticky-backdrop"));
+});

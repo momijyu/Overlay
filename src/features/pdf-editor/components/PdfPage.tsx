@@ -71,7 +71,18 @@ export function PdfPage({
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [interaction] = useState(createPageInteraction);
-  const displayScale = renderedPage ? Math.min(1, availableWidth / renderedPage.width) * zoom : 0;
+  const [fitWidth, setFitWidth] = useState(false);
+  const displayScale = renderedPage ? (fitWidth ? availableWidth / renderedPage.width : Math.min(1, availableWidth / renderedPage.width)) * zoom : 0;
+
+  useEffect(() => {
+    // CSSと同じ条件。タッチ画面では元PDFが小さくても利用可能な横幅を100%にする。
+    const compact = window.matchMedia?.("(width < 640px), (hover: none) and (pointer: coarse)");
+    if (!compact) return;
+    const update = () => setFitWidth(compact.matches);
+    update();
+    compact.addEventListener("change", update);
+    return () => compact.removeEventListener("change", update);
+  }, []);
 
   useLayoutEffect(() => {
     zoomRef.current = zoom;
@@ -177,7 +188,7 @@ export function PdfPage({
 
         const original = blankWidth !== undefined && blankHeight !== undefined ? { width: blankWidth, height: blankHeight } : page!.getViewport({ scale: 1 });
         // 最初に収まる大きさを100%として、その大きさに表示倍率を掛ける。
-        const scale = Math.min(1, availableWidth / original.width) * zoom;
+        const scale = (fitWidth ? availableWidth / original.width : Math.min(1, availableWidth / original.width)) * zoom;
         const pdfViewport = page?.getViewport({ scale });
         const viewport = pdfViewport ?? { width: original.width * scale, height: original.height * scale };
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
@@ -231,7 +242,7 @@ export function PdfPage({
       renderTask?.cancel();
       timing?.finish("cancelled");
     };
-  }, [document, sourcePageNumber, blankWidth, blankHeight, availableWidth, zoom, openTiming]);
+  }, [document, sourcePageNumber, blankWidth, blankHeight, availableWidth, fitWidth, zoom, openTiming]);
 
   return (
     <div
