@@ -9,6 +9,8 @@ import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
 import { DriveVersionRequired } from "@/features/pdf-editor/driveLibraryCache";
 import { speedMeasurements } from "@/features/pdf-editor/speedMeasurements";
 import { CurrentStickyNotes } from "@/features/pdf-editor/components/CurrentStickyNotes";
+import { createShapeStroke } from "@/features/pdf-editor/shapeStrokes";
+import { fillEnclosedRegion } from "@/features/pdf-editor/fillRegion";
 
 // Hooksの保持だけを代用し、Workspace内のイベント・状態・保存の接続を検証する。
 // DOM・実際のReact再描画・ブラウザ操作を再現するテストではない。
@@ -181,6 +183,58 @@ function setup() {
 }
 
 const red: PenStroke = { width: 2.5, color: "#ff0000", points: [{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }] };
+
+test("バケツの塗りも保存・Undo・Redo・再着色の履歴へ渡す", async () => {
+  const { calls, autosave } = setup();
+  (button("塗りつぶし")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).tool, "fill");
+  const box = createShapeStroke("rectangle", { x: .1, y: .1 }, { x: .9, y: .9 }, 800, 600, 2.5, "#111827")!;
+  const fill = fillEnclosedRegion([box], { x: .5, y: .5 }, 800, 600, "#ff0000");
+  props(PdfPage).onStrokeComplete(fill); await autosave.flush();
+  assert.deepEqual(calls.at(-1)!.strokesByPage[1], [fill]);
+  const blue = { ...fill, color: "#0000ff" };
+  props(PdfPage).onStrokesChange([blue]); await autosave.flush();
+  assert.deepEqual(props(PdfPage).strokes, [blue]);
+  props(HistoryControls).onUndo(); await autosave.flush(); assert.deepEqual(props(PdfPage).strokes, [fill]);
+  props(HistoryControls).onRedo(); await autosave.flush(); assert.deepEqual(props(PdfPage).strokes, [blue]);
+  autosave.dispose();
+});
+
+test("図形の種類・太さ・色を編集領域へ渡し、図形も1回の保存とUndo・Redoで扱う", async () => {
+  const { calls, autosave } = setup();
+  (button("図形")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).tool, "shape");
+  assert.equal(props(PdfPage).shapeKind, "rectangle");
+  const choose = find(render(), (entry) => (entry.props as { "aria-label"?: string })["aria-label"] === "図形の種類")!;
+  const select = choose.props as React.ComponentProps<"select">;
+  select.onChange!({ target: { value: "arrow" } } as React.ChangeEvent<HTMLSelectElement>);
+  assert.equal(props(PdfPage).shapeKind, "arrow");
+  select.onChange!({ target: { value: "unknown" } } as React.ChangeEvent<HTMLSelectElement>);
+  assert.equal(props(PdfPage).shapeKind, "arrow");
+  props(PenWidthControl).onChange(32);
+  const color = find(render(), (entry) => (entry.props as { id?: string }).id === "pen-color")!.props as React.ComponentProps<"input">;
+  color.onChange!({ target: { value: "#ef4444" } } as React.ChangeEvent<HTMLInputElement>);
+  assert.equal(props(PdfPage).penWidth, 32); assert.equal(props(PdfPage).penColor, "#ef4444");
+  assert.equal(calls.length, 0); // 設定だけでは編集しない。
+  const stroke = createShapeStroke("arrow", { x: .2, y: .2 }, { x: .7, y: .7 }, 600, 800, 32, "#ef4444")!;
+  props(PdfPage).onStrokeComplete(stroke);
+  await autosave.flush(); assert.deepEqual(calls.at(-1)!.strokesByPage[1], [stroke]);
+  props(HistoryControls).onUndo(); await autosave.flush(); assert.deepEqual(props(PdfPage).strokes, []);
+  props(HistoryControls).onRedo(); await autosave.flush(); assert.deepEqual(props(PdfPage).strokes, [stroke]);
+  autosave.dispose();
+});
+
+test("投げ縄の混在編集を同じ保存スナップショットへ渡し、1回のUndoとRedoで両方戻す", async () => {
+  const { calls, autosave } = setup();
+  (button("投げ縄で選択")!.props as { onClick: () => void }).onClick();
+  assert.equal(props(PdfPage).tool, "lasso");
+  const texts: TextNotesByPage[1] = [{ id: "copied", kind: "sticky", text: "復習", x: .2, y: .2, width: .2, fontSize: 14 }];
+  props(PdfPage).onAnnotationsChange!([red], texts);
+  await autosave.flush(); assert.deepEqual(calls.at(-1)!.strokesByPage[1], [red]); assert.deepEqual(calls.at(-1)!.textsByPage?.[1], texts);
+  props(HistoryControls).onUndo(); await autosave.flush(); assert.deepEqual(props(PdfPage).strokes, []); assert.deepEqual(props(PdfPage).texts, []);
+  props(HistoryControls).onRedo(); await autosave.flush(); assert.deepEqual(props(PdfPage).strokes, [red]); assert.deepEqual(props(PdfPage).texts, texts);
+  autosave.dispose();
+});
 
 test("一覧で選んだ未表示ノートをDrive保存の確認へ渡し、編集画面とDBを変更しない", async () => {
   setup(); await openOther(); props(PdfPage).onStrokeComplete(red);
@@ -470,7 +524,7 @@ function assertStableToolRows() {
 
 test("道具切替で編集操作の並びを変えず、テキスト・付箋も同じ高さの設定欄を使う", () => {
   const { calls } = setup();
-  for (const label of ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす"]) {
+  for (const label of ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす", "投げ縄で選択", "図形", "塗りつぶし"]) {
     (button(label)!.props as { onClick: () => void }).onClick();
     assertStableToolRows();
     if (label === "テキストボックス" || label === "付箋") {
@@ -515,8 +569,8 @@ test("横向き用の配置先を持ち、道具・履歴・ページ・設定�
   const tools = find(render(), (element) => (element.props as { "aria-label"?: string })["aria-label"] === "編集ツール")!;
   assert.match((tools.props as React.ComponentProps<"div">).className!, /editor-tool-buttons/);
   const buttons = React.Children.toArray((tools.props as React.ComponentProps<"div">).children) as React.ReactElement<React.ComponentProps<"button">>[];
-  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす"]);
-  assert.equal(buttons.length, 6);
+  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす", "投げ縄で選択", "図形", "塗りつぶし"]);
+  assert.equal(buttons.length, 9);
   const header = find(render(), (element) => element.type === AppHeader)!;
   const heading = find(header, (element) => String((element.props as { className?: string }).className).includes("editor-mobile-heading"))!;
   assert.ok(find(heading, (element) => (element.props as { "data-editor-mobile-status"?: boolean })["data-editor-mobile-status"] !== undefined));

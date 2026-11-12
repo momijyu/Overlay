@@ -69,9 +69,17 @@ export async function exportAnnotatedPdf(
       return { x, y };
     }
 
-    for (const stroke of strokes) {
+    for (const stroke of [...strokes.filter((stroke) => stroke.kind === "fill"), ...strokes.filter((stroke) => stroke.kind !== "fill")]) {
       const color = stroke.color ?? PEN_COLOR;
       const penColor = toColor(color);
+      if (stroke.kind === "fill") {
+        const path = stroke.points.map((point, index) => {
+          const { x, y } = toPdfPoint(point);
+          return `${index === 0 ? "M" : "L"} ${x} ${-y}`;
+        }).join(" ") + " Z";
+        outputPage.drawSvgPath(path, { x: 0, y: 0, color: penColor, borderWidth: 0 });
+        continue;
+      }
       const markerStyle = stroke.kind === "marker" ? { opacity: MARKER_OPACITY, blendMode: BlendMode.Multiply } : {};
       const [first, ...rest] = stroke.points;
       if (!first) continue;

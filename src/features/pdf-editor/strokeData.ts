@@ -14,9 +14,10 @@ export function readStrokes(value: unknown): Record<number, PenStroke[]> {
       const color = "color" in stroke ? stroke.color : undefined;
       const kind = "kind" in stroke ? stroke.kind : undefined;
       if (color !== undefined && !isPenColor(color)) throw invalid();
-      if (kind !== undefined && kind !== "pen" && kind !== "marker") throw invalid();
+      if (kind !== undefined && kind !== "pen" && kind !== "marker" && kind !== "fill") throw invalid();
       if (typeof width !== "number" || !Number.isFinite(width) || width <= 0 || !Array.isArray(points) || points.length === 0) throw invalid();
-      return {
+      if (kind === "fill" && (points.length < 4 || points.length > 100_000)) throw invalid();
+      const checked: PenStroke = {
         width,
         ...(color === undefined ? {} : { color }),
         ...(kind === undefined ? {} : { kind }),
@@ -28,6 +29,8 @@ export function readStrokes(value: unknown): Record<number, PenStroke[]> {
           return { x, y };
         }),
       };
+      if (kind === "fill" && (checked.points[0].x !== checked.points.at(-1)!.x || checked.points[0].y !== checked.points.at(-1)!.y)) throw invalid();
+      return checked;
     });
   }
   return result;

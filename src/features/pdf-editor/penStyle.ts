@@ -15,8 +15,8 @@ export const PEN_WIDTH_OPTIONS = [
   { width: 1, label: "極細" },
   { width: 1.5, label: "細" },
   { width: DEFAULT_PEN_WIDTH, label: "標準" },
-  { width: 3.5, label: "太" },
-  { width: 5, label: "極太" },
+  { width: 8, label: "太" },
+  { width: 32, label: "極太" },
 ] as const;
 
 export function isPenColor(value: unknown): value is string {

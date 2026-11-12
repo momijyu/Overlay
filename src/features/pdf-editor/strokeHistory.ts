@@ -44,6 +44,16 @@ export function recordTextEdit(history: StrokeHistory, pageNumber: number, texts
   return recordEdit(history, pageNumber, history.strokesByPage, { ...history.textsByPage, [pageNumber]: texts });
 }
 
+// 投げ縄の移動・複製は線と文章を同時に変えても1操作にまとめる。
+export function recordAnnotationEdit(history: StrokeHistory, pageNumber: number, strokes: PenStroke[], texts: TextNote[]): StrokeHistory {
+  if (!Number.isSafeInteger(pageNumber) || pageNumber < 1) return history;
+  const sameStrokes = history.strokesByPage[pageNumber] === strokes || (!history.strokesByPage[pageNumber] && !strokes.length);
+  const sameTexts = history.textsByPage[pageNumber] === texts || (!history.textsByPage[pageNumber] && !texts.length);
+  if (sameStrokes && sameTexts) return history;
+  return recordEdit(history, pageNumber, sameStrokes ? history.strokesByPage : { ...history.strokesByPage, [pageNumber]: strokes },
+    sameTexts ? history.textsByPage : { ...history.textsByPage, [pageNumber]: texts });
+}
+
 function recordEdit(history: StrokeHistory, pageNumber: number, strokesByPage: Strokes, textsByPage: TextNotesByPage,
   change?: { pageChange?: { before: NotePage[]; after: NotePage[]; previousId: number }; headingsByPage?: HeadingsByPage }): StrokeHistory {
   const pageChange = change?.pageChange;

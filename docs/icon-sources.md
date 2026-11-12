@@ -1,6 +1,6 @@
 # 編集アイコンの取得元
 
-2026年10月20日のユーザー指示により、先に実装した線画をLucideの公式SVGへ差し替えた。2026年10月21日のページ矢印とスマホ操作の追加後は12種類の図形を`EditorIcon.tsx`へインライン化している。パッケージは追加しない。
+2026年10月20日のユーザー指示により、先に実装した線画をLucideの公式SVGへ差し替えた。2026年11月13日の図形・塗りつぶしツール追加後は15種類の図形を`EditorIcon.tsx`へインライン化している。パッケージは追加しない。
 
 - プロジェクト：[Lucide](https://lucide.dev/)
 - 採用バージョン：[1.59.0](https://github.com/lucide-icons/lucide/releases/tag/1.59.0)（更新時も取得バージョンを固定する）
@@ -14,6 +14,9 @@
 
 | Overlayの用途 | LucideのSVG（取得したタグへのリンク） |
 |---|---|
+| 塗りつぶし | [paint-bucket.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/paint-bucket.svg)（2026年11月13日追加） |
+| 図形 | [shapes.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/shapes.svg)（2026年11月13日追加） |
+| 投げ縄 | [lasso-select.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/lasso-select.svg)（2026年11月12日追加） |
 | ペン | [pencil.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/pencil.svg) |
 | マーカー | [highlighter.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/highlighter.svg) |
 | 消しゴム | [eraser.svg](https://github.com/lucide-icons/lucide/blob/1.59.0/icons/eraser.svg) |

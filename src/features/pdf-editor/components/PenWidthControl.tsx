@@ -4,19 +4,19 @@ type PenWidthControlProps = {
   value: number;
   disabled: boolean;
   onChange: (value: number) => void;
-  tool?: "pen" | "marker";
+  tool?: "pen" | "marker" | "shape";
 };
 
 export function PenWidthControl({ value, disabled, onChange, tool = "pen" }: PenWidthControlProps) {
   const options = tool === "marker" ? MARKER_WIDTH_OPTIONS : PEN_WIDTH_OPTIONS;
-  const id = tool === "marker" ? "marker-width" : "pen-width";
+  const id = `${tool}-width`;
   const index = options.findIndex((option) => option.width === value);
   const selectedIndex = index < 0 ? 2 : index;
   const selected = options[selectedIndex];
 
   return (
     <div className="flex items-center gap-2">
-      <label className="label" htmlFor={id}>{tool === "marker" ? "マーカーの太さ" : "ペンの太さ"}</label>
+      <label className="label" htmlFor={id}>{tool === "shape" ? "線の太さ" : tool === "marker" ? "マーカーの太さ" : "ペンの太さ"}</label>
       <input
         id={id}
         type="range"

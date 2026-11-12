@@ -36,8 +36,9 @@ import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
 import { ZoomControl } from "./ZoomControl";
 import { EditorIcon } from "./EditorIcon";
-import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordPageInsertion, recordPageDeletion, recordPageClear, pageAnnotationCounts, undoStrokeEdit, redoStrokeEdit, type StrokeHistory, type PageClearSelection } from "../strokeHistory";
+import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordAnnotationEdit, recordPageInsertion, recordPageDeletion, recordPageClear, pageAnnotationCounts, undoStrokeEdit, redoStrokeEdit, type StrokeHistory, type PageClearSelection } from "../strokeHistory";
 import { speedMeasurements, type SpeedSpan } from "../speedMeasurements";
+import { SHAPE_OPTIONS, type ShapeKind } from "../shapeStrokes";
 
 type PdfInput = {
   file: File;
@@ -51,6 +52,9 @@ type PdfInput = {
   initialFolderId?: string | null;
 };
 
+const EMPTY_STROKES: PenStroke[] = [];
+const EMPTY_TEXTS: TextNote[] = [];
+
 const editorTools: { tool: EditorTool; label: string }[] = [
   { tool: "pen", label: "ペン" },
   { tool: "marker", label: "マーカー" },
@@ -58,6 +62,9 @@ const editorTools: { tool: EditorTool; label: string }[] = [
   { tool: "text", label: "テキストボックス" },
   { tool: "sticky", label: "付箋" },
   { tool: "hand", label: "ページを動かす" },
+  { tool: "lasso", label: "投げ縄で選択" },
+  { tool: "shape", label: "図形" },
+  { tool: "fill", label: "塗りつぶし" },
 ];
 
 export function PdfWorkspace() {
@@ -113,6 +120,7 @@ export function PdfWorkspace() {
   const [pageExport, setPageExport] = useState<{
     pageNumber: number; pageCount: number; documentVersion: number; version: number; error: string | null;
   } | null>(null);
+  const [shapeKind, setShapeKind] = useState<ShapeKind>("rectangle");
   useEffect(() => noteId ? pinDriveNote(noteId) : undefined, [noteId]);
   useEffect(() => subscribeDriveCacheIssue((id, message) => {
     if (mountedRef.current && autosaveRef.current?.getState().noteId === id) setError(message);
@@ -278,6 +286,11 @@ export function PdfWorkspace() {
   function updatePageStrokes(strokes: PenStroke[]) {
     if (operationRef.current) return;
     applyHistory(recordStrokeEdit(historyRef.current, pageId, strokes));
+  }
+
+  function updatePageAnnotations(strokes: PenStroke[], texts: TextNote[]) {
+    if (operationRef.current) return;
+    applyHistory(recordAnnotationEdit(historyRef.current, pageId, strokes, texts));
   }
 
   function updatePageTexts(notes: TextNote[]) {
@@ -720,7 +733,7 @@ export function PdfWorkspace() {
                       {editorTools.map(({ tool, label }) => <button key={tool} type="button"
                         className={`btn btn-square btn-ghost join-item ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
                         aria-label={label} title={label} aria-pressed={penTool === tool} disabled={isBusy}
-                        onClick={() => { if (!isBusy) { setPenTool(tool); if (tool === "text" || tool === "sticky" || tool === "hand") setMobileSettingsOpen(true); } }}>
+                        onClick={() => { if (!isBusy) { setPenTool(tool); if (tool === "text" || tool === "sticky" || tool === "hand" || tool === "lasso" || tool === "shape" || tool === "fill") setMobileSettingsOpen(true); } }}>
                         <EditorIcon name={tool} />
                       </button>)}
                     </div>
@@ -734,9 +747,18 @@ export function PdfWorkspace() {
                   <div data-editor-row="settings" role="group" aria-label="道具の設定"
                     id="editor-settings" data-mobile-open={mobileSettingsOpen}
                     className="editor-settings flex h-11 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
-                    {/* マーカーの表示の挙動めっちゃすき。 */}
-                    {(penTool === "pen" || penTool === "marker") && <div className="flex items-center gap-2">
-                      <label className="label" htmlFor="pen-color">{penTool === "marker" ? "マーカーの色" : "ペンの色"}</label>
+                    {penTool === "shape" && <div className="flex items-center gap-2">
+                      <label className="label" htmlFor="shape-kind">図形</label>
+                      <select id="shape-kind" className="select select-sm w-24" aria-label="図形の種類" value={shapeKind} disabled={isBusy}
+                        onChange={(event) => {
+                          const selected = SHAPE_OPTIONS.find((option) => option.kind === event.target.value);
+                          if (!isBusy && selected) setShapeKind(selected.kind);
+                        }}>
+                        {SHAPE_OPTIONS.map((option) => <option key={option.kind} value={option.kind}>{option.label}</option>)}
+                      </select>
+                    </div>}
+                    {(penTool === "pen" || penTool === "marker" || penTool === "shape" || penTool === "fill") && <div className="flex items-center gap-2">
+                      <label className="label" htmlFor="pen-color">{penTool === "fill" ? "塗りの色" : penTool === "shape" ? "線の色" : penTool === "marker" ? "マーカーの色" : "ペンの色"}</label>
                       <input id="pen-color" type="color" className="input input-sm w-14 p-1" value={penTool === "marker" ? markerColor : penColor}
                         disabled={isBusy} onChange={(event) => {
                           if (isPenColor(event.target.value)) {
@@ -745,17 +767,18 @@ export function PdfWorkspace() {
                           }
                         }} />
                     </div>}
-                    {penTool === "pen" && <PenWidthControl value={penWidth}
+                    {(penTool === "pen" || penTool === "shape") && <PenWidthControl tool={penTool} value={penWidth}
                       disabled={isBusy} onChange={setPenWidth} />}
                     {penTool === "marker" && <PenWidthControl tool="marker" value={markerWidth}
                       disabled={isBusy} onChange={setMarkerWidth} />}
                     {penTool === "eraser" && <EraserSizeControl
                       value={eraserWidth} disabled={isBusy} onChange={setEraserWidth}
                     />}
-                    {(penTool === "text" || penTool === "sticky") && <div
+                    {(penTool === "text" || penTool === "sticky" || penTool === "lasso") && <div
                       ref={setTextControlsContainer} data-text-controls
                       className="flex items-center gap-2" />}
                     {penTool === "hand" && <p className="text-sm text-base-content/70">ドラッグでページを移動</p>}
+                    {penTool === "fill" && <p className="text-sm text-base-content/70">描いた線で囲んだ内側をタップ</p>}
                     <div className="mobile-zoom mobile-only"><ZoomControl id="mobile-pdf-zoom" value={zoom} disabled={isBusy} onChange={setZoom} /></div>
                   </div>
                   <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center gap-2">
@@ -794,15 +817,17 @@ export function PdfWorkspace() {
                   openTiming={openTiming}
                   pageNumber={pageNumber}
                   notePage={currentPage}
-                  strokes={strokesByPage[pageId] ?? []}
-                  texts={history.textsByPage[pageId] ?? []}
+                  strokes={strokesByPage[pageId] ?? EMPTY_STROKES}
+                  texts={history.textsByPage[pageId] ?? EMPTY_TEXTS}
                   stickyFocus={stickyFocus?.pageId === pageId ? stickyFocus : undefined}
                   textControlsContainer={textControlsContainer}
                   onTextsChange={updatePageTexts}
+                  onAnnotationsChange={updatePageAnnotations}
                   editVersion={history.version}
                   penWidth={penTool === "marker" ? markerWidth : penWidth}
                   penColor={penTool === "marker" ? markerColor : penColor}
                   tool={penTool}
+                  shapeKind={shapeKind}
                   eraserWidth={eraserWidth}
                   zoom={zoom}
                   onZoomChange={setZoom}

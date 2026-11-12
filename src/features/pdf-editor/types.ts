@@ -9,11 +9,11 @@ export type PenStroke = {
   // 色がない旧ノートは従来の黒として表示する。
   color?: string;
   // 未指定の旧ノートは通常のペン。マーカーも同じ線として消去・履歴管理する。
-  kind?: "pen" | "marker";
+  kind?: "pen" | "marker" | "fill";
 };
 
 export type PenTool = "pen" | "marker" | "eraser";
-export type EditorTool = PenTool | "text" | "sticky" | "hand";
+export type EditorTool = PenTool | "text" | "sticky" | "hand" | "lasso" | "shape" | "fill";
 export type TextNote = {
   id: string;
   kind: "text" | "sticky";

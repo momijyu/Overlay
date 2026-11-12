@@ -1,4 +1,5 @@
 import type { PenPoint, PenStroke } from "./types";
+import { eraseFilledRegion } from "./fillRegion";
 
 type Interval = [number, number];
 const EPSILON = 1e-10;
@@ -72,6 +73,12 @@ export function eraseStrokes(
   const start = pixels(from), end = pixels(to);
   let changed = false;
   const result = strokes.flatMap((stroke) => {
+    if (stroke.kind === "fill") {
+      const erased = eraseFilledRegion(stroke, from, to, pageWidth / pageScale, pageHeight / pageScale, radius / pageScale);
+      if (erased === stroke) return [stroke];
+      changed = true;
+      return erased ? [erased] : [];
+    }
     const fragments: PenPoint[][] = [];
     let current: PenPoint[] = [];
     let cut = false;

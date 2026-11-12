@@ -5,7 +5,9 @@ import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
 import type { NotePage, PenStroke, EditorTool, TextNote } from "../types";
 import { PenLayer } from "./PenLayer";
+import type { ShapeKind } from "../shapeStrokes";
 import { TextLayer } from "./TextLayer";
+import { LassoLayer } from "./LassoLayer";
 import type { StickyFocusRequest } from "../stickyNavigation";
 import { bindPageZoomWheel, capturePageZoomAnchor, capturePageResizeAnchor, restorePageZoomAnchor, type PageZoomAnchor } from "../pageZoom";
 import { bindPageGestures, createPageInteraction } from "../pageGestures";
@@ -20,10 +22,12 @@ type PdfPageProps = {
   penWidth: number;
   penColor: string;
   tool: EditorTool;
+  shapeKind?: ShapeKind;
   texts?: TextNote[];
   stickyFocus?: StickyFocusRequest;
   textControlsContainer?: HTMLDivElement | null;
   onTextsChange: (notes: TextNote[]) => void;
+  onAnnotationsChange?: (strokes: PenStroke[], texts: TextNote[]) => void;
   eraserWidth: number;
   zoom: number;
   onZoomChange: (zoom: number) => void;
@@ -42,10 +46,12 @@ export function PdfPage({
   penWidth,
   penColor,
   tool,
+  shapeKind = "rectangle",
   texts = [],
   stickyFocus,
   textControlsContainer = null,
   onTextsChange,
+  onAnnotationsChange,
   eraserWidth,
   zoom,
   onZoomChange,
@@ -265,16 +271,17 @@ export function PdfPage({
           role="img"
         />
         {renderedPage && displayScale > 0 &&
-          !error && (
+          !error && tool !== "lasso" && (
             <PenLayer
-              key={`${editVersion}-${tool}-${penWidth}-${penColor}-${eraserWidth}-${displayScale}`}
+              key={`${editVersion}-${tool}-${shapeKind}-${penWidth}-${penColor}-${eraserWidth}-${displayScale}`}
               strokes={strokes}
               pageWidth={renderedPage.width} pageHeight={renderedPage.height}
               interaction={interaction}
               penWidth={penWidth}
               penColor={penColor}
-              tool={tool === "eraser" ? "eraser" : tool === "marker" ? "marker" : "pen"}
-              interactive={!disabled && (tool === "pen" || tool === "marker" || tool === "eraser")}
+              tool={tool === "fill" ? "fill" : tool === "shape" ? "shape" : tool === "eraser" ? "eraser" : tool === "marker" ? "marker" : "pen"}
+              shapeKind={shapeKind}
+              interactive={!disabled && (tool === "pen" || tool === "marker" || tool === "eraser" || tool === "shape" || tool === "fill")}
               eraserWidth={eraserWidth}
               pageScale={displayScale}
               onStrokeComplete={onStrokeComplete}
@@ -282,13 +289,16 @@ export function PdfPage({
             />
           )}
         {/* 倍率・幅の再描画中も入力欄をアンマウントせず、入力中の文章を維持する。 */}
-        {renderedPage && (texts.length > 0 || tool === "text" || tool === "sticky") && <TextLayer notes={texts} tool={tool}
+        {renderedPage && tool !== "lasso" && (texts.length > 0 || tool === "text" || tool === "sticky") && <TextLayer notes={texts} tool={tool}
           stickyFocus={stickyFocus}
           controlsContainer={textControlsContainer}
           interaction={interaction}
           disabled={disabled || !!error || displayScale <= 0}
           pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={displayScale}
           onChange={onTextsChange} />}
+        {renderedPage && displayScale > 0 && !error && tool === "lasso" && onAnnotationsChange && <LassoLayer
+          strokes={strokes} texts={texts} pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={displayScale}
+          interaction={interaction} controlsContainer={textControlsContainer} stickyFocus={stickyFocus} disabled={disabled} onChange={onAnnotationsChange} />}
       </div>
     </div>
   );

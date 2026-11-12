@@ -49,7 +49,7 @@ test("スライダーの各段階を実際の線幅へ変換し、不正な段�
   const changes: number[] = [];
   const change = input(false, changes);
   for (const value of ["0", "1", "2", "3", "4", "-1", "5", "1.5", "", "NaN"]) change(value);
-  assert.deepEqual(changes, [1, 1.5, 2.5, 3.5, 5]);
+  assert.deepEqual(changes, [1, 1.5, 2.5, 8, 32]);
 });
 
 test("消しゴム選択中や処理中はペンの太さを変更しない", () => {

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test, { beforeEach, mock } from "node:test";
 import * as React from "react";
-import type { NotePage } from "@/features/pdf-editor/types";
+import type { EditorTool, NotePage } from "@/features/pdf-editor/types";
+import type { ShapeKind } from "@/features/pdf-editor/shapeStrokes";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import { speedMeasurements, type SpeedSpan } from "@/features/pdf-editor/speedMeasurements";
 
@@ -77,11 +78,13 @@ function fixture(notePage?: NotePage, openTiming?: SpeedSpan) {
   }); } } as unknown as PDFDocumentProxy;
   let zoom = 1;
   let disabled = false;
+  let tool: EditorTool = "text";
+  let shapeKind: ShapeKind = "rectangle";
   const textControlsContainer = {} as HTMLDivElement;
   function render() {
     stateIndex = 0; refIndex = 0; effectIndex = 0;
     const element = PdfPage({ document, pageNumber: 1, notePage, openTiming, strokes: [], texts: [], editVersion: 0,
-      penWidth: 2.5, penColor: "#000000", tool: "text", eraserWidth: 16,
+      penWidth: 2.5, penColor: "#000000", tool, shapeKind, eraserWidth: 16,
       zoom, disabled, textControlsContainer, onZoomChange: changeZoom, onStrokeComplete: () => {}, onStrokesChange: () => {}, onTextsChange: () => {},
     });
     refs[0].current = viewport;
@@ -101,10 +104,35 @@ function fixture(notePage?: NotePage, openTiming?: SpeedSpan) {
   return { requestedPages, fills, render, tasks, canvas, viewport, draws, wheel, textControlsContainer, setZoom: changeZoom,
     resize: (width: number, height: number) => { viewport.clientWidth = width; viewport.clientHeight = height; resized(); },
     disable: () => { disabled = true; }, zoom: () => zoom,
+    setTool: (next: EditorTool) => { tool = next; }, setShape: (next: ShapeKind) => { shapeKind = next; },
     cleanup: () => effects.forEach((entry) => entry.cleanup?.()),
   };
 }
 async function flush() { await Promise.resolve(); await Promise.resolve(); }
+
+test("図形を入力用レイヤーへ接続し、種類を変えたら草稿を初期化する", async () => {
+  const f = fixture();
+  try {
+    f.setTool("shape"); f.render(); await flush(); f.tasks[0].resolve(); await flush();
+    const first = f.render();
+    assert.equal(childProps(first, PenLayer).tool, "shape");
+    assert.equal(childProps(first, PenLayer).shapeKind, "rectangle");
+    assert.equal(childProps(first, PenLayer).interactive, true);
+    f.setShape("ellipse"); const next = f.render();
+    assert.equal(childProps(next, PenLayer).shapeKind, "ellipse");
+    assert.notEqual(childElement(first, PenLayer).key, childElement(next, PenLayer).key);
+    f.disable(); assert.equal(childProps(f.render(), PenLayer).interactive, false);
+  } finally { f.cleanup(); }
+});
+test("塗りつぶしを入力用レイヤーへ接続し、処理中は入力を止める", async () => {
+  const f = fixture();
+  try {
+    f.setTool("fill"); f.render(); await flush(); f.tasks[0].resolve(); await flush();
+    const props = childProps(f.render(), PenLayer);
+    assert.equal(props.tool, "fill"); assert.equal(props.interactive, true);
+    f.disable(); assert.equal(childProps(f.render(), PenLayer).interactive, false);
+  } finally { f.cleanup(); }
+});
 function childElement<T>(element: React.ReactElement, type: (props: T) => React.ReactNode): React.ReactElement<T> {
   function walk(node: React.ReactNode): React.ReactElement | undefined {
     for (const child of React.Children.toArray(node)) {
