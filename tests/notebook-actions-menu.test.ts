@@ -19,14 +19,14 @@ test("操作の外側を押す・フォーカスを移すと閉じ、内部操�
   Object.defineProperty(globalThis, "document", { configurable: true, value: events });
   render(); const cleanup = effect!();
   try {
-    for (const type of ["pointerdown", "focusin"]) {
+    for (const type of ["click", "focusin"]) {
       menu.open = true;
       const event = new Event(type); Object.defineProperty(event, "target", { value: inside });
       events.dispatchEvent(event); assert.equal(menu.open, true);
       events.dispatchEvent(new Event(type)); assert.equal(menu.open, false);
     }
     cleanup?.(); menu.open = true;
-    events.dispatchEvent(new Event("pointerdown")); assert.equal(menu.open, true);
+    events.dispatchEvent(new Event("click")); assert.equal(menu.open, true);
     assert.equal(focused, 0, "外側操作でフォーカスを奪わない");
   } finally {
     cleanup?.();
@@ -48,6 +48,25 @@ test("一覧を隠すと操作メニューを閉じ、再表示に開いた状�
   const node = render(false); effect!();
   assert.equal(menu.open, false); assert.equal(focused, 0);
   const html = renderToStaticMarkup(node);
-  assert.match(html, /<summary class="btn btn-sm">操作<\/summary>/);
+  assert.match(html, /<summary class="btn btn-sm col-start-2 row-start-1">操作<\/summary>/);
   assert.match(html, /名前変更/);
+});
+
+
+test("一覧へのポインター操作はクリックが届くまでメニューを閉じない", () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "document"), events = new EventTarget();
+  Object.defineProperty(globalThis, "document", { configurable: true, value: events });
+  render(); const cleanup = effect!();
+  try {
+    events.dispatchEvent(new Event("pointerdown"));
+    events.dispatchEvent(new Event("focusin"));
+    assert.equal(menu.open, true);
+    events.dispatchEvent(new Event("pointerup"));
+    assert.equal(menu.open, true);
+    events.dispatchEvent(new Event("click"));
+    assert.equal(menu.open, false);
+  } finally {
+    cleanup?.();
+    if (original) Object.defineProperty(globalThis, "document", original); else Reflect.deleteProperty(globalThis, "document");
+  }
 });

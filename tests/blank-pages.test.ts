@@ -43,7 +43,7 @@ test("途中・白紙の後・末尾へ挿入しても元ページIDと順序を
   checkPageBindings(last, [{ 2: [stroke], 4: [] }], 2);
 });
 
-test("重複ID・元ページ欠落や順序変更・不正サイズ・未知の書き込み先を拒否する", () => {
+test("重複ID・元ページのID不一致や順序変更・不正サイズ・未知の書き込み先を拒否する", () => {
   const bad = [[], Array(2), [...pages, pages[0]], [{ id: 1, kind: "pdf", pageNumber: 2 }],
     [...originals, { id: 3, kind: "blank", width: 0, height: 800 }],
     [...originals, { id: 3, kind: "blank", width: Infinity, height: 800 }],

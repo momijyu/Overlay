@@ -1,4 +1,5 @@
 import { checkPageBindings, resolveNotePages } from "./notePages";
+import { validatePdfPageSelection } from "./pdfPageSelection";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import { MARKER_OPACITY, PEN_COLOR } from "./penStyle";
@@ -14,17 +15,33 @@ export async function exportAnnotatedPdf(
   strokesByPage: Record<number, PenStroke[]>,
   textsByPage?: TextNotesByPage,
   pages?: NotePage[],
+  selectedPageNumbers?: readonly number[],
 ): Promise<Uint8Array> {
   const { PDFDocument, LineCapStyle, LineJoinStyle, BlendMode, pushGraphicsState, popGraphicsState, setLineJoin, rgb, degrees } = await import("pdf-lib");
   const toColor = (color: string) => rgb(parseInt(color.slice(1, 3), 16) / 255,
     parseInt(color.slice(3, 5), 16) / 255, parseInt(color.slice(5, 7), 16) / 255);
   const checkedStrokes = readStrokes(strokesByPage);
   const checkedTexts = readTextNotes(textsByPage);
-  const pdf = await PDFDocument.load(await file.arrayBuffer());
-  if (pdf.getPageCount() !== displayedDocument.numPages) throw new Error("元PDFのページ数が一致しません。");
+  const source = await PDFDocument.load(await file.arrayBuffer());
+  if (source.getPageCount() !== displayedDocument.numPages) throw new Error("元PDFのページ数が一致しません。");
   checkPageBindings(pages, [checkedStrokes, checkedTexts], displayedDocument.numPages);
-  const layout = resolveNotePages(pages, displayedDocument.numPages);
-  const fontData = Object.values(checkedTexts).some((notes) => notes.length > 0) ? await loadNoteFont() : null;
+  const allPages = resolveNotePages(pages, displayedDocument.numPages);
+  const layout = selectedPageNumbers === undefined ? allPages
+    : validatePdfPageSelection(selectedPageNumbers, allPages.length).map((number) => allPages[number - 1]);
+  const pdf = selectedPageNumbers === undefined ? source : await PDFDocument.create();
+  if (selectedPageNumbers !== undefined) {
+    // 抜粋は新しいPDFへ必要なページだけをコピーする。
+    const originals = layout.filter((page) => page.kind === "pdf");
+    for (const copied of await pdf.copyPages(source, originals.map((page) => page.pageNumber - 1))) pdf.addPage(copied);
+  }
+  // 出力する元ページだけを残す。逆順に除外し、元PDFのBlob・ページIDは変更しない。
+  const retained = new Set(layout.filter((page) => page.kind === "pdf").map((page) => page.pageNumber));
+  if (selectedPageNumbers === undefined) {
+    for (let index = pdf.getPageCount() - 1; index >= 0; index--) {
+      if (!retained.has(index + 1)) pdf.removePage(index);
+    }
+  }
+  const fontData = layout.some((page) => checkedTexts[page.id]?.length) ? await loadNoteFont() : null;
   const outputFont = fontData ? await (async () => {
     pdf.registerFontkit((await import("@pdf-lib/fontkit")).default);
     // CFFの部分埋め込みで一部の日本語字形が壊れるため、このフォントは全体を埋め込む。

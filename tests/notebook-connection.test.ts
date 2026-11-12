@@ -13,6 +13,7 @@ let states: unknown[], refs: { current: unknown }[], effects: Effect[];
 let stateIndex = 0, refIndex = 0, effectIndex = 0;
 let pendingEffects: (() => void)[], dirty = false;
 mock.module("react", { exports: { ...React,
+  useCallback: <T,>(callback: T) => callback,
   useState(initial: unknown) {
     const index = stateIndex++;
     if (!(index in states)) states[index] = typeof initial === "function" ? initial() : initial;

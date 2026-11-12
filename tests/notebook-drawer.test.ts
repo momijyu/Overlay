@@ -167,7 +167,7 @@ test("以前のDriveバックアップは読み込みメニューから開き、
   const props = { open: true, busy: false, pdfOpenDisabled: false, onFileChange: () => {},
     onBackupFileChange: () => {}, onImportDriveNote: () => { imports++; }, onClose: () => { closed++; }, children: null };
   const tree = NotebookDrawer(props);
-  const button = elements(tree).find((entry) => entry.type === "button" && entry.props.children === "以前のDriveバックアップから")!;
+  const button = elements(tree).find((entry) => entry.type === "button" && entry.props.children === "Driveの手動バックアップから復元")!;
   assert.ok(button); assert.equal(restoreOpen, false);
   (button.props.onClick as () => void)();
   assert.equal(restoreOpen, true); assert.equal(dialog.pickerCount, 0);
@@ -175,6 +175,20 @@ test("以前のDriveバックアップは読み込みメニューから開き、
   assert.ok(modal);
   (modal.props.restore as { onImportNote: () => void }).onImportNote(); assert.equal(imports, 1);
   (modal.props.onClose as () => void)(); assert.equal(restoreOpen, false); assert.equal(closed, 0);
-  const disabled = elements(NotebookDrawer({ ...props, pdfOpenDisabled: true })).find((entry) => entry.props.children === "以前のDriveバックアップから")!;
+  const disabled = elements(NotebookDrawer({ ...props, pdfOpenDisabled: true })).find((entry) => entry.props.children === "Driveの手動バックアップから復元")!;
   (disabled.props.onClick as () => void)(); assert.equal(restoreOpen, false);
+});
+
+
+test("ノート読み込み中はスクロール領域の外にスピナーと状態を残す", () => {
+  const node = NotebookDrawer({ open: true, busy: false, pdfOpenDisabled: true, loadingMessage: "ノートを読み込み中…",
+    onFileChange: () => {}, onClose: () => {}, children: React.createElement("nav", null, "一覧") });
+  const all = elements(node);
+  const status = all.find((entry) => entry.props.role === "status")!;
+  assert.ok(status);
+  assert.match(renderToStaticMarkup(status), /loading-spinner/);
+  assert.match(renderToStaticMarkup(status), /ノートを読み込み中/);
+  const scroll = all.find((entry) => "data-notebook-scroll" in entry.props)!;
+  assert.equal(elements(scroll).includes(status), false);
+  assert.equal(all.find((entry) => entry.props["aria-label"] === "ノート一覧を閉じる")!.props.disabled, false);
 });

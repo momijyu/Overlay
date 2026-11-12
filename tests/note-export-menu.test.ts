@@ -23,10 +23,11 @@ function buttons(node: React.ReactNode): React.ReactElement<React.ComponentProps
 
 test("PDFと再編集用の違い・定期保管案内をPCとタッチの両方で表示する", () => {
   for (const iconOnly of [false, true]) {
-    const html = renderToStaticMarkup(React.createElement(NoteExportMenu, { disabled: false, iconOnly, onDownload: () => {}, onBackup: () => {} }));
+    const html = renderToStaticMarkup(React.createElement(NoteExportMenu, { disabled: false, iconOnly, onDownload: () => {}, onSelectPages: () => {}, onBackup: () => {} }));
     assert.match(html, /aria-label="書き出しメニュー"/);
     assert.match(html, /PDFをダウンロード/);
     assert.match(html, /閲覧・共有用/);
+    assert.match(html, /ページを指定してPDF出力/);
     assert.match(html, /編集用バックアップ/);
     assert.match(html, /再編集できる形式（.overlay）/);
     assert.match(html, /※ 重要なノートは定期的に/);
@@ -39,23 +40,24 @@ test("メニューを閉じて選んだ出力だけを呼び出し、処理中�
     const calls: string[] = [];
     const actions = buttons(NoteExportMenu({ disabled,
       onDownload: () => { assert.equal(details.open, false); calls.push("pdf"); },
+      onSelectPages: () => { assert.equal(details.open, false); calls.push("pages"); },
       onBackup: () => { assert.equal(details.open, false); calls.push("backup"); },
     }));
-    assert.equal(actions.length, 2);
+    assert.equal(actions.length, 3);
     for (const action of actions) {
       details.open = true;
       assert.equal(action.props.disabled, disabled);
       action.props.onClick!({} as React.MouseEvent<HTMLButtonElement>);
       if (disabled) assert.equal(details.open, true);
     }
-    assert.deepEqual(calls, disabled ? [] : ["pdf", "backup"]);
+    assert.deepEqual(calls, disabled ? [] : ["pdf", "pages", "backup"]);
   }
 });
 
 
 test("外側のクリック・フォーカス移動とEscapeで閉じ、内部操作や出力を勝手に実行しない", () => {
   let calls = 0;
-  const tree = NoteExportMenu({ disabled: false, onDownload() { calls++; }, onBackup() { calls++; } });
+  const tree = NoteExportMenu({ disabled: false, onDownload() { calls++; }, onSelectPages() { calls++; }, onBackup() { calls++; } });
   const original = Object.getOwnPropertyDescriptor(globalThis, "document");
   Object.defineProperty(globalThis, "document", { configurable: true, value: events });
   const cleanup = effect!();

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 
 import { getLibraryScope } from "../driveLibraryLocal";
 import { subscribeLibraryChanged } from "../driveLibraryEvents";
@@ -12,6 +12,7 @@ import { buildNoteTree, canDeleteEmptyFolder, hasFolderNameConflict, type NoteTr
 import type { NoteLibrary, SavedNoteSummary } from "../types";
 import { NotebookActionDialog, type NotebookAction } from "./NotebookActionDialog";
 import { NotebookActionsMenu } from "./NotebookActionsMenu";
+import { NotebookSelectionMenu } from "./NotebookSelectionMenu";
 import { NotebookTree } from "./NotebookTree";
 import { NotebookMoveDialog } from "./NotebookMoveDialog";
 import { NotebookDeleteDialog } from "./NotebookDeleteDialog";
@@ -82,6 +83,16 @@ export function NotebookSidebar(props: SidebarProps) {
   const [driveStatuses, setDriveStatuses] = useState<Record<string, NoteDriveStatus>>({});
   const [driveStatusError, setDriveStatusError] = useState<string | null>(null);
   const [connectedScope, setConnectedScope] = useState<string | null>(null);
+  const visible = props.visible !== false;
+  const [wasVisible, setWasVisible] = useState(visible);
+  const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
+  const dismissSelectionMenu = useCallback(() => setSelectionMenuOpen(false), []);
+  // 一覧は閉じても保持するが、複数選択は閉じた時点で終了する。
+  // propの変化に合わせて同じコンポーネントの状態だけをリセットし、再表示前に反映する。
+  if (wasVisible !== visible) {
+    setWasVisible(visible);
+    if (!visible) { setSelectionMode(false); setSelectionMenuOpen(false); setCheckedItems(new Set()); }
+  }
   const requestKey = `${props.refreshVersion}:${retry}${connectedScope ? `:${connectedScope}` : ""}`;
   const { onDestinationChange } = props;
   const isLoading = result.key !== requestKey;
@@ -503,21 +514,29 @@ export function NotebookSidebar(props: SidebarProps) {
 
   return (
     <nav ref={navRef} aria-labelledby="notebook-heading" className="min-w-0">
-      <div className="flex flex-col gap-3 p-4">
-        <div className="flex items-center justify-between gap-2">
+      <div className={`flex items-center justify-between gap-2 bg-base-100 p-4 ${selectionMode ? "sticky top-0 z-20 border-b border-base-300" : ""}`} data-notebook-selection-header={selectionMode || undefined}>
+        <div className="min-w-0">
           <h2 id="notebook-heading" className="font-semibold">ノート</h2>
-          <button type="button" className="btn btn-sm" disabled={props.disabled || isMutating || isLoading}
-            onClick={() => setRetry((value) => value + 1)}>更新</button>
+          {selectionMode && <p className="text-sm" role="status">{checked.length}件選択中</p>}
         </div>
-        <div className="relative flex min-w-0 gap-2" data-notebook-actions>
-          {!selectionMode && <>
-          <button type="button" className="btn btn-sm" disabled={!canOrganize}
+        {selectionMode ? <button type="button" className="btn btn-sm shrink-0"
+          disabled={isMutating || !!action || bulkMoving || !!deleting}
+          onClick={() => { setSelectionMode(false); setSelectionMenuOpen(false); setCheckedItems(new Set()); }}>選択を終了</button>
+          : <button type="button" className="btn btn-sm" disabled={props.disabled || isMutating || isLoading}
+            onClick={() => setRetry((value) => value + 1)}>更新</button>}
+      </div>
+      <div className="flex flex-col gap-3 px-4 pb-4">
+        <div className="grid min-w-0 grid-cols-[max-content_max-content_minmax(0,1fr)] items-start gap-2" data-notebook-actions>
+          <button type="button" className="btn btn-sm" disabled={!canOrganize || selectionMode}
             onClick={() => beginAction({
               kind: "create-folder", parentId: selectedFolder?.id ?? selectedNote?.folderId ?? null,
             })}>フォルダ作成</button>
-          <NotebookActionsMenu menuRef={menuRef} visible={props.visible}>
-            {/* ボタンでなく操作行の左端を基準にし、狭い一覧の外へはみ出さない幅で開く。 */}
-            <ul className="menu dropdown-content start-0 z-10 mt-2 w-full min-w-0 max-w-64 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm [&_button]:whitespace-normal [&_button]:break-words">
+          <NotebookActionsMenu menuRef={menuRef} visible={props.visible} onOpen={() => {
+            setSelectionMode(false); setSelectionMenuOpen(false); setCheckedItems(new Set());
+          }}>
+            {/* 操作欄はボタン行の下で領域を確保し、一覧に重ねない。 */}
+            <ul className="menu col-span-3 col-start-1 row-start-2 w-full min-w-0 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm [&_button]:whitespace-normal [&_button]:break-words">
+              {selectionMode ? <li><button type="button" disabled>複数選択を終了してください</button></li> : <>
               {!selectedNote && !selectedFolder && <li><button type="button" disabled>
                 ノートまたはフォルダを選択してください
               </button></li>}
@@ -546,45 +565,50 @@ export function NotebookSidebar(props: SidebarProps) {
                 disabled={!canOrganize || !canDeleteEmptyFolder(selectedFolder.id, library)}
                 title={canDeleteEmptyFolder(selectedFolder.id, library) ? undefined : "空のフォルダだけ削除できます。"}
                 onClick={() => beginAction({ kind: "delete-folder", folder: selectedFolder })}>空フォルダ削除</button></li>}
+              </>}
             </ul>
           </NotebookActionsMenu>
-          </>}
-          <button type="button" className="btn btn-sm" disabled={!canOrganize || !!action || bulkMoving || !!deleting}
-            aria-pressed={selectionMode} onClick={() => {
-              if (menuRef.current) menuRef.current.open = false;
-              endDrag(); setMoveError(null); setMoveMessage(null);
-              setSelectionMode(!selectionMode); setCheckedItems(new Set());
-            }}>{selectionMode ? "選択終了" : "選択"}</button>
+          <NotebookSelectionMenu open={selectionMode && selectionMenuOpen} onDismiss={dismissSelectionMenu}>
+              <button type="button" className="btn btn-sm col-start-3 row-start-1 justify-self-start" disabled={!canOrganize || !!action || bulkMoving || !!deleting}
+                aria-expanded={selectionMode && selectionMenuOpen} aria-controls="notebook-selection-actions" aria-pressed={selectionMode} onClick={() => {
+                  if (menuRef.current) menuRef.current.open = false;
+                  endDrag(); setMoveError(null); setMoveMessage(null);
+                  setSelectionMenuOpen(!selectionMode || !selectionMenuOpen);
+                  if (!selectionMode) { setSelectionMode(true); setCheckedItems(new Set()); }
+                }}>複数選択</button>
+              {selectionMode && selectionMenuOpen && <div id="notebook-selection-actions" role="group" aria-label="複数選択の操作" className="col-span-3 col-start-1 row-start-2 flex w-full min-w-0 flex-wrap gap-2 rounded-box border border-base-300 bg-base-100 p-2 shadow-sm" data-notebook-selection>
+              <button type="button" className="btn btn-sm" disabled={unavailable || !allItems.length}
+                title="閉じたフォルダの中も含む全項目を選択"
+                onClick={() => setCheckedItems(new Set(allItems.map(noteItemKey)))}>全選択</button>
+              <button type="button" className="btn btn-sm" disabled={unavailable || !checked.length}
+                onClick={() => setCheckedItems(new Set())}>選択解除</button>
+              <button type="button" className="btn btn-sm" disabled={unavailable || !checked.length}
+                onClick={() => { setSelectionMenuOpen(false); setMoveError(null); setBulkMoving(true); }}>移動</button>
+              {props.onBackupItems && <button type="button" className="btn btn-sm" disabled={unavailable || !checked.length}
+                onClick={() => {
+                  if (unavailable || !checked.length) return;
+                  endDrag();
+                  setSelectionMenuOpen(false);
+                  props.onBackupItems?.(checked.map((item) => ({ ...item })));
+                }}>編集用ZIPで保存</button>}
+              {(props.onSaveToDrive || props.onSaveItemsToDrive) && <button type="button" className="btn btn-sm"
+                disabled={unavailable || !checkedNotes.length || (!props.onSaveItemsToDrive && checked.length !== 1)}
+                title="選択したノートをDriveに手動バックアップ" onClick={() => {
+                  if (unavailable || !checkedNotes.length || (!props.onSaveItemsToDrive && checked.length !== 1)) return;
+                  endDrag();
+                  setSelectionMenuOpen(false);
+                  if (props.onSaveItemsToDrive) props.onSaveItemsToDrive(checkedNotes.map((note) => ({ ...note })));
+                  else if (checked.length === 1) props.onSaveToDrive?.(checkedNotes[0].id);
+                }}>Driveにバックアップ</button>}
+              <button type="button" className="btn btn-sm text-error" disabled={unavailable || !checked.length}
+                onClick={() => {
+                  setMoveError(null); setMoveMessage(null);
+                  setSelectionMenuOpen(false);
+                  setDeleting({ items: checked.map((item) => ({ ...item })), library: library });
+                }}>削除</button>
+            </div>}
+          </NotebookSelectionMenu>
         </div>
-        {selectionMode && <div className="flex flex-wrap items-center gap-2" data-notebook-selection>
-          <p className="w-full text-sm" role="status">{checked.length}件選択中</p>
-          <button type="button" className="btn btn-sm" disabled={unavailable || !allItems.length}
-            title="閉じたフォルダの中も含む全項目を選択"
-            onClick={() => setCheckedItems(new Set(allItems.map(noteItemKey)))}>全選択</button>
-          <button type="button" className="btn btn-sm" disabled={unavailable || !checked.length}
-            onClick={() => setCheckedItems(new Set())}>選択解除</button>
-          <button type="button" className="btn btn-sm" disabled={unavailable || !checked.length}
-            onClick={() => { setMoveError(null); setBulkMoving(true); }}>移動</button>
-          {props.onBackupItems && <button type="button" className="btn btn-sm" disabled={unavailable || !checked.length}
-            onClick={() => {
-              if (unavailable || !checked.length) return;
-              endDrag();
-              props.onBackupItems?.(checked.map((item) => ({ ...item })));
-            }}>編集用ZIPで保存</button>}
-          {(props.onSaveToDrive || props.onSaveItemsToDrive) && <button type="button" className="btn btn-sm"
-            disabled={unavailable || !checkedNotes.length || (!props.onSaveItemsToDrive && checked.length !== 1)}
-            title="選択したノートをDriveに手動バックアップ" onClick={() => {
-              if (unavailable || !checkedNotes.length) return;
-              endDrag();
-              if (props.onSaveItemsToDrive) props.onSaveItemsToDrive(checkedNotes.map((note) => ({ ...note })));
-              else if (checked.length === 1) props.onSaveToDrive?.(checkedNotes[0].id);
-            }}>Driveにバックアップ</button>}
-          <button type="button" className="btn btn-sm text-error" disabled={unavailable || !checked.length}
-            onClick={() => {
-              setMoveError(null); setMoveMessage(null);
-              setDeleting({ items: checked.map((item) => ({ ...item })), library: library });
-            }}>削除</button>
-        </div>}
         {moveMessage && <p role="status" className="text-sm">{moveMessage}</p>}
         {moveError && !action && !bulkMoving && !deleting && <p role="alert" className="text-error">{moveError}</p>}
         {driveStatusError && <p role="alert" className="text-xs text-error">{driveStatusError}</p>}

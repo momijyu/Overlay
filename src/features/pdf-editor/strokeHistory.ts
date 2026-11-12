@@ -1,4 +1,5 @@
 import { changePageHeading } from "./pageHeadings";
+import { deleteNotePage } from "./notePages";
 import type { HeadingsByPage, NotePage, PenStroke, TextNote, TextNotesByPage } from "./types";
 
 type Strokes = Record<number, PenStroke[]>;
@@ -44,12 +45,12 @@ export function recordTextEdit(history: StrokeHistory, pageNumber: number, texts
 }
 
 function recordEdit(history: StrokeHistory, pageNumber: number, strokesByPage: Strokes, textsByPage: TextNotesByPage,
-  change?: { insertion?: { before: NotePage[]; after: NotePage[]; previousId: number }; headingsByPage?: HeadingsByPage }): StrokeHistory {
-  const insertion = change?.insertion;
+  change?: { pageChange?: { before: NotePage[]; after: NotePage[]; previousId: number }; headingsByPage?: HeadingsByPage }): StrokeHistory {
+  const pageChange = change?.pageChange;
   const headingsByPage = change?.headingsByPage ?? history.headingsByPage;
-  const pages = insertion?.after ?? history.pages;
-  const beforePages = insertion?.before ?? history.pages;
-  const beforePage = insertion?.previousId ?? pageNumber;
+  const pages = pageChange?.after ?? history.pages;
+  const beforePages = pageChange?.before ?? history.pages;
+  const beforePage = pageChange?.previousId ?? pageNumber;
   const edit = { before: history.strokesByPage, after: strokesByPage,
     beforeTexts: history.textsByPage, afterTexts: textsByPage, beforeHeadings: history.headingsByPage, afterHeadings: headingsByPage, pageNumber, beforePages, afterPages: pages, beforePage };
   return {
@@ -92,11 +93,43 @@ export function redoStrokeEdit(history: StrokeHistory): StrokeHistory {
 }
 
 export function recordPageInsertion(history: StrokeHistory, before: NotePage[], after: NotePage[], previousId: number, insertedId: number): StrokeHistory {
-  return recordEdit(history, insertedId, history.strokesByPage, history.textsByPage, { insertion: { before, after, previousId } });
+  return recordEdit(history, insertedId, history.strokesByPage, history.textsByPage, { pageChange: { before, after, previousId } });
 }
 
 export function recordHeadingEdit(history: StrokeHistory, pageId: number, value: string): StrokeHistory {
   const headingsByPage = changePageHeading(history.headingsByPage, pageId, value);
   if (headingsByPage === history.headingsByPage) return history;
   return recordEdit(history, pageId, history.strokesByPage, history.textsByPage, { headingsByPage });
+}
+
+export type PageClearSelection = { strokes: boolean; sticky: boolean; text: boolean };
+
+export function pageAnnotationCounts(history: StrokeHistory, pageId: number) {
+  const texts = history.textsByPage[pageId] ?? [];
+  return { strokes: history.strokesByPage[pageId]?.length ?? 0,
+    sticky: texts.filter((note) => note.kind === "sticky").length,
+    text: texts.filter((note) => note.kind === "text").length };
+}
+
+// 複数種類の削除も1操作として戻す。別ページ・旧見出し・元PDFは変更しない。
+export function recordPageClear(history: StrokeHistory, pageId: number, selection: PageClearSelection): StrokeHistory {
+  const counts = pageAnnotationCounts(history, pageId);
+  if (!Number.isSafeInteger(pageId) || pageId < 1
+    || !Object.entries(counts).some(([key, count]) => selection[key as keyof PageClearSelection] && count > 0)) return history;
+  const strokes = selection.strokes && counts.strokes ? { ...history.strokesByPage, [pageId]: [] } : history.strokesByPage;
+  const texts = (counts.sticky > 0 && selection.sticky) || (counts.text > 0 && selection.text)
+    ? { ...history.textsByPage, [pageId]: (history.textsByPage[pageId] ?? []).filter((note) => !selection[note.kind]) }
+    : history.textsByPage;
+  return recordEdit(history, pageId, strokes, texts);
+}
+
+export function recordPageDeletion(history: StrokeHistory, before: NotePage[], pageId: number): StrokeHistory {
+  const after = deleteNotePage(before, pageId);
+  const index = before.findIndex((page) => page.id === pageId);
+  const destination = after[Math.min(index, after.length - 1)].id;
+  const strokesByPage = { ...history.strokesByPage }; delete strokesByPage[pageId];
+  const textsByPage = { ...history.textsByPage }; delete textsByPage[pageId];
+  const headingsByPage = { ...history.headingsByPage }; delete headingsByPage[pageId];
+  return recordEdit(history, destination, strokesByPage, textsByPage,
+    { pageChange: { before, after, previousId: pageId }, headingsByPage });
 }

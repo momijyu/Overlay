@@ -28,12 +28,15 @@ import { DriveVersionDialog } from "./DriveVersionDialog";
 import { DriveAutosavePanel } from "./DriveAutosavePanel";
 import { GoogleDriveSetup, type DriveSaveRequest } from "./GoogleDriveSetup";
 import { NoteExportMenu } from "./NoteExportMenu";
+import { PdfPageExportDialog } from "./PdfPageExportDialog";
+import { PageActionsMenu } from "./PageActionsMenu";
+import { PageEditDialog, type PageEditKind } from "./PageEditDialog";
 import { EraserSizeControl } from "./EraserSizeControl";
 import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
 import { ZoomControl } from "./ZoomControl";
 import { EditorIcon } from "./EditorIcon";
-import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordPageInsertion, undoStrokeEdit, redoStrokeEdit, type StrokeHistory } from "../strokeHistory";
+import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordPageInsertion, recordPageDeletion, recordPageClear, pageAnnotationCounts, undoStrokeEdit, redoStrokeEdit, type StrokeHistory, type PageClearSelection } from "../strokeHistory";
 import { speedMeasurements, type SpeedSpan } from "../speedMeasurements";
 
 type PdfInput = {
@@ -103,6 +106,13 @@ export function PdfWorkspace() {
   const [openTiming, setOpenTiming] = useState<SpeedSpan | null>(null);
   const [stickyFocus, setStickyFocus] = useState<(StickyFocusRequest & { pageId: number }) | null>(null);
   const stickyRequestRef = useRef(0);
+  const [pendingPageAction, setPendingPageAction] = useState<{
+    kind: PageEditKind; pageId: number; pageNumber: number; documentVersion: number; version: number;
+  } | null>(null);
+  const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
+  const [pageExport, setPageExport] = useState<{
+    pageNumber: number; pageCount: number; documentVersion: number; version: number; error: string | null;
+  } | null>(null);
   useEffect(() => noteId ? pinDriveNote(noteId) : undefined, [noteId]);
   useEffect(() => subscribeDriveCacheIssue((id, message) => {
     if (mountedRef.current && autosaveRef.current?.getState().noteId === id) setError(message);
@@ -145,6 +155,7 @@ export function PdfWorkspace() {
     let awaitingRender = false;
     operationRef.current = true;
     setIsLoading(true);
+    setLoadingMessage("変更を保存中…");
     setError(null);
     let loadingTask: PDFDocumentLoadingTask | undefined;
     let isReadingPdf = false;
@@ -157,12 +168,14 @@ export function PdfWorkspace() {
       stage.finish();
       if (!mountedRef.current) return;
       stage = speedMeasurements.begin("note.read", undefined, timing.id);
+      setLoadingMessage("ノートを読み込み中…");
       const input = await getInput();
       stage.finish("ok", { pdfBytes: input.file.size });
       // 古い一覧の付箋が既に消えていた場合は、開いているノートを切り替えない。
       if (destination && !input.textsByPage?.[destination.pageId]?.some((text) => text.kind === "sticky" && text.id === destination.textId)) {
         throw new Error("この付箋は削除または変更されています。一覧を更新してください。");
       }
+      setLoadingMessage("PDFを準備中…");
       isReadingPdf = true;
       stage = speedMeasurements.begin("pdf.prepare", undefined, timing.id);
       const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -236,7 +249,7 @@ export function PdfWorkspace() {
       if (!awaitingRender) timing.finish("cancelled");
       loadingTaskRef.current = null;
       operationRef.current = false;
-      if (mountedRef.current) setIsLoading(false);
+      if (mountedRef.current) { setIsLoading(false); setLoadingMessage(null); }
     }
   }
 
@@ -311,7 +324,7 @@ export function PdfWorkspace() {
       const size = currentPage.kind === "blank" ? currentPage
         : (await document.getPage(currentPage.pageNumber)).getViewport({ scale: 1 });
       if (!mountedRef.current) return;
-      const after = insertBlankPage(before, currentPage.id, size.width, size.height);
+      const after = insertBlankPage(before, currentPage.id, size.width, size.height, document.numPages);
       const inserted = after[pageNumber];
       applyHistory(recordPageInsertion(historyRef.current, before, after, currentPage.id, inserted.id), true);
     } catch (error) {
@@ -319,6 +332,30 @@ export function PdfWorkspace() {
     } finally {
       operationRef.current = false;
       if (mountedRef.current) setIsLoading(false);
+    }
+  }
+
+  function openPageAction(kind: PageEditKind) {
+    if (isBusy || operationRef.current || !document || !currentPage) return;
+    setPendingPageAction({ kind, pageId, pageNumber, documentVersion, version: historyRef.current.version });
+  }
+
+  function confirmPageAction(selection: PageClearSelection) {
+    if (!pendingPageAction || isBusy || operationRef.current || !document || !autosaveRef.current) return;
+    const action = pendingPageAction;
+    setPendingPageAction(null);
+    if (action.documentVersion !== documentVersion || action.version !== historyRef.current.version) {
+      setError("ページの内容が変わりました。開き直して確認してください。"); return;
+    }
+    try {
+      const content = historyRef.current;
+      const before = resolveNotePages(content.pages, document.numPages);
+      if (!before.some((page) => page.id === action.pageId)) throw new Error("削除するページが見つかりません。");
+      const next = action.kind === "delete-page" ? recordPageDeletion(content, before, action.pageId)
+        : recordPageClear(content, action.pageId, selection);
+      applyHistory(next, true); setError(null);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "ページを変更できませんでした。");
     }
   }
 
@@ -367,15 +404,25 @@ export function PdfWorkspace() {
     setError(null);
   }
 
-  async function handleDownload() {
+  function openPageExport() {
+    if (!document || !file || isBusy || operationRef.current) return;
+    setPageExport({ pageNumber, pageCount: pages.length, documentVersion, version: historyRef.current.version, error: null });
+  }
+
+  async function handleDownload(selectedPageNumbers?: number[]) {
     if (!file || !document || operationRef.current) return;
+    const content = historyRef.current;
+    if (selectedPageNumbers && (!pageExport || pageExport.documentVersion !== documentVersion || pageExport.version !== content.version)) {
+      setPageExport((previous) => previous && { ...previous, error: "ノートが変更されています。閉じてページを選び直してください。" });
+      return;
+    }
 
     operationRef.current = true;
     setIsExporting(true);
     setError(null);
 
     try {
-      const pdfBytes = await exportAnnotatedPdf(file, document, strokesByPage, history.textsByPage, history.pages);
+      const pdfBytes = await exportAnnotatedPdf(file, document, content.strokesByPage, content.textsByPage, content.pages, selectedPageNumbers);
       if (!mountedRef.current) return;
       const blob = new Blob([new Uint8Array(pdfBytes)], {
         type: "application/pdf",
@@ -383,14 +430,17 @@ export function PdfWorkspace() {
       const url = URL.createObjectURL(blob);
       const link = window.document.createElement("a");
       link.href = url;
-      link.download = pdfDownloadName(noteName);
+      link.download = pdfDownloadName(selectedPageNumbers ? `${noteName.replace(/\.pdf$/i, "")}（抜粋）` : noteName);
       window.document.body.appendChild(link);
       link.click();
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      if (selectedPageNumbers) setPageExport(null);
     } catch (exportError) {
       if (mountedRef.current) {
-        setError(exportError instanceof Error ? `PDFを書き出せませんでした。${exportError.message}` : "PDFを書き出せませんでした。");
+        const message = exportError instanceof Error ? `PDFを書き出せませんでした。${exportError.message}` : "PDFを書き出せませんでした。";
+        if (selectedPageNumbers) setPageExport((previous) => previous && { ...previous, error: message });
+        else setError(message);
       }
     } finally {
       operationRef.current = false;
@@ -556,7 +606,7 @@ export function PdfWorkspace() {
             title="道具の設定" aria-expanded={mobileSettingsOpen} aria-controls="editor-settings"
             onClick={() => setMobileSettingsOpen((open) => !open)}><EditorIcon name="settings" /></button>
           <NoteExportMenu className="editor-export mobile-only" iconOnly disabled={isBusy}
-            onDownload={() => void handleDownload()} onBackup={() => void handleBackup()} />
+            onDownload={() => void handleDownload()} onSelectPages={openPageExport} onBackup={() => void handleBackup()} />
         </>}
       </AppHeader>
       {versionChoice && <DriveVersionDialog choice={versionChoice.error} onClose={() => setVersionChoice(null)}
@@ -565,6 +615,7 @@ export function PdfWorkspace() {
           void openPdf(async () => ({ ...await loadSavedNote(selected.error.noteId, { sourceId, acceptVersion: selected.error }), name: selected.error.title }), selected.destination);
         }} />}
       <NotebookDrawer open={sidebarVisible} busy={isOrganizing || isBackupWorking || !!pendingBackup}
+        loadingMessage={isLoading ? loadingMessage ?? "ページを準備中…" : null}
         onFileChange={handleFileChange} onBackupFileChange={handleBackupFileChange} pdfOpenDisabled={isBusy}
         onClose={() => { setDriveSaveRequest(null); setSidebarVisible(false); }}
         storageControls={<DriveAutosavePanel disabled={isBusy} drawerOpen={sidebarVisible}
@@ -580,7 +631,6 @@ export function PdfWorkspace() {
           {error && <p role="alert" className="px-4 pt-3 text-error">{error}</p>}
           {isBackupWorking && <p role="status" className="px-4 pt-3 text-sm">バックアップ処理中…</p>}
           {backupMessage && <p role="status" className="px-4 pt-3 text-sm">{backupMessage}</p>}
-          {isLoading && <p role="status" className="px-4 pt-3">PDFを読み込んでいます…</p>}
           <NotebookSidebar
             refreshVersion={refreshVersion}
             onDestinationChange={(id) => { newNoteFolderRef.current = id; }}
@@ -644,7 +694,10 @@ export function PdfWorkspace() {
                   onClick={() => void handleRetrySave()}>保存を再試行</button>
               </div>}
 
-              {isLoading && <p role="status">PDFを読み込んでいます…</p>}
+              {isLoading && <div role="status" className="flex items-center gap-2 p-2">
+                <span aria-hidden="true" className="loading loading-spinner loading-sm" />
+                {loadingMessage ?? "ページを準備中…"}
+              </div>}
             </div>}
 
             {document && file && (
@@ -658,7 +711,7 @@ export function PdfWorkspace() {
                       className={`w-20 shrink-0 whitespace-nowrap text-right text-xs ${saveError ? "text-error" : "text-base-content/60"}`}>
                       {statusText}
                     </span>
-                    <NoteExportMenu disabled={isBusy} onDownload={() => void handleDownload()} onBackup={() => void handleBackup()} />
+                    <NoteExportMenu disabled={isBusy} onDownload={() => void handleDownload()} onSelectPages={openPageExport} onBackup={() => void handleBackup()} />
                   </div>
                   {/* 道具の列は設定やノート名と分け、切り替えても折り返さない。 */}
                   <div data-editor-row="tools" role="group" aria-label="編集操作"
@@ -705,15 +758,12 @@ export function PdfWorkspace() {
                     {penTool === "hand" && <p className="text-sm text-base-content/70">ドラッグでページを移動</p>}
                     <div className="mobile-zoom mobile-only"><ZoomControl id="mobile-pdf-zoom" value={zoom} disabled={isBusy} onChange={setZoom} /></div>
                   </div>
-                  <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+                  <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center gap-2">
+                      <PageActionsMenu disabled={isBusy} canInsert={pages.length < MAX_NOTE_PAGES}
+                        canDelete={pages.length > 1} canClear={Object.values(pageAnnotationCounts(history, pageId)).some((count) => count > 0)}
+                        onInsert={() => void handleInsertBlankPage()} onDelete={() => openPageAction("delete-page")}
+                        onClear={() => openPageAction("clear-page")} />
                     <div className="join shrink-0" role="group" aria-label="ページ切り替え">
-                      <button type="button" className="btn join-item gap-1 px-2" aria-label="次に空白ページを追加" title="次に空白ページを追加"
-                        disabled={isBusy || pages.length >= MAX_NOTE_PAGES} onClick={() => void handleInsertBlankPage()}>
-                        <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M12 12v6M9 15h6" />
-                        </svg>
-                        <span className="desktop-only">白紙追加</span>
-                      </button>
                       <button
                         className="btn btn-square join-item"
                         type="button"
@@ -767,6 +817,12 @@ export function PdfWorkspace() {
           </div>
         </section>
       </main>
+      {pendingPageAction && <PageEditDialog kind={pendingPageAction.kind} pageNumber={pendingPageAction.pageNumber}
+        counts={pageAnnotationCounts(history, pendingPageAction.pageId)} disabled={isBusy}
+        onClose={() => setPendingPageAction(null)} onConfirm={confirmPageAction} />}
+      {pageExport && <PdfPageExportDialog pageNumber={pageExport.pageNumber} pageCount={pageExport.pageCount}
+        disabled={isBusy} error={pageExport.error} onClose={() => { if (!operationRef.current) setPageExport(null); }}
+        onConfirm={(selected) => void handleDownload(selected)} />}
     </div>
   );
 }

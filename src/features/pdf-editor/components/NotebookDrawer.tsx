@@ -13,11 +13,12 @@ type NotebookDrawerProps = {
   onClose: () => void;
   onImportDriveNote?: (backup: NoteBackup) => void;
   storageControls?: ReactNode;
+  loadingMessage?: string | null;
   children: ReactNode;
 };
 
 export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, pdfOpenDisabled, onClose, children,
-  onImportDriveNote, storageControls }: NotebookDrawerProps) {
+  onImportDriveNote, storageControls, loadingMessage }: NotebookDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
@@ -34,7 +35,7 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
   return (
     <>
       {/* 通常レイアウトの幅を使わず、PDFの上に重ねる。フォーカス制御はdialogへ任せる。 */}
-      <dialog id="notebook-sidebar" ref={dialogRef} className="modal modal-start" aria-label="ノート一覧"
+      <dialog id="notebook-sidebar" ref={dialogRef} className="modal modal-start notebook-modal" aria-label="ノート一覧"
         onCancel={(event) => {
           // 子の名前変更・削除ダイアログのEscapeで一覧まで閉じない。
           if (event.target !== event.currentTarget) return;
@@ -57,6 +58,10 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
               </svg>
             </button>
           </div>
+          {loadingMessage && <div role="status" className="flex shrink-0 items-center gap-2 border-b border-base-300 bg-base-200 px-4 py-3 text-sm">
+            <span aria-hidden="true" className="loading loading-spinner loading-sm" />
+            {loadingMessage}
+          </div>}
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-notebook-scroll>
           {children}
           {storageControls}
@@ -74,7 +79,7 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
                   if (pdfOpenDisabled) return;
                   if (backupMenuRef.current) backupMenuRef.current.open = false;
                   setRestoreOpen(true);
-                }}>以前のDriveバックアップから</button></li>}
+                }}>Driveの手動バックアップから復元</button></li>}
               </ul>
             </details>
             <input ref={backupInputRef} type="file" accept=".overlay,.zip" hidden

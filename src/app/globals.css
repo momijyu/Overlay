@@ -37,13 +37,14 @@
   width: min(18rem, calc(100vw - 1rem));
   max-height: min(65dvh, calc(100dvh - 16rem));
   overflow: hidden;
-  transform: translateX(calc(100% + 2rem + env(safe-area-inset-right)));
+  transform: translate3d(calc(100% + 2rem + env(safe-area-inset-right)), 0, 0);
+  contain: layout paint;
   visibility: hidden;
   pointer-events: none;
   transition: transform 220ms ease-out, visibility 0s 220ms;
 }
 .current-sticky-nav[data-open="true"] .current-sticky-panel {
-  transform: translateX(0);
+  transform: translate3d(0, 0, 0);
   visibility: visible;
   pointer-events: auto;
   transition-delay: 0s;
@@ -96,6 +97,8 @@ body {
 .pdf-viewport.cursor-grab[data-panning="true"] { cursor: grabbing; }
 .editor-toolbar [data-editor-row="actions"] { grid-column: 2; grid-row: 3; }
 .editor-toolbar [data-editor-row="actions"] .btn { height: 2.75rem; min-height: 2.75rem; }
+/* ページ操作はタッチ画面でも文字を残し、矢印ボタンの固定幅を適用しない。 */
+.editor-toolbar [data-editor-row="actions"] > .page-actions-trigger { width: auto; min-width: 4rem; }
 .note-export-content { max-height: min(24rem, calc(100dvh - 8rem)); overflow-y: auto; overscroll-behavior: contain; }
 .text-editor-options {
   max-width: var(--editor-options-maxWidth, calc(100vw - 1rem));
@@ -166,7 +169,7 @@ body {
   .mobile-zoom { width: 100%; }
   .editor-toolbar [data-editor-row="actions"] { justify-content: flex-end; }
   .editor-toolbar [data-editor-row="actions"] .btn { min-height: 2rem; height: 2rem; }
-  .editor-toolbar [data-editor-row="actions"] button { min-width: 2.75rem; width: 2.75rem; }
+  .editor-toolbar [data-editor-row="actions"] .join > button { min-width: 2.75rem; width: 2.75rem; }
   .pdf-viewport { flex: 1; min-height: 0; max-height: none; padding: 0; overscroll-behavior: contain; }
   .overlay-app .alert { flex-shrink: 0; max-height: 30dvh; overflow: auto; }
   .editor-notices { flex-shrink: 0; gap: 0.375rem; max-height: 30dvh; overflow: auto; }
@@ -181,6 +184,7 @@ body {
     .editor-history { grid-column: 1; grid-row: 2; }
     .editor-toolbar [data-editor-row="actions"] { grid-column: 2; grid-row: 2; }
     .editor-toolbar [data-editor-row="actions"] .btn { min-height: 2.75rem; height: 2.75rem; }
+    .editor-toolbar [data-editor-row="actions"] > .page-actions-trigger { width: 4rem; padding-inline: 0; }
     [data-editor-row="actions"] span { min-width: 3.5rem; padding-inline: 0.25rem; }
     .editor-notices { margin-inline: 0.375rem; }
   }
@@ -279,7 +283,7 @@ body {
       .mobile-zoom { width: auto; }
       .editor-toolbar [data-editor-row="actions"] { grid-column: 4; grid-row: 1; align-self: center; }
       [data-editor-row="actions"] .btn { height: 2.75rem; min-height: 2.75rem; }
-      [data-editor-row="actions"] button { width: 2.75rem; }
+      [data-editor-row="actions"] .join > button { width: 2.75rem; }
       [data-editor-row="actions"] span { min-width: 3.5rem; padding-inline: 0.25rem; }
       .pdf-viewport {
         grid-column: 2 / -1; grid-row: 2; min-width: 0; min-height: 0; width: 100%; height: 100%; padding: 0.125rem;
@@ -295,6 +299,19 @@ body {
       .editor-notices > [role="status"] { background: var(--color-base-100); }
     }
   }
+}
+
+/* 横移動だけを描画合成へ渡し、拡縮や影のアニメーションを重ねない。 */
+.notebook-modal { transition-duration: 180ms; }
+.modal > .notebook-drawer {
+  transition: translate 180ms ease-out;
+}
+@starting-style {
+  .modal[open] > .notebook-drawer { translate: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .notebook-modal { transition: none; }
+  .modal > .notebook-drawer { transition: none; }
 }
 
 /* ノート一覧だけに適用し、操作メニューなど他のdaisyUIのmenuは変更しない。 */
@@ -390,3 +407,7 @@ body {
   background-color: color-mix(in oklab, var(--color-base-content) 20%, transparent);
   opacity: 1;
 }
+
+/* 開いた操作欄もグリッドの2行目へ置き、ファイル一覧の領域を確保する。 */
+.notebook-actions-menu::details-content { display: contents; }
+.notebook-actions-menu:not([open]) > :not(summary) { display: none; }

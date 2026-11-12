@@ -85,11 +85,12 @@ test("未選択・読み込み中・他操作中も操作メニュー自体は�
     const summary = html.match(/<summary[^>]*>操作<\/summary>/)?.[0];
     assert.ok(summary);
     assert.doesNotMatch(summary, /disabled|tabindex/i);
-    assert.match(html, /class="relative flex min-w-0 gap-2" data-notebook-actions/);
-    assert.match(html, /<details class="dropdown static">/);
-    const menu = html.match(/<ul class="menu dropdown-content[^>]+>/)![0];
-    assert.match(menu, /start-0/);
-    assert.match(menu, /w-full min-w-0 max-w-64/);
+    assert.match(html, /class="grid min-w-0 [^"]+" data-notebook-actions/);
+    assert.match(html, /<details class="notebook-actions-menu contents">/);
+    const menu = html.match(/<ul class="menu col-span-3[^>]+>/)![0];
+    assert.match(menu, /col-start-1 row-start-2/);
+    assert.doesNotMatch(menu, /dropdown-content|absolute/);
+    assert.match(menu, /w-full min-w-0/);
     assert.match(menu, /\[&amp;_button\]:whitespace-normal/);
     assert.match(menu, /\[&amp;_button\]:break-words/);
     assert.match(html, /<button[^>]*disabled="">ノートまたはフォルダを選択してください<\/button>/);

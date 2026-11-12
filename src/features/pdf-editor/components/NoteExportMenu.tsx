@@ -2,9 +2,9 @@ import { useEffect, useRef } from "react";
 import { EditorIcon } from "./EditorIcon";
 
 // PCとタッチで、閲覧用PDFと再編集用バックアップの入口・説明をそろえる。
-export function NoteExportMenu({ disabled, iconOnly = false, className = "", onDownload, onBackup }: {
+export function NoteExportMenu({ disabled, iconOnly = false, className = "", onDownload, onSelectPages, onBackup }: {
   disabled: boolean; iconOnly?: boolean; className?: string;
-  onDownload: () => void; onBackup: () => void;
+  onDownload: () => void; onSelectPages: () => void; onBackup: () => void;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
@@ -39,6 +39,7 @@ export function NoteExportMenu({ disabled, iconOnly = false, className = "", onD
         <li><button type="button" className="flex-col items-start gap-0.5" disabled={disabled} onClick={() => choose(onDownload)}>
           <span>PDFをダウンロード</span><span className="text-xs text-base-content/60">閲覧・共有用</span>
         </button></li>
+        <li><button type="button" disabled={disabled} onClick={() => choose(onSelectPages)}>ページを指定してPDF出力</button></li>
         <li><button type="button" className="flex-col items-start gap-0.5" disabled={disabled} onClick={() => choose(onBackup)}>
           <span>編集用バックアップ</span><span className="text-xs text-base-content/60">書き込みを再編集できる形式（.overlay）</span>
         </button></li>

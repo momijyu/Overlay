@@ -13,6 +13,7 @@ let stateIndex = 0;
 let library: NoteLibrary;
 mock.module("react", { exports: {
   ...React,
+  useCallback: <T,>(callback: T) => callback,
   useEffect: (effect: () => void, dependencies?: unknown[]) => { if (dependencies?.length === 0) effect(); },
   useRef: (initial: unknown) => ({ current: initial }),
   useState: <T,>(initial: T | (() => T)) => {
@@ -30,6 +31,8 @@ const { NotebookActionDialog } = await import("@/features/pdf-editor/components/
 const { NotebookTree } = await import("@/features/pdf-editor/components/NotebookTree");
 const { NotebookMoveDialog } = await import("@/features/pdf-editor/components/NotebookMoveDialog");
 const { NotebookDeleteDialog } = await import("@/features/pdf-editor/components/NotebookDeleteDialog");
+const { NotebookActionsMenu } = await import("@/features/pdf-editor/components/NotebookActionsMenu");
+const { NotebookSelectionMenu } = await import("@/features/pdf-editor/components/NotebookSelectionMenu");
 
 beforeEach(() => {
   states = []; stateIndex = 0;
@@ -39,7 +42,7 @@ beforeEach(() => {
 });
 
 function clickText(node: React.ReactNode, label: string) {
-  const button = find(node, (element) => element.type === "button" && element.props.children === label)!;
+  const button = find(node, (element) => element.type === "button" && element.props.children === label);
   assert.ok(button, label);
   assert.equal(button.props.disabled, false);
   (button.props.onClick as () => void)();
@@ -53,11 +56,14 @@ test("選択モードの全選択・解除・終了と一括移動を同じ一�
       await readRequest(tx.objectStore("noteSummaries").put(note));
     }
   });
-  clickText(render(), "選択");
+  clickText(render(), "複数選択");
   let node = render();
   assert.equal(find(node, (element) => element.type === NotebookTree)!.props.selectionMode, true);
   assert.equal(find(node, (element) => element.type === NotebookTree)!.props.dragEnabled, false);
-  assert.equal(find(node, (element) => element.type === "summary" && element.props.children === "操作"), undefined);
+  assert.ok(find(node, (element) => element.type === NotebookActionsMenu));
+  assert.ok(find(node, (element) => element.type === "button" && element.props.children === "フォルダ作成"));
+  const actions = find(node, (element) => element.props["data-notebook-actions"] === true)!;
+  assert.ok(find(actions, (element) => element.props["data-notebook-selection"] === true));
   clickText(node, "全選択");
   assert.equal((find(render(), (element) => element.type === NotebookTree)!.props.checkedItems as Set<string>).size, 2);
   clickText(render(), "選択解除");
@@ -70,20 +76,21 @@ test("選択モードの全選択・解除・終了と一括移動を同じ一�
   assert.deepEqual(dialog.props.items, [{ kind: "note", id: "note" }]);
   await (dialog.props.onSubmit as (id: string) => Promise<void>)("subject");
   node = render();
-  assert.ok(find(node, (element) => element.type === "button" && element.props.children === "選択"));
+  assert.ok(find(node, (element) => element.type === "button" && element.props.children === "複数選択"));
   assert.equal(find(node, (element) => element.type === NotebookMoveDialog), undefined);
   const note = await withLocalTransaction(["notes"], "readonly", (tx) => readRequest<{ folderId: string }>(tx.objectStore("notes").get("note")));
   assert.equal(note.folderId, "subject");
 });
 
 test("一括移動のキャンセルと保存失敗では選択を残し、終了で解除する", async () => {
-  clickText(render(), "選択");
+  clickText(render(), "複数選択");
   const tree = find(render(), (element) => element.type === NotebookTree)!;
   (tree.props.onCheck as (item: { kind: string; id: string }) => void)({ kind: "note", id: "note" });
   clickText(render(), "移動");
   let dialog = find(render(), (element) => element.type === NotebookMoveDialog)!;
   (dialog.props.onClose as () => void)();
   assert.equal(find(render(), (element) => element.type === NotebookMoveDialog), undefined);
+  clickText(render(), "複数選択");
   clickText(render(), "移動");
   dialog = find(render(), (element) => element.type === NotebookMoveDialog)!;
   // 表示後、別タブで対象が消えた状況。空のテストDBなので保存時の再検証が失敗する。
@@ -92,14 +99,14 @@ test("一括移動のキャンセルと保存失敗では選択を残し、終�
   assert.match(dialog.props.error as string, /移動できません/);
   assert.deepEqual(dialog.props.items, [{ kind: "note", id: "note" }]);
   (dialog.props.onClose as () => void)();
-  clickText(render(), "選択終了");
+  clickText(render(), "選択を終了");
   assert.equal((find(render(), (element) => element.type === NotebookTree)!.props.checkedItems as Set<string>).size, 0);
 });
 
 test("フォルダ選択で子にチェックし、子を外すと親も解除して他のチェックは維持する", () => {
   library.notes[0].folderId = "subject";
   library.notes.push({ ...library.notes[0], id: "second", title: "別ノート" });
-  clickText(render(), "選択");
+  clickText(render(), "複数選択");
   const check = (item: { kind: string; id: string }) => {
     (find(render(), (element) => element.type === NotebookTree)!.props.onCheck as (item: { kind: string; id: string }) => void)(item);
   };
@@ -111,7 +118,7 @@ test("フォルダ選択で子にチェックし、子を外すと親も解除�
 });
 
 test("一括削除は確認を開くだけでは消さず、キャンセル・失敗時に選択を維持する", async () => {
-  clickText(render(), "選択");
+  clickText(render(), "複数選択");
   clickText(render(), "全選択");
   clickText(render(), "削除");
   let dialog = find(render(), (element) => element.type === NotebookDeleteDialog)!;
@@ -119,6 +126,7 @@ test("一括削除は確認を開くだけでは消さず、キャンセル・�
   (dialog.props.onClose as () => void)();
   assert.equal(find(render(), (element) => element.type === NotebookDeleteDialog), undefined);
   assert.equal((find(render(), (element) => element.type === NotebookTree)!.props.checkedItems as Set<string>).size, 2);
+  clickText(render(), "複数選択");
   clickText(render(), "削除");
   dialog = find(render(), (element) => element.type === NotebookDeleteDialog)!;
   await (dialog.props.onSubmit as () => Promise<void>)(); // テストDBに対象がなく失敗。
@@ -135,7 +143,7 @@ test("確認した一括削除だけを実行し、成功後に一覧を更新�
       await readRequest(tx.objectStore("noteSummaries").put(note));
     }
   });
-  clickText(render(), "選択");
+  clickText(render(), "複数選択");
   clickText(render(), "全選択");
   clickText(render(), "削除");
   const before = await withLocalTransaction(["notes"], "readonly", (tx) => readRequest(tx.objectStore("notes").count()));
@@ -143,7 +151,7 @@ test("確認した一括削除だけを実行し、成功後に一覧を更新�
   const dialog = find(render(), (element) => element.type === NotebookDeleteDialog)!;
   await (dialog.props.onSubmit as () => Promise<void>)();
   assert.equal(find(render(), (element) => element.type === NotebookDeleteDialog), undefined);
-  assert.ok(find(render(), (element) => element.type === "button" && element.props.children === "選択"));
+  assert.ok(find(render(), (element) => element.type === "button" && element.props.children === "複数選択"));
   const after = await withLocalTransaction(["notes", "folders", "noteSummaries"], "readonly", async (tx) => Promise.all([
     readRequest(tx.objectStore("notes").count()), readRequest(tx.objectStore("folders").count()), readRequest(tx.objectStore("noteSummaries").count()),
   ]));
@@ -172,7 +180,7 @@ test("操作のDrive保存は選択ノートを渡し、フォルダ・未選択
 test("チェックでノート1件だけ選ぶとDrive保存でき、複数やフォルダだけでは実行しない", () => {
   const calls: string[] = [];
   const overrides = { onSaveToDrive: (id: string) => calls.push(id) };
-  clickText(render(overrides), "選択");
+  clickText(render(overrides), "複数選択");
   const attemptDisabled = () => {
     const button = find(render(overrides), (entry) => entry.type === "button" && entry.props.children === "Driveにバックアップ")!;
     assert.equal(button.props.disabled, true);
@@ -193,7 +201,7 @@ test("複数チェックのDrive保存は子ノートを重複なく渡し、空
   library.folders.push({ id: "empty", name: "空", parentId: null });
   const calls: SavedNoteSummary[][] = [];
   const overrides = { onSaveItemsToDrive: (notes: SavedNoteSummary[]) => calls.push(notes) };
-  clickText(render(overrides), "選択");
+  clickText(render(overrides), "複数選択");
   const check = (item: unknown) => (find(render(overrides), (entry) => entry.type === NotebookTree)!.props.onCheck as (item: unknown) => void)(item);
   check({ kind: "folder", id: "empty" });
   const empty = find(render(overrides), (entry) => entry.type === "button" && entry.props.children === "Driveにバックアップ")!;
@@ -201,6 +209,7 @@ test("複数チェックのDrive保存は子ノートを重複なく渡し、空
   check({ kind: "folder", id: "subject" });
   clickText(render(overrides), "Driveにバックアップ");
   assert.deepEqual(calls.map((notes) => notes.map((note) => note.id)), [["note", "second"]]);
+  clickText(render(overrides), "複数選択");
   const disabled = find(render({ ...overrides, disabled: true }), (entry) => entry.type === "button" && entry.props.children === "Driveにバックアップ")!;
   (disabled.props.onClick as () => void)(); assert.equal(calls.length, 1);
   assert.notEqual(calls[0][0], library.notes[0]);
@@ -225,13 +234,14 @@ test("バックアップ操作は選択した単体ノート・フォルダを�
 test("選択モードのZIPで保存はチェックした項目だけを渡し、ゼロ件・処理中は実行しない", () => {
   const calls: unknown[] = [];
   const overrides = { onBackupItems: (items: unknown) => { calls.push(items); } };
-  clickText(render(overrides), "選択");
+  clickText(render(overrides), "複数選択");
   const empty = find(render(overrides), (entry) => entry.type === "button" && entry.props.children === "編集用ZIPで保存")!;
   assert.equal(empty.props.disabled, true);
   (empty.props.onClick as () => void)();
   clickText(render(overrides), "全選択");
   clickText(render(overrides), "編集用ZIPで保存");
   assert.deepEqual(calls, [[{ kind: "folder", id: "subject" }, { kind: "note", id: "note" }]]);
+  clickText(render(overrides), "複数選択");
   const busy = find(render({ ...overrides, disabled: true }), (entry) => entry.type === "button" && entry.props.children === "編集用ZIPで保存")!;
   assert.equal(busy.props.disabled, true);
   (busy.props.onClick as () => void)();
@@ -270,4 +280,49 @@ test("一番上は一覧の絞り込みではなく作成先の選択として�
   assert.deepEqual(find(render(), (element) => element.type === NotebookActionDialog)!.props.action,
     { kind: "create-folder", parentId: null });
   assert.equal(library.notes[0].folderId, "subject");
+});
+
+
+test("一覧を閉じると複数選択を終了し、再表示時にチェックを持ち越さない", () => {
+  clickText(render({ visible: true }), "複数選択");
+  clickText(render({ visible: true }), "全選択");
+  let node = render({ visible: true });
+  const header = find(node, (element) => element.props["data-notebook-selection-header"] === true)!;
+  assert.match(String(header.props.className), /sticky top-0/);
+  assert.ok(find(header, (element) => element.type === "button" && element.props.children === "選択を終了"));
+  assert.equal((find(node, (element) => element.type === NotebookTree)!.props.checkedItems as Set<string>).size, 2);
+  render({ visible: false }); // 閉じたpropによる状態更新を反映する次の描画。
+  render({ visible: false });
+  node = render({ visible: true });
+  assert.equal(find(node, (element) => element.type === NotebookTree)!.props.selectionMode, false);
+  assert.equal((find(node, (element) => element.type === NotebookTree)!.props.checkedItems as Set<string>).size, 0);
+});
+
+test("読み込み中でも複数選択の終了を押せる", () => {
+  clickText(render(), "複数選択");
+  clickText(render(), "全選択");
+  clickText(render({ disabled: true }), "選択を終了");
+  assert.equal(find(render(), (element) => element.type === NotebookTree)!.props.selectionMode, false);
+});
+
+test("複数選択は同じボタンで操作欄を開閉し、チェックを維持する", () => {
+  clickText(render(), "複数選択");
+  clickText(render(), "全選択");
+  const menu = () => find(render(), (element) => element.type === NotebookSelectionMenu)!;
+  assert.equal(menu().props.open, true);
+  const panel = find(render(), (element) => element.props["data-notebook-selection"] === true)!;
+  assert.match(panel.props.className as string, /col-span-3 col-start-1 row-start-2/);
+  assert.doesNotMatch(panel.props.className as string, /dropdown-content|absolute/);
+  (menu().props.onDismiss as () => void)();
+  assert.equal(menu().props.open, false);
+  assert.equal(find(render(), (element) => element.props["data-notebook-selection"] === true), undefined);
+  assert.equal((find(render(), (element) => element.type === NotebookTree)!.props.checkedItems as Set<string>).size, 2);
+  clickText(render(), "複数選択");
+  assert.equal(menu().props.open, true);
+  clickText(render(), "複数選択");
+  assert.equal(menu().props.open, false);
+  const actions = find(render(), (element) => element.type === NotebookActionsMenu)!;
+  (actions.props.onOpen as () => void)();
+  assert.equal(find(render(), (element) => element.type === NotebookTree)!.props.selectionMode, false);
+  assert.equal((find(render(), (element) => element.type === NotebookTree)!.props.checkedItems as Set<string>).size, 0);
 });
