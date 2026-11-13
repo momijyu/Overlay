@@ -59,11 +59,12 @@ function fixture(tool: EditorTool, initial: TextNote[] = [], interaction?: PageI
   let notes = initial;
   let updates = 0;
   let disabled = false;
+  let controlsActive = true;
   let controlsContainer: HTMLDivElement | null = {} as HTMLDivElement;
   function render() {
     stateCursor = 0;
     refCursor = 0;
-    return TextLayer({ notes, tool, pageWidth: 400, pageHeight: 600, controlsContainer, disabled, interaction, stickyFocus,
+    return TextLayer({ notes, tool, pageWidth: 400, pageHeight: 600, controlsContainer, controlsActive, disabled, interaction, stickyFocus,
       onChange: (next) => { updates++; notes = next; } });
   }
   function handlers() {
@@ -78,7 +79,7 @@ function fixture(tool: EditorTool, initial: TextNote[] = [], interaction?: PageI
         ? action ? { getAttribute: () => action } : null : id ? { getAttribute: () => id } : null } };
   }
   return { render, handlers, editor, event, getNotes: () => notes, getUpdates: () => updates,
-    getControlsContainer: () => controlsContainer,
+    getControlsContainer: () => controlsContainer, hideControls: () => { controlsActive = false; },
     removeControlsContainer: () => { controlsContainer = null; }, disable: () => { disabled = true; } };
 }
 
@@ -382,4 +383,12 @@ test("指での付箋移動を二本指で中断しても元の位置と保存�
   assert.equal(f.getUpdates(), 0);
   assert.equal(f.getNotes()[0].x, note.x);
   assert.equal(f.getNotes()[0].y, note.y);
+});
+
+test("見開きの選択していない側は共通操作欄を出さず、ページ上での直接入力は受け付ける", () => {
+  const f = fixture("sticky"); f.hideControls(); f.render();
+  assert.equal(portalTargets.length, 0);
+  f.handlers().onPointerDown(f.event(120, 180));
+  f.handlers().onPointerUp(f.event(120, 180));
+  assert.ok(f.editor());
 });

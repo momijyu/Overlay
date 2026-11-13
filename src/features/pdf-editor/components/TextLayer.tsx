@@ -10,7 +10,7 @@ import type { StickyFocusRequest } from "../stickyNavigation";
 import { PEN_COLOR } from "../penStyle";
 import type { PageInteraction } from "../pageGestures";
 
-export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, disabled = false, controlsContainer = null, interaction, onChange, stickyFocus }: {
+export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, disabled = false, controlsContainer = null, controlsActive = true, interaction, onChange, stickyFocus }: {
   notes: TextNote[];
   stickyFocus?: StickyFocusRequest;
   tool: EditorTool;
@@ -19,6 +19,7 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
   pageScale?: number;
   disabled?: boolean;
   controlsContainer?: HTMLDivElement | null;
+  controlsActive?: boolean;
   interaction?: PageInteraction;
   onChange: (notes: TextNote[]) => void;
 }) {
@@ -211,7 +212,7 @@ export function TextLayer({ notes, tool, pageWidth, pageHeight, pageScale = 1, d
       })}
     </svg>
     {/* 操作と選択状態はここで保持し、ボタンの表示先だけを上部の設定行へ移す。 */}
-    {active && controlsContainer && createPortal(<div className="flex items-center gap-2 pointer-events-auto"
+    {active && controlsActive && controlsContainer && createPortal(<div className="flex items-center gap-2 pointer-events-auto"
       role="group" aria-label={tool === "sticky" ? "付箋の操作" : "テキストの操作"}>
       <button className="btn btn-sm" type="button" onClick={createVisibleNote}>
         {tool === "sticky" ? "付箋を追加" : "テキストを追加"}

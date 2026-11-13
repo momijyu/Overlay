@@ -1,5 +1,7 @@
 "use client";
 
+import { blankPageTemplateLines, TEMPLATE_LINE_COLOR, TEMPLATE_LINE_WIDTH } from "../blankPageTemplate";
+
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
@@ -26,6 +28,7 @@ type PdfPageProps = {
   texts?: TextNote[];
   stickyFocus?: StickyFocusRequest;
   textControlsContainer?: HTMLDivElement | null;
+  controlsActive?: boolean;
   onTextsChange: (notes: TextNote[]) => void;
   onAnnotationsChange?: (strokes: PenStroke[], texts: TextNote[]) => void;
   eraserWidth: number;
@@ -50,6 +53,7 @@ export function PdfPage({
   texts = [],
   stickyFocus,
   textControlsContainer = null,
+  controlsActive = true,
   onTextsChange,
   onAnnotationsChange,
   eraserWidth,
@@ -62,6 +66,7 @@ export function PdfPage({
 }: PdfPageProps) {
   const sourcePageNumber = notePage?.kind === "pdf" ? notePage.pageNumber : pageNumber;
   const blankWidth = notePage?.kind === "blank" ? notePage.width : undefined;
+  const blankTemplate = notePage?.kind === "blank" ? notePage.template : undefined;
   const blankHeight = notePage?.kind === "blank" ? notePage.height : undefined;
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -216,6 +221,20 @@ export function PdfPage({
           if (!context) throw new Error("Canvas is unavailable");
           context.fillStyle = "#ffffff";
           context.fillRect(0, 0, buffer.width, buffer.height);
+          const lines = blankPageTemplateLines(blankTemplate, original.width, original.height);
+          if (lines.length) {
+            context.save();
+            context.scale(buffer.width / original.width, buffer.height / original.height);
+            context.strokeStyle = TEMPLATE_LINE_COLOR;
+            context.lineWidth = TEMPLATE_LINE_WIDTH;
+            context.beginPath();
+            for (const line of lines) {
+              context.moveTo(line.x1, line.y1);
+              context.lineTo(line.x2, line.y2);
+            }
+            context.stroke();
+            context.restore();
+          }
         }
         if (active) {
           const context = canvas.getContext("2d");
@@ -248,7 +267,7 @@ export function PdfPage({
       renderTask?.cancel();
       timing?.finish("cancelled");
     };
-  }, [document, sourcePageNumber, blankWidth, blankHeight, availableWidth, fitWidth, zoom, openTiming]);
+  }, [document, sourcePageNumber, blankWidth, blankHeight, blankTemplate, availableWidth, fitWidth, zoom, openTiming]);
 
   return (
     <div
@@ -256,7 +275,7 @@ export function PdfPage({
       className={`pdf-viewport max-h-[75dvh] min-w-0 w-full overflow-auto bg-base-200 p-2 sm:p-4 touch-none ${tool === "hand" ? "cursor-grab" : ""}`}
       style={{ scrollbarGutter: "stable", overflowAnchor: "none" }}
       tabIndex={0}
-      aria-label="PDF表示領域"
+      aria-label={`PDF表示領域（${pageNumber}ページ）`}
     >
       {error && (
         <div className="alert alert-error" role="alert">
@@ -291,14 +310,14 @@ export function PdfPage({
         {/* 倍率・幅の再描画中も入力欄をアンマウントせず、入力中の文章を維持する。 */}
         {renderedPage && tool !== "lasso" && (texts.length > 0 || tool === "text" || tool === "sticky") && <TextLayer notes={texts} tool={tool}
           stickyFocus={stickyFocus}
-          controlsContainer={textControlsContainer}
+          controlsContainer={textControlsContainer} controlsActive={controlsActive}
           interaction={interaction}
           disabled={disabled || !!error || displayScale <= 0}
           pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={displayScale}
           onChange={onTextsChange} />}
         {renderedPage && displayScale > 0 && !error && tool === "lasso" && onAnnotationsChange && <LassoLayer
           strokes={strokes} texts={texts} pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={displayScale}
-          interaction={interaction} controlsContainer={textControlsContainer} stickyFocus={stickyFocus} disabled={disabled} onChange={onAnnotationsChange} />}
+          interaction={interaction} controlsContainer={textControlsContainer} controlsActive={controlsActive} stickyFocus={stickyFocus} disabled={disabled} onChange={onAnnotationsChange} />}
       </div>
     </div>
   );

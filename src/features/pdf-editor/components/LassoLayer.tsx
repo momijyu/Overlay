@@ -17,10 +17,11 @@ type Snapshot = { content: AnnotationContent; selection: AnnotationSelection };
 type Gesture = { base: AnnotationContent; pointer: number; start: PenPoint; path: PenPoint[]; moving: boolean; preview: AnnotationContent; snapshot: Snapshot | null };
 const EMPTY = { strokes: [], texts: [] } satisfies AnnotationSelection;
 
-export function LassoLayer({ strokes, texts, pageWidth, pageHeight, pageScale, interaction, disabled, controlsContainer, stickyFocus, onChange }: {
+export function LassoLayer({ strokes, texts, pageWidth, pageHeight, pageScale, interaction, disabled, controlsContainer, controlsActive = true, stickyFocus, onChange }: {
   strokes: PenStroke[]; texts: TextNote[]; pageWidth: number; pageHeight: number; pageScale: number;
   interaction: PageInteraction; disabled: boolean; controlsContainer: HTMLDivElement | null;
   stickyFocus?: StickyFocusRequest;
+  controlsActive?: boolean;
   onChange: (strokes: PenStroke[], texts: TextNote[]) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -61,8 +62,8 @@ export function LassoLayer({ strokes, texts, pageWidth, pageHeight, pageScale, i
       setSnapshot(next); setError("");
     } catch (reason) { fail(reason); }
   };
-  const latest = useRef({ copy, paste, clear, disabled, controlsContainer });
-  useLayoutEffect(() => { latest.current = { copy, paste, clear, disabled, controlsContainer }; });
+  const latest = useRef({ copy, paste, clear, disabled, controlsContainer, controlsActive });
+  useLayoutEffect(() => { latest.current = { copy, paste, clear, disabled, controlsContainer, controlsActive }; });
   useEffect(() => {
     let active = true;
     void loadNoteFont().then((value) => { if (active) setFont(value); }).catch((reason) => { if (active) fail(reason); });
@@ -75,7 +76,7 @@ export function LassoLayer({ strokes, texts, pageWidth, pageHeight, pageScale, i
   }, [interaction]);
   useEffect(() => bindAnnotationClipboard(window, {
     owns: (target) => !latest.current.disabled && !document.querySelector("dialog[open], [role=dialog][aria-modal=true]")
-      && target instanceof Node && (!!svgRef.current?.closest(".pdf-viewport")?.contains(target) || !!latest.current.controlsContainer?.contains(target)),
+      && target instanceof Node && (!!svgRef.current?.closest(".pdf-viewport")?.contains(target) || (latest.current.controlsActive && !!latest.current.controlsContainer?.contains(target))),
     copy: () => latest.current.copy(), paste: (data) => latest.current.paste(data), clear: () => latest.current.clear(),
   }), []);
 
@@ -143,7 +144,7 @@ export function LassoLayer({ strokes, texts, pageWidth, pageHeight, pageScale, i
         width={(bounds.right - bounds.left) * pageWidth + 6 / pageScale} height={(bounds.bottom - bounds.top) * pageHeight + 6 / pageScale}
         fill="none" stroke="#2563eb" strokeWidth={1.5 / pageScale} strokeDasharray={`${5 / pageScale} ${4 / pageScale}`} pointerEvents="none" />}
     </svg>
-    {controlsContainer ? createPortal(controls, controlsContainer) : <div className="absolute left-1 top-1 bg-base-100 p-1">{controls}</div>}
+    {controlsActive && (controlsContainer ? createPortal(controls, controlsContainer) : <div className="absolute left-1 top-1 bg-base-100 p-1">{controls}</div>)}
     {error && <div className="absolute left-1 top-1 max-w-full bg-base-100 p-2 text-sm text-error" role="alert">{error}
       <button type="button" className="btn btn-sm ml-2" onClick={() => { setError(""); if (!font) void loadNoteFont().then(setFont).catch(fail); }}>閉じる</button></div>}
   </>;

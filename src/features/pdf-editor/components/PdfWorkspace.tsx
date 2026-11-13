@@ -17,7 +17,7 @@ import { backupDownloadName, readNoteBackup, type NoteBackup } from "../noteBack
 import { NotebookRestoreDialog } from "./NotebookRestoreDialog";
 import type { NoteDragItem } from "../noteDrag";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
-import type { HeadingsByPage, NotePage, PenStroke, EditorTool, TextNote, TextNotesByPage, SavedNoteSummary } from "../types";
+import type { BlankPageTemplate, HeadingsByPage, NotePage, PenStroke, EditorTool, TextNote, TextNotesByPage, SavedNoteSummary } from "../types";
 import { PdfPage } from "./PdfPage";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookDrawer } from "./NotebookDrawer";
@@ -39,6 +39,7 @@ import { EditorIcon } from "./EditorIcon";
 import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordAnnotationEdit, recordPageInsertion, recordPageDeletion, recordPageClear, pageAnnotationCounts, undoStrokeEdit, redoStrokeEdit, type StrokeHistory, type PageClearSelection } from "../strokeHistory";
 import { speedMeasurements, type SpeedSpan } from "../speedMeasurements";
 import { SHAPE_OPTIONS, type ShapeKind } from "../shapeStrokes";
+import { adjacentPageNumber, visiblePageNumbers, SPREAD_MEDIA_QUERY } from "../pageSpread";
 
 type PdfInput = {
   file: File;
@@ -121,6 +122,18 @@ export function PdfWorkspace() {
     pageNumber: number; pageCount: number; documentVersion: number; version: number; error: string | null;
   } | null>(null);
   const [shapeKind, setShapeKind] = useState<ShapeKind>("rectangle");
+  const [spreadRequested, setSpreadRequested] = useState(false);
+  const [spreadAvailable, setSpreadAvailable] = useState(false);
+  const spread = spreadRequested && spreadAvailable;
+  const visibleNumbers = visiblePageNumbers(pageNumber, pages.length, spread);
+  useEffect(() => {
+    const media = window.matchMedia?.(SPREAD_MEDIA_QUERY);
+    if (!media) return;
+    const update = () => setSpreadAvailable(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   useEffect(() => noteId ? pinDriveNote(noteId) : undefined, [noteId]);
   useEffect(() => subscribeDriveCacheIssue((id, message) => {
     if (mountedRef.current && autosaveRef.current?.getState().noteId === id) setError(message);
@@ -283,19 +296,19 @@ export function PdfWorkspace() {
     await autosaveRef.current.flush(true);
   }
 
-  function updatePageStrokes(strokes: PenStroke[]) {
+  function updatePageStrokes(strokes: PenStroke[], targetPageId = pageId) {
     if (operationRef.current) return;
-    applyHistory(recordStrokeEdit(historyRef.current, pageId, strokes));
+    applyHistory(recordStrokeEdit(historyRef.current, targetPageId, strokes));
   }
 
-  function updatePageAnnotations(strokes: PenStroke[], texts: TextNote[]) {
+  function updatePageAnnotations(strokes: PenStroke[], texts: TextNote[], targetPageId = pageId) {
     if (operationRef.current) return;
-    applyHistory(recordAnnotationEdit(historyRef.current, pageId, strokes, texts));
+    applyHistory(recordAnnotationEdit(historyRef.current, targetPageId, strokes, texts));
   }
 
-  function updatePageTexts(notes: TextNote[]) {
+  function updatePageTexts(notes: TextNote[], targetPageId = pageId) {
     if (operationRef.current) return;
-    applyHistory(recordTextEdit(historyRef.current, pageId, notes));
+    applyHistory(recordTextEdit(historyRef.current, targetPageId, notes));
   }
 
   function applyHistory(next: StrokeHistory, revealPage = false) {
@@ -328,7 +341,7 @@ export function PdfWorkspace() {
     void openPdf(async () => ({ ...await loadSavedNote(note.id, sourceId ? { sourceId } : undefined), name: note.title }), { pageId: targetPageId, textId });
   }
 
-  async function handleInsertBlankPage() {
+  async function handleInsertBlankPage(template: BlankPageTemplate = "plain") {
     if (operationRef.current || !document || !currentPage) return;
     operationRef.current = true;
     setIsLoading(true); setError(null);
@@ -337,7 +350,7 @@ export function PdfWorkspace() {
       const size = currentPage.kind === "blank" ? currentPage
         : (await document.getPage(currentPage.pageNumber)).getViewport({ scale: 1 });
       if (!mountedRef.current) return;
-      const after = insertBlankPage(before, currentPage.id, size.width, size.height, document.numPages);
+      const after = insertBlankPage(before, currentPage.id, size.width, size.height, document.numPages, template);
       const inserted = after[pageNumber];
       applyHistory(recordPageInsertion(historyRef.current, before, after, currentPage.id, inserted.id), true);
     } catch (error) {
@@ -782,61 +795,76 @@ export function PdfWorkspace() {
                     <div className="mobile-zoom mobile-only"><ZoomControl id="mobile-pdf-zoom" value={zoom} disabled={isBusy} onChange={setZoom} /></div>
                   </div>
                   <div data-editor-row="actions" className="flex min-w-0 flex-wrap items-center gap-2">
+                    <button type="button" className="spread-view-control btn" aria-label="見開き表示" aria-pressed={spread}
+                      disabled={isBusy || !spreadAvailable} onClick={() => { if (!isBusy) setSpreadRequested((value) => !value); }}>
+                      見開き
+                    </button>
                       <PageActionsMenu disabled={isBusy} canInsert={pages.length < MAX_NOTE_PAGES}
                         canDelete={pages.length > 1} canClear={Object.values(pageAnnotationCounts(history, pageId)).some((count) => count > 0)}
-                        onInsert={() => void handleInsertBlankPage()} onDelete={() => openPageAction("delete-page")}
+                        onInsert={(template) => void handleInsertBlankPage(template)} onDelete={() => openPageAction("delete-page")}
                         onClear={() => openPageAction("clear-page")} />
                     <div className="join shrink-0" role="group" aria-label="ページ切り替え">
                       <button
                         className="btn btn-square join-item"
                         type="button"
                         aria-label="前のページ" title="前のページ"
-                        disabled={isBusy || pageNumber === 1}
-                        onClick={() => { if (!isBusy && pageNumber > 1) { setStickyFocus(null); setPageNumber((page) => page - 1); } }}
+                        disabled={isBusy || visibleNumbers[0] === 1}
+                        onClick={() => { if (!isBusy) { setStickyFocus(null); setPageNumber(adjacentPageNumber(pageNumber, pages.length, spread, -1)); } }}
                       >
                         <EditorIcon name="previous-page" />
                       </button>
                       <span className="btn join-item pointer-events-none min-w-20 tabular-nums" aria-live="polite">
-                        {pageNumber} / {pages.length}
+                        {visibleNumbers.join("–")} / {pages.length}
                       </span>
                       <button
                         className="btn btn-square join-item"
                         type="button"
                         aria-label="次のページ" title="次のページ"
-                        disabled={isBusy || pageNumber === pages.length}
-                        onClick={() => { if (!isBusy && pageNumber < pages.length) { setStickyFocus(null); setPageNumber((page) => page + 1); } }}
+                        disabled={isBusy || visibleNumbers.at(-1) === pages.length}
+                        onClick={() => { if (!isBusy) { setStickyFocus(null); setPageNumber(adjacentPageNumber(pageNumber, pages.length, spread, 1)); } }}
                       >
                         <EditorIcon name="next-page" />
                       </button>
                     </div>
                   </div>
                 </div>
-                <PdfPage
-                  key={`${documentVersion}-${pageId}`}
-                  document={document}
-                  openTiming={openTiming}
-                  pageNumber={pageNumber}
-                  notePage={currentPage}
-                  strokes={strokesByPage[pageId] ?? EMPTY_STROKES}
-                  texts={history.textsByPage[pageId] ?? EMPTY_TEXTS}
-                  stickyFocus={stickyFocus?.pageId === pageId ? stickyFocus : undefined}
-                  textControlsContainer={textControlsContainer}
-                  onTextsChange={updatePageTexts}
-                  onAnnotationsChange={updatePageAnnotations}
-                  editVersion={history.version}
-                  penWidth={penTool === "marker" ? markerWidth : penWidth}
-                  penColor={penTool === "marker" ? markerColor : penColor}
-                  tool={penTool}
-                  shapeKind={shapeKind}
-                  eraserWidth={eraserWidth}
-                  zoom={zoom}
-                  onZoomChange={setZoom}
-                  disabled={isBusy}
-                  onStrokeComplete={(stroke) => {
-                    updatePageStrokes([...(historyRef.current.strokesByPage[pageId] ?? []), stroke]);
-                  }}
-                  onStrokesChange={updatePageStrokes}
-                />
+                <div className="pdf-pages" data-spread={spread}>
+                  {visibleNumbers.map((number) => {
+                    const shownPage = pages[number - 1];
+                    const shownId = shownPage.id;
+                    const selected = number === pageNumber;
+                    const activate = () => { if (!operationRef.current) setPageNumber(number); };
+                    return <div key={`${documentVersion}-${shownId}`} className="pdf-page-slot" data-spread={spread} data-active={selected}
+                      onPointerDownCapture={activate} onFocusCapture={activate}>
+                      {spread && <button type="button" className="btn btn-sm pdf-page-label" aria-label={`${number}ページを編集`}
+                        aria-pressed={selected} disabled={isBusy} onClick={activate}>{number}ページ</button>}
+                      <PdfPage
+                        document={document}
+                        openTiming={selected ? openTiming : undefined}
+                        pageNumber={number}
+                        notePage={shownPage}
+                        strokes={strokesByPage[shownId] ?? EMPTY_STROKES}
+                        texts={history.textsByPage[shownId] ?? EMPTY_TEXTS}
+                        stickyFocus={stickyFocus?.pageId === shownId ? stickyFocus : undefined}
+                        textControlsContainer={textControlsContainer}
+                        controlsActive={selected}
+                        onTextsChange={(notes) => updatePageTexts(notes, shownId)}
+                        onAnnotationsChange={(strokes, texts) => updatePageAnnotations(strokes, texts, shownId)}
+                        editVersion={history.version}
+                        penWidth={penTool === "marker" ? markerWidth : penWidth}
+                        penColor={penTool === "marker" ? markerColor : penColor}
+                        tool={penTool}
+                        shapeKind={shapeKind}
+                        eraserWidth={eraserWidth}
+                        zoom={zoom}
+                        onZoomChange={setZoom}
+                        disabled={isBusy}
+                        onStrokeComplete={(stroke) => updatePageStrokes([...(historyRef.current.strokesByPage[shownId] ?? []), stroke], shownId)}
+                        onStrokesChange={(strokes) => updatePageStrokes(strokes, shownId)}
+                      />
+                    </div>;
+                  })}
+                </div>
               </>
             )}
           </div>

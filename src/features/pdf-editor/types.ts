@@ -35,9 +35,10 @@ export type HeadingsByPage = Record<number, string>;
 export type StickyPageLink = { pageId: number; pageNumber: number; textId: string; label: string; sourceId?: string };
 
 // idは書き込みのキー。配列の位置（表示順）とは独立させる。
+export type BlankPageTemplate = "plain" | "ruled" | "grid";
 export type NotePage =
   | { id: number; kind: "pdf"; pageNumber: number }
-  | { id: number; kind: "blank"; width: number; height: number };
+  | { id: number; kind: "blank"; width: number; height: number; template?: BlankPageTemplate };
 
 export type SavedNoteSummary = {
   id: string;

@@ -35,10 +35,10 @@ function find(node: React.ReactNode, predicate: (e: React.ReactElement<Record<st
 function fixture() {
   let content: AnnotationContent = { strokes: [{ width: 3, points: [{ x: .2, y: .2 }, { x: .3, y: .3 }] }],
     texts: [{ id: "sticky", kind: "sticky", text: "復習", x: .2, y: .35, width: .2, fontSize: 14 }] };
-  let changes = 0, disabled = false;
+  let changes = 0, disabled = false, controlsActive = true;
   const interaction = createPageInteraction();
   function render() { s = 0; r = 0; return LassoLayer({ ...content, pageWidth: 600, pageHeight: 800, pageScale: 1,
-    interaction, disabled, controlsContainer: null, onChange: (strokes: PenStroke[], texts: TextNote[]) => { content = { strokes, texts }; changes++; } }); }
+    interaction, disabled, controlsActive, controlsContainer: null, onChange: (strokes: PenStroke[], texts: TextNote[]) => { content = { strokes, texts }; changes++; } }); }
   function handlers() { return find(render(), (e) => e.type === "svg")!.props as Record<string, (e: unknown) => void>; }
   const event = (x: number, y: number, pointerId = 1) => ({ clientX: x * 600, clientY: y * 800, pointerId, button: 0, isPrimary: true,
     preventDefault() {}, currentTarget: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 600, height: 800 }), setPointerCapture() {}, closest: () => null } });
@@ -52,7 +52,7 @@ function fixture() {
     assert.ok(!button.props.disabled, label); (button.props.onClick as () => void)();
   }
   return { render, handlers, event, select, click, interaction, get: () => content, changes: () => changes,
-    disable: () => { disabled = true; }, replace: () => { content = { ...content, strokes: [...content.strokes] }; } };
+    hideControls: () => { controlsActive = false; }, disable: () => { disabled = true; }, replace: () => { content = { ...content, strokes: [...content.strokes] }; } };
 }
 
 test("選択だけでは保存せず、混在オブジェクトの移動完了で一度だけ更新", () => {
@@ -83,4 +83,10 @@ test("ボタンで混在コピーを貼り付け、新しい付箋IDで選択し
   f.click("貼り付け"); assert.equal(f.changes(), 1); assert.equal(f.get().strokes.length, 2); assert.equal(f.get().texts.length, 2);
   assert.notEqual(f.get().texts[0].id, f.get().texts[1].id);
   f.click("選択解除"); assert.equal(f.changes(), 1);
+});
+
+test("見開きの非選択ページは共通の投げ縄ボタンを出さず、囲む操作でデータを変えない", () => {
+  const f = fixture(); f.hideControls();
+  assert.equal(find(f.render(), (e) => e.props["aria-label"] === "投げ縄の操作"), undefined);
+  f.select(); assert.equal(f.changes(), 0);
 });

@@ -413,3 +413,21 @@ body {
 /* 開いた操作欄もグリッドの2行目へ置き、ファイル一覧の領域を確保する。 */
 .notebook-actions-menu::details-content { display: contents; }
 .notebook-actions-menu:not([open]) > :not(summary) { display: none; }
+
+/* 1ページ表示の既存レイアウト・タッチ画面のグリッド配置を維持する。 */
+.pdf-pages[data-spread="false"], .pdf-page-slot[data-spread="false"] { display: contents; }
+.spread-view-control { display: none; }
+@media (min-width: 1000px) and (min-height: 600px) {
+  .spread-view-control { display: inline-flex; }
+  .pdf-pages[data-spread="true"] {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem;
+    min-width: 0; min-height: 0; grid-column: 2 / -1; grid-row: 2; flex: 1;
+  }
+  .pdf-page-slot[data-spread="true"] {
+    display: flex; flex-direction: column; min-width: 0; min-height: 0;
+    border: 2px solid transparent; border-radius: var(--radius-field);
+  }
+  .pdf-page-slot[data-spread="true"][data-active="true"] { border-color: var(--color-base-content); }
+  .pdf-page-label { align-self: flex-start; margin: 0.25rem; min-height: 2.75rem; }
+  .pdf-page-slot[data-spread="true"] .pdf-viewport { flex: 1; min-height: 0; }
+}

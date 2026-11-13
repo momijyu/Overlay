@@ -1,4 +1,4 @@
-import type { NotePage } from "./types";
+import type { BlankPageTemplate, NotePage } from "./types";
 
 export const MAX_NOTE_PAGES = 10_000;
 function invalid(): never { throw new Error("ノートのページ構成が不正です。"); }
@@ -19,7 +19,10 @@ export function readNotePages(value: unknown): NotePage[] | undefined {
     }
     if (item.kind !== "blank" || !Number.isFinite(item.width) || !Number.isFinite(item.height)
       || item.width <= 0 || item.height <= 0 || item.width > 14_400 || item.height > 14_400) invalid();
-    return { id: item.id, kind: "blank", width: item.width, height: item.height };
+    if (item.template !== undefined && item.template !== "plain" && item.template !== "ruled" && item.template !== "grid") invalid();
+    // 無地は旧データと同じ形へ正規化し、既存ノートの重複判定を変えない。
+    return { id: item.id, kind: "blank", width: item.width, height: item.height,
+      ...(item.template && item.template !== "plain" ? { template: item.template } : {}) };
   });
   if (pages.some((page) => page.kind === "blank" && page.id <= lastOriginal)) invalid();
   return pages;
@@ -46,12 +49,12 @@ export function checkPageBindings(pages: NotePage[] | undefined, maps: Record<nu
   }
 }
 
-export function insertBlankPage(pages: NotePage[], afterId: number, width: number, height: number, originalCount = 0): NotePage[] {
+export function insertBlankPage(pages: NotePage[], afterId: number, width: number, height: number, originalCount = 0, template: BlankPageTemplate = "plain"): NotePage[] {
   if (pages.length >= MAX_NOTE_PAGES) throw new Error("ページは10,000枚まで追加できます。");
   const index = pages.findIndex((page) => page.id === afterId);
   if (index < 0) invalid();
   const id = Math.max(originalCount, ...pages.map((page) => page.id)) + 1;
-  return readNotePages([...pages.slice(0, index + 1), { id, kind: "blank", width, height }, ...pages.slice(index + 1)])!;
+  return readNotePages([...pages.slice(0, index + 1), { id, kind: "blank", width, height, template }, ...pages.slice(index + 1)])!;
 }
 
 export function deleteNotePage(pages: NotePage[], pageId: number): NotePage[] {

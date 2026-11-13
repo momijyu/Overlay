@@ -5,6 +5,7 @@ import type { EditorTool, NotePage } from "@/features/pdf-editor/types";
 import type { ShapeKind } from "@/features/pdf-editor/shapeStrokes";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import { speedMeasurements, type SpeedSpan } from "@/features/pdf-editor/speedMeasurements";
+import { blankPageTemplateLines } from "@/features/pdf-editor/blankPageTemplate";
 
 // DOM配置・PDF.js自体は代用し、倍率変更と描画の非同期接続を検証する。
 let states: { value: unknown }[];
@@ -53,8 +54,11 @@ function fixture(notePage?: NotePage, openTiming?: SpeedSpan) {
   const requestedPages: number[] = [];
   const fills: unknown[] = [];
   const draws: unknown[] = [];
+  const background: { scales: number[][]; points: number[][] } = { scales: [], points: [] };
   const canvas = { width: 300, height: 150, style: { width: "", height: "" },
-    ownerDocument: { createElement: () => ({ width: 0, height: 0, getContext: () => ({ fillStyle: "", fillRect: (...values: number[]) => fills.push(values) }) }) },
+    ownerDocument: { createElement: () => ({ width: 0, height: 0, getContext: () => ({ fillStyle: "", fillRect: (...values: number[]) => fills.push(values),
+      save() {}, restore() {}, beginPath() {}, stroke() {}, scale: (...values: number[]) => background.scales.push(values),
+      moveTo: (...values: number[]) => background.points.push(values), lineTo: (...values: number[]) => background.points.push(values) }) }) },
     getContext: () => ({ drawImage: (image: unknown) => { draws.push(image); } }),
   };
   const viewport = Object.assign(new EventTarget(), {
@@ -101,7 +105,7 @@ function fixture(notePage?: NotePage, openTiming?: SpeedSpan) {
     viewport.dispatchEvent(event);
     return event;
   }
-  return { requestedPages, fills, render, tasks, canvas, viewport, draws, wheel, textControlsContainer, setZoom: changeZoom,
+  return { requestedPages, fills, background, render, tasks, canvas, viewport, draws, wheel, textControlsContainer, setZoom: changeZoom,
     resize: (width: number, height: number) => { viewport.clientWidth = width; viewport.clientHeight = height; resized(); },
     disable: () => { disabled = true; }, zoom: () => zoom,
     setTool: (next: EditorTool) => { tool = next; }, setShape: (next: ShapeKind) => { shapeKind = next; },
@@ -280,6 +284,24 @@ test("白紙ではPDF.jsのページを読まず、同じ寸法・倍率で白�
   assert.equal(f.canvas.style.width, "600px"); assert.equal(childProps(zoomed, TextLayer).pageScale, 0.75);
   t.mock.timers.tick(100); await flush(); f.render();
   assert.equal(f.canvas.width, 1200); assert.deepEqual(f.requestedPages, []); f.cleanup();
+});
+
+test("方眼はPDF出力と同じ座標で描画し、倍率と種類の変更で背景を再描画する", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const page: NotePage = { id: 4, kind: "blank", width: 800, height: 600, template: "grid" };
+  const f = fixture(page);
+  try {
+    f.render(); await flush(); f.render();
+    const expected = blankPageTemplateLines("grid", 800, 600).flatMap((line) => [[line.x1, line.y1], [line.x2, line.y2]]);
+    assert.deepEqual(f.background.points, expected); assert.deepEqual(f.background.scales, [[1, 1]]);
+    f.background.points.length = 0;
+    f.setZoom(1.5); f.render(); t.mock.timers.tick(100); await flush(); f.render();
+    assert.deepEqual(f.background.points, expected); assert.deepEqual(f.background.scales.at(-1), [1.5, 1.5]);
+    page.template = "ruled"; f.background.points.length = 0;
+    f.render(); t.mock.timers.tick(100); await flush(); f.render();
+    assert.deepEqual(f.background.points, blankPageTemplateLines("ruled", 800, 600).flatMap((line) => [[line.x1, line.y1], [line.x2, line.y2]]));
+    assert.deepEqual(f.requestedPages, []);
+  } finally { f.cleanup(); }
 });
 
 test("表示番号と元PDF番号が異なるときは元PDF番号を描画する", async () => {

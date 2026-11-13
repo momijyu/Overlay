@@ -3,15 +3,18 @@ import test, { beforeEach, mock } from "node:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PageClearSelection } from "@/features/pdf-editor/strokeHistory";
+import type { BlankPageTemplate } from "@/features/pdf-editor/types";
 
 let selection: PageClearSelection;
+let template: BlankPageTemplate;
 let opened = 0, closed = 0;
 const dialog = { showModal() { opened++; }, close() { closed++; } };
 mock.module("react", { exports: { ...React, useRef: () => ({ current: dialog }), useEffect: () => {},
-  useState: () => [selection, (next: PageClearSelection) => { selection = next; }] } });
+  useState: (initial: unknown) => initial === "plain" ? [template, (next: BlankPageTemplate) => { template = next; }]
+    : [selection, (next: PageClearSelection) => { selection = next; }] } });
 const { PageActionsMenu } = await import("@/features/pdf-editor/components/PageActionsMenu");
 const { PageEditDialog } = await import("@/features/pdf-editor/components/PageEditDialog");
-beforeEach(() => { selection = { strokes: true, sticky: true, text: true }; opened = 0; closed = 0; });
+beforeEach(() => { selection = { strokes: true, sticky: true, text: true }; template = "plain"; opened = 0; closed = 0; });
 
 function elements(node: React.ReactNode, type: string): React.ReactElement<Record<string, unknown>>[] {
   return React.Children.toArray(node).flatMap((child) => {
@@ -20,6 +23,30 @@ function elements(node: React.ReactNode, type: string): React.ReactElement<Recor
   });
 }
 const event = { preventDefault() {} };
+
+test("白紙の種類は無地が初期値で、選択だけでは追加せず追加ボタンから渡す", () => {
+  const added: (BlankPageTemplate | undefined)[] = [];
+  const render = () => PageActionsMenu({ disabled: false, canInsert: true, canDelete: true, canClear: false,
+    onInsert(value) { added.push(value); }, onDelete() {}, onClear() {} });
+  const tree = render();
+  assert.deepEqual(elements(tree, "input").map((input) => input.props.checked), [true, false, false]);
+  for (const [index, kind] of [[1, "ruled"], [2, "grid"]] as const) {
+    (elements(render(), "input")[index].props.onChange as () => void)();
+    assert.equal(added.length, index - 1);
+    (elements(render(), "button")[1].props.onClick as () => void)();
+    assert.equal(added.at(-1), kind);
+  }
+  (elements(render(), "button")[4].props.onClick as () => void)();
+  assert.equal(added.length, 2);
+  assert.match(renderToStaticMarkup(render()), /無地/); assert.match(renderToStaticMarkup(render()), /方眼/);
+});
+
+test("追加できない時はテンプレートの選択欄も無効にする", () => {
+  const tree = PageActionsMenu({ disabled: false, canInsert: false, canDelete: true, canClear: true,
+    onInsert() { assert.fail("追加しない"); }, onDelete() {}, onClear() {} });
+  assert.equal(elements(tree, "fieldset")[0].props.disabled, true);
+  (elements(tree, "button")[1].props.onClick as () => void)();
+});
 
 test("ページ操作は最前面のdialogで表示し、処理中・最後の1ページ・空の書き込みを操作しない", () => {
   for (const disabled of [true, false]) {

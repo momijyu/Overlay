@@ -1,4 +1,5 @@
 import { checkPageBindings, resolveNotePages } from "./notePages";
+import { blankPageTemplateLines, TEMPLATE_LINE_COLOR, TEMPLATE_LINE_WIDTH } from "./blankPageTemplate";
 import { validatePdfPageSelection } from "./pdfPageSelection";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
@@ -50,7 +51,13 @@ export async function exportAnnotatedPdf(
 
   for (const [index, entry] of layout.entries()) {
     // 出力用のPDFにだけ白紙を挿入する。保存している元PDFは変更しない。
-    if (entry.kind === "blank") pdf.insertPage(index, [entry.width, entry.height]);
+    if (entry.kind === "blank") {
+      const blank = pdf.insertPage(index, [entry.width, entry.height]);
+      for (const line of blankPageTemplateLines(entry.template, entry.width, entry.height)) {
+        blank.drawLine({ start: { x: line.x1, y: entry.height - line.y1 }, end: { x: line.x2, y: entry.height - line.y2 },
+          thickness: TEMPLATE_LINE_WIDTH, color: toColor(TEMPLATE_LINE_COLOR) });
+      }
+    }
     const strokes = checkedStrokes[entry.id] ?? [];
     const texts = checkedTexts[entry.id] ?? [];
     if (strokes.length === 0 && texts.length === 0) continue;

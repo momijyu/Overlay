@@ -1221,6 +1221,23 @@ test("白紙追加は直後へ移動して初回保存し、既存ページの�
   assert.deepEqual(exportedPages.at(-1), layout);
 });
 
+test("方眼の追加を表示・自動保存・Undo／Redo・Drive・PDF出力へ渡す", async () => {
+  setup(); await openOther();
+  await props(PageActionsMenu).onInsert("grid"); await new Promise(setImmediate);
+  const autosave = refs[3].current as ReturnType<typeof createLocalAutosave>;
+  await autosave.flush();
+  const page = { id: 4, kind: "blank", width: 800, height: 600, template: "grid" };
+  assert.deepEqual(props(PdfPage).notePage, page);
+  assert.deepEqual(savedInputs.at(-1)!.pages![1], page);
+  props(HistoryControls).onUndo(); await autosave.flush();
+  assert.equal(props(PdfPage).pageNumber, 1); assert.equal(savedInputs.at(-1)!.pages!.length, 3);
+  props(HistoryControls).onRedo(); await autosave.flush();
+  assert.deepEqual(props(PdfPage).notePage, page);
+  assert.deepEqual(driveSetupProps().captureNote!().notes[0].pages![1], page);
+  props(NoteExportMenu).onDownload(); await new Promise(setImmediate);
+  assert.deepEqual(exportedPages.at(-1)![1], page);
+});
+
 test("白紙追加失敗・整理中は内容と履歴を変えず、読込済みページ構成で編集を再開する", async () => {
   setup(); await openOther(); pageFails = true;
   await props(PageActionsMenu).onInsert(); await new Promise(setImmediate);
@@ -1479,4 +1496,62 @@ test("遅いノート取得中は一覧に読み込み状態を渡し、失敗�
   assert.equal(props(NotebookDrawer).loadingMessage, null);
   assert.equal(props(NotebookSidebar).disabled, false);
   assert.ok(find(render(), (element) => (element.props as { role?: string }).role === "alert"));
+});
+
+function spreadPages() {
+  const found: React.ComponentProps<typeof PdfPage>[] = [];
+  find(render(), (entry) => { if (entry.type === PdfPage) found.push(entry.props as React.ComponentProps<typeof PdfPage>); return false; });
+  return found;
+}
+function enableSpread() {
+  states.at(-1)!.value = true; // matchMediaによる広い画面の判定だけを代用。
+  (button("見開き表示")!.props as { onClick: () => void }).onClick();
+}
+test("見開きの左右で線・文章・投げ縄の更新先を分離し、選んだ側だけへ設定を表示する", async () => {
+  const { autosave, calls } = setup(); enableSpread();
+  let pair = spreadPages();
+  assert.deepEqual(pair.map((page) => page.pageNumber), [1, 2]);
+  assert.deepEqual(pair.map((page) => page.controlsActive), [true, false]);
+  assert.equal(calls.length, 0);
+  // 同じ描画時点の左右のイベントでも、最新履歴を基準に両方を保持する。
+  pair[1].onStrokeComplete(red); pair[0].onStrokeComplete({ ...red, color: "#0000ff" });
+  await autosave.flush();
+  assert.equal(calls.at(-1)!.strokesByPage[1][0].color, "#0000ff");
+  assert.deepEqual(calls.at(-1)!.strokesByPage[2], [red]);
+  (button("2ページを編集")!.props as { onClick: () => void }).onClick();
+  pair = spreadPages(); assert.deepEqual(pair.map((page) => page.controlsActive), [false, true]);
+  const note = { id: "right", kind: "sticky" as const, text: "右の付箋", x: .2, y: .3, width: .2, fontSize: 14 };
+  pair[1].onTextsChange([note]);
+  pair[0].onAnnotationsChange!([], []);
+  await autosave.flush();
+  assert.deepEqual(calls.at(-1)!.textsByPage?.[2], [note]);
+  assert.deepEqual(calls.at(-1)!.strokesByPage[2], [red]);
+  assert.deepEqual(spreadPages()[0].strokes, []);
+  props(HistoryControls).onUndo(); assert.equal(spreadPages()[0].controlsActive, true);
+  props(HistoryControls).onUndo(); assert.equal(spreadPages()[1].controlsActive, true);
+  autosave.dispose();
+});
+test("見開きの末尾・狭幅への復帰でも選択ページを保ち、ページ削除は選んだ側だけを対象にする", async () => {
+  const { autosave, calls } = setup(); enableSpread();
+  (button("2ページを編集")!.props as { onClick: () => void }).onClick();
+  props(PageActionsMenu).onDelete(); assert.equal(props(PageEditDialog).pageNumber, 2);
+  props(PageEditDialog).onClose();
+  (button("次のページ")!.props as { onClick: () => void }).onClick();
+  assert.deepEqual(spreadPages().map((page) => page.pageNumber), [3]);
+  assert.equal((button("次のページ")!.props as { disabled: boolean }).disabled, true);
+  (button("前のページ")!.props as { onClick: () => void }).onClick();
+  (button("2ページを編集")!.props as { onClick: () => void }).onClick();
+  states.at(-1)!.value = false; // スマホ幅・回転で1ページへ戻る。
+  assert.deepEqual(spreadPages().map((page) => page.pageNumber), [2]);
+  assert.equal((button("見開き表示")!.props as { disabled: boolean }).disabled, true);
+  states.at(-1)!.value = true;
+  assert.deepEqual(spreadPages().map((page) => page.pageNumber), [1, 2]);
+  props(PageActionsMenu).onDelete(); props(PageEditDialog).onConfirm({ strokes: true, sticky: true, text: true });
+  await autosave.flush();
+  assert.deepEqual(calls.at(-1)!.pages!.map((page) => page.id), [1, 3]);
+  assert.deepEqual(spreadPages().map((page) => page.notePage!.id), [1, 3]);
+  assert.equal(spreadPages()[1].controlsActive, true);
+  props(HistoryControls).onUndo();
+  assert.deepEqual(spreadPages().map((page) => page.notePage!.id), [1, 2]);
+  autosave.dispose();
 });
