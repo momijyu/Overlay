@@ -1,3 +1,5 @@
+import { checkPageBindings } from "./notePages";
+import { readDriveImages, type DriveImages } from "./driveImages";
 import { BACKUP_LIMITS, readNoteBackup, type NoteBackup } from "./noteBackupData";
 
 export const DRIVE_NOTE_SUFFIX = ".overlay.json";
@@ -5,10 +7,11 @@ export const DRIVE_NOTE_FIELDS = "id,name,mimeType,ownedByMe,trashed,parents,app
 export type DriveOverwriteTarget = { note: DriveNoteSummary; version: string };
 export type DriveNoteSummary = { id: string; title: string; updatedAt: string; containerId: string; noteKey: string; deviceId?: string };
 export type DriveNoteManifest = {
-  schemaVersion: 1 | 2 | 3 | 4; kind: "overlay-drive-note"; noteKey: string; title: string; fileName: string;
+  schemaVersion: 1 | 2 | 3 | 4 | 5; kind: "overlay-drive-note"; noteKey: string; title: string; fileName: string;
   sync?: { deviceId: string; generation: number; hash: string };
   pdfId: string; pdfBytes: number; strokesByPage: NoteBackup["notes"][number]["strokesByPage"];
   textsByPage: NoteBackup["notes"][number]["textsByPage"];
+  images?: DriveImages;
   pages?: NoteBackup["notes"][number]["pages"];
   headingsByPage?: NoteBackup["notes"][number]["headingsByPage"];
 };
@@ -23,7 +26,7 @@ export function driveId(value: unknown): string {
   return value;
 }
 
-export function driveFile(value: unknown, role: "note" | "sync-note" | "note-container" | "pdf", rootId: string, noteKey?: string, parentId?: string) {
+export function driveFile(value: unknown, role: "note" | "sync-note" | "note-container" | "pdf" | "image", rootId: string, noteKey?: string, parentId?: string) {
   const file = driveObject(value);
   driveId(file.id);
   const properties = driveObject(file.appProperties);
@@ -35,7 +38,7 @@ export function driveFile(value: unknown, role: "note" | "sync-note" | "note-con
   }
   driveId(properties.overlayNoteKey);
   const expectedType = role === "pdf" ? "application/pdf" : role === "note" || role === "sync-note" ? "application/json" : "application/vnd.google-apps.folder";
-  if (file.mimeType !== expectedType) throw new Error("Driveノートのファイル種類が一致しません。");
+  if (role === "image" ? !["image/png", "image/jpeg"].includes(file.mimeType as string) : file.mimeType !== expectedType) throw new Error("Driveノートのファイル種類が一致しません。");
   return file;
 }
 
@@ -59,9 +62,11 @@ export function singleDriveNote(input: unknown) {
 
 export function readDriveManifest(value: unknown, expectedKey: string): DriveNoteManifest {
   const data = driveObject(value);
-  if ((data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3 && data.schemaVersion !== 4) || data.kind !== "overlay-drive-note") throw new Error("このDriveノートの形式バージョンには対応していません。");
+  if ((data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3 && data.schemaVersion !== 4 && data.schemaVersion !== 5) || data.kind !== "overlay-drive-note") throw new Error("このDriveノートの形式バージョンには対応していません。");
+  if (data.images !== undefined && data.schemaVersion !== 5) throw new Error("画像の保存形式が不正です。");
+  const images = readDriveImages(data.images);
   let sync: DriveNoteManifest["sync"];
-  if (data.schemaVersion === 4) {
+  if (data.schemaVersion === 4 || data.schemaVersion === 5 && data.sync !== undefined) {
     const value = driveObject(data.sync);
     if (!Number.isSafeInteger(value.generation) || (value.generation as number) < 1 || typeof value.hash !== "string" || !/^[a-f0-9]{64}$/.test(value.hash)) throw new Error("Driveノートの自動保存情報が不正です。");
     sync = { deviceId: driveId(value.deviceId), generation: value.generation as number, hash: value.hash };
@@ -77,6 +82,7 @@ export function readDriveManifest(value: unknown, expectedKey: string): DriveNot
     id: data.noteKey, title: data.title, fileName: data.fileName, folderId: null,
     headingsByPage: data.headingsByPage, pages: data.pages, strokesByPage: data.strokesByPage, textsByPage: data.textsByPage, pdf: new Blob(["%PDF-placeholder"]),
   }] });
-  return { schemaVersion: data.schemaVersion, ...(sync ? { sync } : {}), kind: "overlay-drive-note", noteKey: expectedKey, title: checked.title, fileName: checked.fileName,
+  checkPageBindings(checked.pages, [images?.byPage ?? {}]);
+  return { schemaVersion: data.schemaVersion, ...(images ? { images } : {}), ...(sync ? { sync } : {}), kind: "overlay-drive-note", noteKey: expectedKey, title: checked.title, fileName: checked.fileName,
     ...(checked.pages ? { pages: checked.pages } : {}), ...(checked.headingsByPage ? { headingsByPage: checked.headingsByPage } : {}), pdfId: driveId(data.pdfId), pdfBytes: data.pdfBytes as number, strokesByPage: checked.strokesByPage, textsByPage: checked.textsByPage };
 }

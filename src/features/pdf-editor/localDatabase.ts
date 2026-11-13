@@ -4,7 +4,7 @@ import { notifyDriveQueue } from "./driveQueueEvents";
 
 const DATABASE_NAME = "overlay-local-notes";
 // 旧タブが送信待ち情報を更新せず本文だけ保存することを防ぐ。
-const DATABASE_VERSION = 7;
+const DATABASE_VERSION = 8;
 const STORES = ["notes", "pdfs", "folders", "noteSummaries", "driveBindings", "driveSettings", "driveEntities", "driveTreeEvents"] as const;
 type StoreName = typeof STORES[number];
 type Connection = { factory: IDBFactory; database: IDBDatabase | null; opening: Promise<IDBDatabase> };

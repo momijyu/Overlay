@@ -13,7 +13,17 @@ export type PenStroke = {
 };
 
 export type PenTool = "pen" | "marker" | "eraser";
-export type EditorTool = PenTool | "text" | "sticky" | "hand" | "lasso" | "shape" | "fill";
+export type EditorTool = PenTool | "text" | "sticky" | "hand" | "lasso" | "shape" | "fill" | "image";
+
+export type NoteImage = {
+  id: string; assetId: string;
+  x: number; y: number; width: number; height: number;
+  rotation: 0 | 90 | 180 | 270;
+  crop: { x: number; y: number; width: number; height: number };
+};
+export type ImageAsset = { blob: Blob; width: number; height: number };
+// 配置と元画像を分離する。Blobは不変で、移動・履歴で画素データを複製しない。
+export type NoteImages = { byPage: Record<number, NoteImage[]>; assets: Record<string, ImageAsset> };
 export type TextNote = {
   id: string;
   kind: "text" | "sticky";
@@ -70,6 +80,7 @@ export type LoadedNote = {
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
   headingsByPage?: HeadingsByPage;
+  images?: NoteImages;
   // ローカル保存の更新番号。番号のない旧データは0として読み込む。
   revision?: number;
 };

@@ -1,3 +1,4 @@
+import { imageBytes } from "./imageData";
 import { readRequest, withLocalTransaction } from "./localDatabase";
 import { notifyLibraryChanged } from "./driveLibraryEvents";
 import { getLibraryScope, libraryScope, recordVersionAdoption } from "./driveLibraryLocal";
@@ -50,7 +51,7 @@ export async function markUploadedCache(binding: DriveBinding, backup: NoteBacku
     if (!row || row.entry.deleted || !current || current.key !== binding.key || current.generation !== binding.generation) return;
     const note = await readRequest(tx.objectStore("notes").get(binding.id));
     await readRequest(store.put({ ...row, cachedSource: binding.ids!.note, cachedVersion: version, cachedChecksum: current.uploadedChecksum,
-      cacheWarning: undefined, cachedBytes: backup.notes[0].pdf.size + new Blob([JSON.stringify(note)]).size, lastUsed: row.lastUsed ?? Date.now() }));
+      cacheWarning: undefined, cachedBytes: backup.notes[0].pdf.size + imageBytes(backup.notes[0].images) + new Blob([JSON.stringify(note)]).size, lastUsed: row.lastUsed ?? Date.now() }));
   }, false);
 }
 export async function hydrateDriveNote(id: string, sourceId?: string, preferCached = false, allowCached = false, acceptVersion?: DriveVersionRequired) {
@@ -161,7 +162,7 @@ export async function hydrateDriveNote(id: string, sourceId?: string, preferCach
       || driveBodyBindingSignature(liveBinding) !== driveBodyBindingSignature(binding)) throw new Error("取得中にノートが変更されました。再度開いてください。");
     const previous = await readRequest<{ revision?: number } | undefined>(tx.objectStore("notes").get(id));
     const stored = { id, title: entity.entry.name, folderId: entity.entry.parentId, fileName: note.fileName, updatedAt: result.summary.updatedAt,
-      revision: (previous?.revision ?? 0) + 1, strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, pages: note.pages, headingsByPage: note.headingsByPage };
+      revision: (previous?.revision ?? 0) + 1, strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, pages: note.pages, headingsByPage: note.headingsByPage, images: note.images };
     await readRequest(tx.objectStore("pdfs").put({ id, blob: note.pdf }));
     await readRequest(tx.objectStore("notes").put(stored));
     await readRequest(tx.objectStore("noteSummaries").put(toLocalNoteSummary(stored)));
@@ -169,7 +170,7 @@ export async function hydrateDriveNote(id: string, sourceId?: string, preferCach
       before: acceptVersion.heads, observed: versions }, adoptionSignature(entity)) : current;
     await readRequest(entities.put({ ...adopted, sourceVersions: versions, cachedSource: source.noteId, cachedVersion: version,
       cachedChecksum: typeof metadata.sha256Checksum === "string" ? metadata.sha256Checksum : undefined,
-      cacheWarning: undefined, cachedBytes: note.pdf.size + new Blob([JSON.stringify(stored)]).size, lastUsed: Date.now() }));
+      cacheWarning: undefined, cachedBytes: note.pdf.size + imageBytes(note.images) + new Blob([JSON.stringify(stored)]).size, lastUsed: Date.now() }));
     // 別端末の版を選んだ場合も旧送信先を上書きしない。次の編集で新しい枝を作る。
     if (liveBinding && liveBinding.ids?.note !== source.noteId) await readRequest(tx.objectStore("driveBindings").delete(id));
   }, false);

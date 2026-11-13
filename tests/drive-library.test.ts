@@ -427,7 +427,7 @@ test("DB版6の元PDF・編集本文・未送信番号を保持して版7へ更�
   };
   const database = await readRequest(request); database.close();
   await withLocalTransaction(["driveBindings", "pdfs"], "readonly", async (tx) => {
-    assert.equal(tx.db.version, 7);
+    assert.equal(tx.db.version, 8);
     assert.deepEqual(await readRequest(tx.objectStore("driveBindings").get("pending")), { id: "pending", generation: 7, uploadedGeneration: 6 });
     assert.equal((await readRequest<{ blob: Blob }>(tx.objectStore("pdfs").get("pending"))).blob.size, 13);
   });

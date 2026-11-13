@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import ts from "typescript";
 
 const sourceRoot = new URL("../src/", import.meta.url);
+const testsRoot = new URL("./", import.meta.url);
 
 // Nodeでテストするときだけ、Next.jsの @/* と拡張子なしのimportを解決する。
 // アプリや本番ビルドの読み込み方は変更しない。
@@ -15,7 +16,7 @@ registerHooks({
       return nextResolve(`${path.href}${extension}`, context);
     }
     if (
-      context.parentURL?.startsWith(sourceRoot.href) &&
+      (context.parentURL?.startsWith(sourceRoot.href) || context.parentURL?.startsWith(testsRoot.href)) &&
       specifier.startsWith(".") && !extname(specifier)
     ) {
       const path = new URL(specifier, context.parentURL);

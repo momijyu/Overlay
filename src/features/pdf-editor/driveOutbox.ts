@@ -88,7 +88,7 @@ export async function captureDriveJob(id: string, key: string): Promise<{ bindin
     const note = await readRequest<(Omit<LoadedNote, "file"> & { title: string; fileName: string }) | undefined>(tx.objectStore("notes").get(id));
     const pdf = await readRequest<{ blob: Blob } | undefined>(tx.objectStore("pdfs").get(id));
     if (!note || !pdf) throw new Error("Drive保存に必要なノートが見つかりません。");
-    const backup = readNoteBackup({ schemaVersion: note.headingsByPage ? 4 : note.pages ? 3 : 1,
+    const backup = readNoteBackup({ schemaVersion: note.images ? 5 : note.headingsByPage ? 4 : note.pages ? 3 : 1,
       kind: "note", name: note.title, folders: [], notes: [{ ...note, folderId: null, pdf: pdf.blob, textsByPage: note.textsByPage ?? {} }] });
     return { binding, backup };
   });

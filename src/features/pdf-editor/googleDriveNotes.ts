@@ -1,3 +1,4 @@
+import { saveDriveImages, loadDriveImages } from "./driveImages";
 import { checkPageBindings } from "./notePages";
 import { BACKUP_LIMITS, readNoteBackup, type NoteBackup } from "./noteBackupData";
 import { speedMeasurements } from "./speedMeasurements";
@@ -24,6 +25,12 @@ function noteQuery(rootId: string, includeAutosave = false) {
 function version(value: unknown): string {
   if (typeof value !== "string" || !/^\d{1,30}$/.test(value)) throw new Error("Driveノートの更新情報を確認できませんでした。");
   return value;
+}
+
+function manifestBlob(manifest: DriveNoteManifest): Blob {
+  const blob = new Blob([JSON.stringify(manifest)], { type: "application/json" });
+  if (blob.size > BACKUP_LIMITS.jsonBytes) throw new Error("編集情報が16MiBを超えています。ノートを分けて保存してください。");
+  return blob;
 }
 
 export async function findDriveOverwriteTarget(access: DriveNoteAccess, rootId: string, title: string): Promise<DriveOverwriteTarget | null> {
@@ -55,11 +62,12 @@ export async function saveNewDriveNote(access: DriveNoteAccess, rootId: string, 
   const pdf = driveFile(await access.upload({ name: note.fileName, mimeType: "application/pdf", parents: [containerId],
     appProperties: properties("pdf") }, note.pdf), "pdf", rootId, noteKey, containerId);
   if (Number(pdf.size) !== note.pdf.size) throw new Error("Driveへ送信したPDFのサイズを確認できませんでした。");
-  const manifest: DriveNoteManifest = { schemaVersion: note.headingsByPage ? 3 : note.pages ? 2 : 1, ...(note.headingsByPage ? { headingsByPage: note.headingsByPage } : {}), ...(note.pages ? { pages: note.pages } : {}), kind: "overlay-drive-note", noteKey, title: note.title,
+  const images = await saveDriveImages(access, rootId, noteKey, containerId, note.images);
+  const manifest: DriveNoteManifest = { ...(images ? { images } : {}), schemaVersion: images ? 5 : note.headingsByPage ? 3 : note.pages ? 2 : 1, ...(note.headingsByPage ? { headingsByPage: note.headingsByPage } : {}), ...(note.pages ? { pages: note.pages } : {}), kind: "overlay-drive-note", noteKey, title: note.title,
     fileName: note.fileName, pdfId: driveId(pdf.id), pdfBytes: note.pdf.size, strokesByPage: note.strokesByPage, textsByPage: note.textsByPage };
   // 最後のJSONアップロードが完了したノートだけ一覧へ現れる。途中失敗の元PDF・フォルダを勝手に削除しない。
   const saved = await access.upload({ name: `${note.title}${DRIVE_NOTE_SUFFIX}`, mimeType: "application/json", parents: [containerId],
-    appProperties: properties("note") }, new Blob([JSON.stringify(manifest)], { type: "application/json" }));
+    appProperties: properties("note") }, manifestBlob(manifest));
   const summary = driveNoteSummary(saved, rootId);
   if (summary.noteKey !== noteKey || summary.containerId !== containerId) throw new Error("Driveへ保存したノートを確認できませんでした。");
   return summary;
@@ -144,10 +152,13 @@ export async function loadDriveNoteDetails(access: DriveNoteAccess, rootId: stri
     } catch (error) { span.finish("error"); throw error; }
   };
   // 早期の二重取得をやめ、PDF取得と並行して後段の版を確認する。
-  const [{ pdf, pdfHash }, latestValue] = await Promise.all([
+  const [{ pdf, pdfHash }, images, checkedVersion] = await Promise.all([
     readPdf(),
-    access.json(`files/${noteId}`, { fields: DRIVE_NOTE_FIELDS }),
+    loadDriveImages(access, rootId, summary.noteKey, summary.containerId, manifest.images),
+    manifest.images ? Promise.resolve(undefined) : access.json(`files/${noteId}`, { fields: DRIVE_NOTE_FIELDS }),
   ]);
+  // 画像の取得時間も含めて版を確認する。画像なしの既存経路は並列確認を維持する。
+  const latestValue = checkedVersion ?? await access.json(`files/${noteId}`, { fields: DRIVE_NOTE_FIELDS });
   const latest = driveNoteSummary(latestValue, rootId);
   if (latest.id !== noteId || latest.noteKey !== summary.noteKey || latest.containerId !== summary.containerId
     || latest.deviceId !== summary.deviceId || version(driveObject(latestValue).version) !== expectedVersion) {
@@ -155,13 +166,13 @@ export async function loadDriveNoteDetails(access: DriveNoteAccess, rootId: stri
   }
   if (pdf.size !== manifest.pdfBytes || !((await pdf.slice(0, 1024).text()).includes("%PDF-"))) throw new Error("DriveノートのPDFが不正です。");
   if (pdfMetadata.sha256Checksum !== undefined && pdfMetadata.sha256Checksum !== pdfHash) throw new Error("DriveのPDFの取得結果が一致しません。");
-  if (manifest.pages || manifest.headingsByPage) {
+  if (manifest.pages || manifest.headingsByPage || images) {
     const { PDFDocument } = await import("pdf-lib");
     const original = await PDFDocument.load(await pdf.arrayBuffer(), { updateMetadata: false });
-    checkPageBindings(manifest.pages, [manifest.strokesByPage, manifest.textsByPage, manifest.headingsByPage ?? {}], original.getPageCount());
+    checkPageBindings(manifest.pages, [manifest.strokesByPage, manifest.textsByPage, manifest.headingsByPage ?? {}, images?.byPage ?? {}], original.getPageCount());
   }
-  const backup = readNoteBackup({ schemaVersion: manifest.headingsByPage ? 4 : manifest.pages ? 3 : 1, kind: "note", name: manifest.title, folders: [], notes: [{
-    id: manifest.noteKey, title: manifest.title, fileName: manifest.fileName, folderId: null, pdf,
+  const backup = readNoteBackup({ schemaVersion: images ? 5 : manifest.headingsByPage ? 4 : manifest.pages ? 3 : 1, kind: "note", name: manifest.title, folders: [], notes: [{
+    id: manifest.noteKey, title: manifest.title, fileName: manifest.fileName, folderId: null, pdf, ...(images ? { images } : {}),
     ...(manifest.pages ? { pages: manifest.pages } : {}), ...(manifest.headingsByPage ? { headingsByPage: manifest.headingsByPage } : {}), strokesByPage: manifest.strokesByPage, textsByPage: manifest.textsByPage,
   }] });
   return { backup, manifest, metadata, summary, pdfHash };
@@ -193,6 +204,7 @@ export async function overwriteDriveNote(access: DriveNoteAccess, rootId: string
     if (Number(uploaded.size) !== note.pdf.size) throw new Error("Driveへ送信したPDFのサイズが一致しません。");
     pdfId = driveId(uploaded.id);
   }
+  const images = await saveDriveImages(access, rootId, source.summary.noteKey, source.summary.containerId, note.images);
   const [latestValue, reusedPdf] = await Promise.all([
     access.json(`files/${target.note.id}`, { fields: DRIVE_NOTE_FIELDS }),
     pdfId === source.manifest.pdfId ? access.json(`files/${pdfId}`, { fields: DRIVE_NOTE_FIELDS }) : null,
@@ -206,9 +218,9 @@ export async function overwriteDriveNote(access: DriveNoteAccess, rootId: string
       throw new Error("確認後にDriveの元PDFが変更されました。保存対象を選び直してください。");
     }
   }
-  const manifest: DriveNoteManifest = { schemaVersion: note.headingsByPage ? 3 : note.pages ? 2 : 1, ...(note.headingsByPage ? { headingsByPage: note.headingsByPage } : {}), ...(note.pages ? { pages: note.pages } : {}), kind: "overlay-drive-note", noteKey: source.summary.noteKey,
+  const manifest: DriveNoteManifest = { ...(images ? { images } : {}), schemaVersion: images ? 5 : note.headingsByPage ? 3 : note.pages ? 2 : 1, ...(note.headingsByPage ? { headingsByPage: note.headingsByPage } : {}), ...(note.pages ? { pages: note.pages } : {}), kind: "overlay-drive-note", noteKey: source.summary.noteKey,
     title: note.title, fileName: note.fileName, pdfId, pdfBytes: note.pdf.size, strokesByPage: note.strokesByPage, textsByPage: note.textsByPage };
-  const saved = driveNoteSummary(await access.replace(target.note.id, new Blob([JSON.stringify(manifest)], { type: "application/json" })), rootId);
+  const saved = driveNoteSummary(await access.replace(target.note.id, manifestBlob(manifest)), rootId);
   if (saved.id !== target.note.id || saved.title !== note.title || saved.containerId !== source.summary.containerId || saved.noteKey !== source.summary.noteKey) throw new Error("上書き保存の結果を確認できませんでした。");
   return saved;
 }

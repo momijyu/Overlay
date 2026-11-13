@@ -1,3 +1,4 @@
+import { imageBytes, readNoteImages } from "./imageData";
 import { readPageHeadings } from "./pageHeadings";
 import { readNotePages, checkPageBindings } from "./notePages";
 import { readStrokes } from "./strokeData";
@@ -10,10 +11,10 @@ export const BACKUP_LIMITS = { bytes: 256 * 1024 * 1024, jsonBytes: 16 * 1024 * 
 
 export type BackupNote = {
   id: string; title: string; fileName: string; folderId: string | null;
-  strokesByPage: Record<number, PenStroke[]>; textsByPage: TextNotesByPage; pages?: NotePage[]; headingsByPage?: HeadingsByPage; pdf: Blob;
+  strokesByPage: Record<number, PenStroke[]>; textsByPage: TextNotesByPage; pages?: NotePage[]; headingsByPage?: HeadingsByPage; images?: import("./types").NoteImages; pdf: Blob;
 };
 export type NoteBackup = {
-  schemaVersion: 1 | 2 | 3 | 4; kind: "note" | "folder" | "selection"; name: string;
+  schemaVersion: 1 | 2 | 3 | 4 | 5; kind: "note" | "folder" | "selection"; name: string;
   folders: NoteFolder[]; notes: BackupNote[];
 };
 
@@ -34,7 +35,7 @@ function id(value: unknown): string {
 // ファイル由来の値だけでなく、DB由来の書き出し内容にも同じ検証を適用する。
 export function readNoteBackup(value: unknown): NoteBackup {
   const data = object(value);
-  if (data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3 && data.schemaVersion !== 4) throw new Error("このバックアップの形式バージョンには対応していません。");
+  if (data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3 && data.schemaVersion !== 4 && data.schemaVersion !== 5) throw new Error("このバックアップの形式バージョンには対応していません。");
   if (data.kind !== "note" && data.kind !== "folder" && data.kind !== "selection") invalid();
   if (data.schemaVersion < 3 && (data.kind === "selection") !== (data.schemaVersion === 2)) invalid();
   if (!Array.isArray(data.folders) || !Array.isArray(data.notes)
@@ -71,7 +72,9 @@ export function readNoteBackup(value: unknown): NoteBackup {
     const folderId = note.folderId === null ? null : id(note.folderId);
     if (folderId !== null && !folderMap.has(folderId)) invalid();
     if (!(note.pdf instanceof Blob) || note.pdf.size === 0) invalid();
-    bytes += note.pdf.size;
+    if (note.images !== undefined && data.schemaVersion !== 5) invalid();
+    const images = readNoteImages(note.images);
+    bytes += note.pdf.size + imageBytes(images);
     if (bytes > BACKUP_LIMITS.bytes) throw new Error("バックアップは合計256MiB以下に分けてください。");
     // 大量の座標を複製する前に件数を制限する。
     const rawStrokes = object(note.strokesByPage);
@@ -90,12 +93,12 @@ export function readNoteBackup(value: unknown): NoteBackup {
       if (texts > BACKUP_LIMITS.texts) invalid();
     }
     if (note.pages !== undefined && (data.schemaVersion === 1 || data.schemaVersion === 2)) invalid();
-    if (note.headingsByPage !== undefined && data.schemaVersion !== 4) invalid();
+    if (note.headingsByPage !== undefined && data.schemaVersion !== 4 && data.schemaVersion !== 5) invalid();
     const headingsByPage = readPageHeadings(note.headingsByPage);
     const pages = readNotePages(note.pages);
-    checkPageBindings(pages, [rawStrokes, object(note.textsByPage ?? {}), headingsByPage]);
+    checkPageBindings(pages, [rawStrokes, object(note.textsByPage ?? {}), headingsByPage, images?.byPage ?? {}]);
     return { ...(pages ? { pages } : {}), ...(Object.keys(headingsByPage).length ? { headingsByPage } : {}), id: noteId, title: name(note.title, 120), fileName: name(note.fileName, 255), folderId,
-      strokesByPage: readStrokes(rawStrokes), textsByPage: readTextNotes(note.textsByPage), pdf: note.pdf };
+      strokesByPage: readStrokes(rawStrokes), textsByPage: readTextNotes(note.textsByPage), ...(images ? { images } : {}), pdf: note.pdf };
   });
   if (data.kind === "note" && (folders.length !== 0 || notes.length !== 1 || notes[0].folderId !== null)) invalid();
   if (data.kind === "folder" && (folders.filter((folder) => folder.parentId === null).length !== 1

@@ -1,4 +1,6 @@
 "use client";
+import { readNoteImages } from "../imageData";
+import type { NoteImages } from "../types";
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
@@ -36,7 +38,7 @@ import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
 import { ZoomControl } from "./ZoomControl";
 import { EditorIcon } from "./EditorIcon";
-import { createStrokeHistory, recordStrokeEdit, recordTextEdit, recordAnnotationEdit, recordPageInsertion, recordPageDeletion, recordPageClear, pageAnnotationCounts, undoStrokeEdit, redoStrokeEdit, type StrokeHistory, type PageClearSelection } from "../strokeHistory";
+import { createStrokeHistory, recordImageEdit, recordStrokeEdit, recordTextEdit, recordAnnotationEdit, recordPageInsertion, recordPageDeletion, recordPageClear, pageAnnotationCounts, undoStrokeEdit, redoStrokeEdit, type StrokeHistory, type PageClearSelection } from "../strokeHistory";
 import { speedMeasurements, type SpeedSpan } from "../speedMeasurements";
 import { SHAPE_OPTIONS, type ShapeKind } from "../shapeStrokes";
 import { adjacentPageNumber, visiblePageNumbers, SPREAD_MEDIA_QUERY } from "../pageSpread";
@@ -49,6 +51,7 @@ type PdfInput = {
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
   headingsByPage?: HeadingsByPage;
+  images?: NoteImages;
   revision?: number;
   initialFolderId?: string | null;
 };
@@ -65,6 +68,7 @@ const editorTools: { tool: EditorTool; label: string }[] = [
   { tool: "hand", label: "ページを動かす" },
   { tool: "lasso", label: "投げ縄で選択" },
   { tool: "shape", label: "図形" },
+  { tool: "image", label: "画像" },
   { tool: "fill", label: "塗りつぶし" },
 ];
 
@@ -215,14 +219,15 @@ export function PdfWorkspace() {
       const loadedDocument = await loadingTask.promise;
       stage.finish("ok", { pageCount: loadedDocument.numPages });
       if (!mountedRef.current) return;
+      const images = readNoteImages(input.images);
       const headingsByPage = readPageHeadings(input.headingsByPage);
-      checkPageBindings(input.pages, [input.strokesByPage, input.textsByPage ?? {}, headingsByPage], loadedDocument.numPages);
+      checkPageBindings(input.pages, [input.strokesByPage, input.textsByPage ?? {}, headingsByPage, images?.byPage ?? {}], loadedDocument.numPages);
       const initialPage = destination ? stickyDestination(resolveNotePages(input.pages, loadedDocument.numPages),
         input.textsByPage, destination.pageId, destination.textId) : 1;
 
       // PDFと線を両方読み込めてから切り替え、失敗時は編集中の内容を残す。
       previousAutosave?.dispose();
-      const nextHistory = createStrokeHistory(input.strokesByPage, input.textsByPage, input.pages, headingsByPage);
+      const nextHistory = createStrokeHistory(input.strokesByPage, input.textsByPage, input.pages, headingsByPage, images);
       historyRef.current = nextHistory;
       openTimingRef.current = timing;
       setOpenTiming(timing);
@@ -240,7 +245,7 @@ export function PdfWorkspace() {
       setDocumentVersion((value) => value + 1);
       const autosave = createLocalAutosave({
         file: input.file, noteId: input.id, strokesByPage: input.strokesByPage, textsByPage: nextHistory.textsByPage,
-        pages: input.pages, headingsByPage: nextHistory.headingsByPage, revision: input.revision, persist: (value) => saveNote({ ...value, initialFolderId: input.initialFolderId }),
+        images, pages: input.pages, headingsByPage: nextHistory.headingsByPage, revision: input.revision, persist: (value) => saveNote({ ...value, initialFolderId: input.initialFolderId }),
         onChange: (state) => {
           // 古いノートの保存結果が、新しく開いた画面に混ざらないようにする。
           if (!mountedRef.current || autosaveRef.current !== autosave) return;
@@ -321,7 +326,7 @@ export function PdfWorkspace() {
       if (index >= 0) setPageNumber(index + 1);
     }
     // Undo / Redoも通常の編集として保存係へ渡し、保存中の古い結果で上書きしない。
-    autosaveRef.current?.update(next.strokesByPage, next.textsByPage, next.pages, next.headingsByPage);
+    autosaveRef.current?.update(next.strokesByPage, next.textsByPage, next.pages, next.headingsByPage, next.images);
   }
 
   function openStickyPage(note: SavedNoteSummary | null, targetPageId: number, textId: string, sourceId?: string) {
@@ -448,7 +453,7 @@ export function PdfWorkspace() {
     setError(null);
 
     try {
-      const pdfBytes = await exportAnnotatedPdf(file, document, content.strokesByPage, content.textsByPage, content.pages, selectedPageNumbers);
+      const pdfBytes = await exportAnnotatedPdf(file, document, content.strokesByPage, content.textsByPage, content.pages, selectedPageNumbers, content.images);
       if (!mountedRef.current) return;
       const blob = new Blob([new Uint8Array(pdfBytes)], {
         type: "application/pdf",
@@ -479,8 +484,8 @@ export function PdfWorkspace() {
     if (!file || !document) throw new Error("ノートを開いてください。");
     const content = historyRef.current;
     const hasHeadings = Object.keys(content.headingsByPage).length > 0;
-    return readNoteBackup({ schemaVersion: hasHeadings ? 4 : content.pages ? 3 : 1, kind: "note", name: noteName, folders: [], notes: [{
-      id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
+    return readNoteBackup({ schemaVersion: content.images ? 5 : hasHeadings ? 4 : content.pages ? 3 : 1, kind: "note", name: noteName, folders: [], notes: [{
+      images: content.images, id: "current", title: noteName, fileName: file.name, folderId: null, pdf: file,
       strokesByPage: content.strokesByPage, textsByPage: content.textsByPage, pages: content.pages,
       ...(hasHeadings ? { headingsByPage: content.headingsByPage } : {}),
     }] });
@@ -746,7 +751,7 @@ export function PdfWorkspace() {
                       {editorTools.map(({ tool, label }) => <button key={tool} type="button"
                         className={`btn btn-square btn-ghost join-item ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
                         aria-label={label} title={label} aria-pressed={penTool === tool} disabled={isBusy}
-                        onClick={() => { if (!isBusy) { setPenTool(tool); if (tool === "text" || tool === "sticky" || tool === "hand" || tool === "lasso" || tool === "shape" || tool === "fill") setMobileSettingsOpen(true); } }}>
+                        onClick={() => { if (!isBusy) { setPenTool(tool); if (tool === "text" || tool === "sticky" || tool === "hand" || tool === "lasso" || tool === "shape" || tool === "fill" || tool === "image") setMobileSettingsOpen(true); } }}>
                         <EditorIcon name={tool} />
                       </button>)}
                     </div>
@@ -787,7 +792,7 @@ export function PdfWorkspace() {
                     {penTool === "eraser" && <EraserSizeControl
                       value={eraserWidth} disabled={isBusy} onChange={setEraserWidth}
                     />}
-                    {(penTool === "text" || penTool === "sticky" || penTool === "lasso") && <div
+                    {(penTool === "text" || penTool === "sticky" || penTool === "lasso" || penTool === "image") && <div
                       ref={setTextControlsContainer} data-text-controls
                       className="flex items-center gap-2" />}
                     {penTool === "hand" && <p className="text-sm text-base-content/70">ドラッグでページを移動</p>}
@@ -844,6 +849,8 @@ export function PdfWorkspace() {
                         pageNumber={number}
                         notePage={shownPage}
                         strokes={strokesByPage[shownId] ?? EMPTY_STROKES}
+                        images={history.images}
+                        onImagesChange={(images) => { if (!operationRef.current) applyHistory(recordImageEdit(historyRef.current, shownId, images)); }}
                         texts={history.textsByPage[shownId] ?? EMPTY_TEXTS}
                         stickyFocus={stickyFocus?.pageId === shownId ? stickyFocus : undefined}
                         textControlsContainer={textControlsContainer}

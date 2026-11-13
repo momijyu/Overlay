@@ -1,3 +1,4 @@
+import type { NoteImages } from "./types";
 import type { HeadingsByPage, NotePage, PenStroke, TextNotesByPage } from "./types";
 import { measureSpeed } from "./speedMeasurements";
 
@@ -8,6 +9,7 @@ export type LocalSaveInput = {
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
   headingsByPage?: HeadingsByPage;
+  images?: NoteImages;
   noteId: string | null;
   expectedRevision: number;
 };
@@ -27,10 +29,13 @@ export function createLocalAutosave(options: {
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
   headingsByPage?: HeadingsByPage;
+  images?: NoteImages;
   revision?: number;
   persist: (input: LocalSaveInput) => Promise<string>;
   onChange: (state: LocalSaveState) => void;
 }) {
+  let latestImages = options.images;
+  let savedImages = latestImages;
   let latest = options.strokesByPage;
   let latestTexts = options.textsByPage ?? {};
   let savedTexts = latestTexts;
@@ -56,7 +61,7 @@ export function createLocalAutosave(options: {
   }
 
   function hasPendingChanges() {
-    return latest !== saved || latestTexts !== savedTexts || latestPages !== savedPages || latestHeadings !== savedHeadings;
+    return latest !== saved || latestTexts !== savedTexts || latestPages !== savedPages || latestHeadings !== savedHeadings || latestImages !== savedImages;
   }
 
   function flush(retry = false): Promise<boolean> {
@@ -71,15 +76,17 @@ export function createLocalAutosave(options: {
     running = Promise.resolve().then(async () => {
       try {
         while (hasPendingChanges()) {
+          const imageSnapshot = latestImages;
           const snapshot = latest;
           const textSnapshot = latestTexts;
           const pageSnapshot = latestPages;
           const headingSnapshot = latestHeadings;
           noteId = await measureSpeed("local.save", () => options.persist({
             file: options.file, strokesByPage: snapshot, textsByPage: textSnapshot, noteId, expectedRevision: revision,
-            pages: pageSnapshot, headingsByPage: headingSnapshot,
+            images: imageSnapshot, pages: pageSnapshot, headingsByPage: headingSnapshot,
           }), { pdfBytes: options.file.size });
           revision += 1;
+          savedImages = imageSnapshot;
           saved = snapshot;
           savedTexts = textSnapshot;
           savedPages = pageSnapshot;
@@ -108,8 +115,9 @@ export function createLocalAutosave(options: {
     getState,
     hasPendingChanges,
     flush,
-    update(strokesByPage: Strokes, textsByPage = latestTexts, pages?: NotePage[], headingsByPage = latestHeadings) {
+    update(strokesByPage: Strokes, textsByPage = latestTexts, pages?: NotePage[], headingsByPage = latestHeadings, images?: NoteImages) {
       if (disposed) return;
+      if (arguments.length >= 5) latestImages = images;
       latest = strokesByPage;
       latestTexts = textsByPage;
       latestHeadings = headingsByPage;

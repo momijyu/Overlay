@@ -1,3 +1,4 @@
+import { saveDriveImages } from "./driveImages";
 import type { DriveBinding } from "./driveOutbox";
 import { DriveHttpError } from "./driveHttpError";
 import type { DriveNoteAccess } from "./googleDriveNotes";
@@ -36,7 +37,7 @@ export function driveManifestContent(manifest: DriveNoteManifest) {
   // 項目順も固定し、検証後に同じハッシュを再計算できるようにする。
   return { kind: "overlay-drive-note", noteKey: manifest.noteKey, title: manifest.title, fileName: manifest.fileName,
     pdfId: manifest.pdfId, pdfBytes: manifest.pdfBytes, strokesByPage: manifest.strokesByPage, textsByPage: manifest.textsByPage,
-    ...(manifest.pages ? { pages: manifest.pages } : {}), ...(manifest.headingsByPage ? { headingsByPage: manifest.headingsByPage } : {}) };
+    ...(manifest.images ? { images: manifest.images } : {}), ...(manifest.pages ? { pages: manifest.pages } : {}), ...(manifest.headingsByPage ? { headingsByPage: manifest.headingsByPage } : {}) };
 }
 
 export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveBinding & { pdfHash: string }, backup: NoteBackup) {
@@ -71,7 +72,8 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
   if (original.id !== pdf || Number(original.size) !== source.pdf.size || typeof original.sha256Checksum !== "string" || original.sha256Checksum.toLowerCase() !== binding.pdfHash) {
     throw new Error("Driveの元PDFが変更されています。自動保存を停止しました。端末の内容は残っています。");
   }
-  const draft: DriveNoteManifest = { schemaVersion: 4, kind: "overlay-drive-note", noteKey: binding.key,
+  const images = await saveDriveImages(access, binding.rootId, binding.key, container, source.images);
+  const draft: DriveNoteManifest = { schemaVersion: images ? 5 : 4, ...(images ? { images } : {}), kind: "overlay-drive-note", noteKey: binding.key,
     title: source.title, fileName: source.fileName, pdfId: pdf, pdfBytes: source.pdf.size,
     strokesByPage: source.strokesByPage, textsByPage: source.textsByPage,
     ...(source.pages ? { pages: source.pages } : {}), ...(source.headingsByPage ? { headingsByPage: source.headingsByPage } : {}) };

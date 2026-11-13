@@ -6,6 +6,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
 import type { NotePage, PenStroke, EditorTool, TextNote } from "../types";
+import { ImageLayer } from "./ImageLayer";
+import type { NoteImages } from "../types";
 import { PenLayer } from "./PenLayer";
 import type { ShapeKind } from "../shapeStrokes";
 import { TextLayer } from "./TextLayer";
@@ -25,6 +27,8 @@ type PdfPageProps = {
   penColor: string;
   tool: EditorTool;
   shapeKind?: ShapeKind;
+  images?: NoteImages;
+  onImagesChange?: (images: NoteImages) => void;
   texts?: TextNote[];
   stickyFocus?: StickyFocusRequest;
   textControlsContainer?: HTMLDivElement | null;
@@ -50,6 +54,7 @@ export function PdfPage({
   penColor,
   tool,
   shapeKind = "rectangle",
+  images, onImagesChange,
   texts = [],
   stickyFocus,
   textControlsContainer = null,
@@ -289,6 +294,10 @@ export function PdfPage({
           aria-label={`PDFの${pageNumber}ページ目`}
           role="img"
         />
+        {renderedPage && displayScale > 0 && !error && onImagesChange && <ImageLayer
+          scope={document} key={notePage?.id ?? pageNumber} images={images} pageId={notePage?.id ?? pageNumber}
+          width={renderedPage.width} height={renderedPage.height} scale={displayScale} active={tool === "image" && controlsActive}
+          disabled={disabled} interaction={interaction} controls={textControlsContainer} onChange={onImagesChange} />}
         {renderedPage && displayScale > 0 &&
           !error && tool !== "lasso" && (
             <PenLayer

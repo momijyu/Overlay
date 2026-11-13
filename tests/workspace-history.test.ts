@@ -524,7 +524,7 @@ function assertStableToolRows() {
 
 test("道具切替で編集操作の並びを変えず、テキスト・付箋も同じ高さの設定欄を使う", () => {
   const { calls } = setup();
-  for (const label of ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす", "投げ縄で選択", "図形", "塗りつぶし"]) {
+  for (const label of ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす", "投げ縄で選択", "図形", "画像", "塗りつぶし"]) {
     (button(label)!.props as { onClick: () => void }).onClick();
     assertStableToolRows();
     if (label === "テキストボックス" || label === "付箋") {
@@ -569,8 +569,8 @@ test("横向き用の配置先を持ち、道具・履歴・ページ・設定�
   const tools = find(render(), (element) => (element.props as { "aria-label"?: string })["aria-label"] === "編集ツール")!;
   assert.match((tools.props as React.ComponentProps<"div">).className!, /editor-tool-buttons/);
   const buttons = React.Children.toArray((tools.props as React.ComponentProps<"div">).children) as React.ReactElement<React.ComponentProps<"button">>[];
-  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす", "投げ縄で選択", "図形", "塗りつぶし"]);
-  assert.equal(buttons.length, 9);
+  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす", "投げ縄で選択", "図形", "画像", "塗りつぶし"]);
+  assert.equal(buttons.length, 10);
   const header = find(render(), (element) => element.type === AppHeader)!;
   const heading = find(header, (element) => String((element.props as { className?: string }).className).includes("editor-mobile-heading"))!;
   assert.ok(find(heading, (element) => (element.props as { "data-editor-mobile-status"?: boolean })["data-editor-mobile-status"] !== undefined));

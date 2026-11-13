@@ -5,10 +5,10 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { EditorIcon, type EditorIconName } from "@/features/pdf-editor/components/EditorIcon";
 
-test("道具・履歴・ページ・スマホ操作の15種類を同じ線幅のSVGで描き、絵文字や画像を使わない", () => {
-  const names: EditorIconName[] = ["pen", "marker", "eraser", "text", "sticky", "hand", "undo", "redo", "previous-page", "next-page", "settings", "more", "lasso", "shape", "fill"];
+test("道具・履歴・ページ・スマホ操作の16種類を同じ線幅のSVGで描き、絵文字や画像を使わない", () => {
+  const names: EditorIconName[] = ["pen", "marker", "eraser", "text", "sticky", "hand", "undo", "redo", "previous-page", "next-page", "settings", "more", "lasso", "shape", "image", "fill"];
   const drawings = names.map((name) => renderToStaticMarkup(EditorIcon({ name })));
-  assert.equal(new Set(drawings).size, 15);
+  assert.equal(new Set(drawings).size, 16);
   for (const html of drawings) {
     assert.match(html, /viewBox="0 0 24 24"/);
     assert.match(html, /stroke="currentColor" stroke-width="1.75"/);
@@ -19,9 +19,10 @@ test("道具・履歴・ページ・スマホ操作の15種類を同じ線幅の
   }
 });
 
-test("Lucide 1.59.0の15種類の図形を維持し、表示サイズと線幅は従来のままにする", () => {
+test("既存Lucideアイコンと自作画像アイコンの図形を維持し、表示サイズと線幅は従来のままにする", () => {
   // 固定タグの公式SVGから取得したpath。取得元の対応はdocs/icon-sources.mdへ記録。
   const paths: Record<EditorIconName, string[]> = {
+    image: ["m21 15-5-5L5 21"],
     fill: ["M11 7 6 2", "M18.992 12H2.041", "M21.145 18.38A3.34 3.34 0 0 1 20 16.5a3.3 3.3 0 0 1-1.145 1.88c-.575.46-.855 1.02-.855 1.595A2 2 0 0 0 20 22a2 2 0 0 0 2-2.025c0-.58-.285-1.13-.855-1.595", "m8.5 4.5 2.148-2.148a1.205 1.205 0 0 1 1.704 0l7.296 7.296a1.205 1.205 0 0 1 0 1.704l-7.592 7.592a3.615 3.615 0 0 1-5.112 0l-3.888-3.888a3.615 3.615 0 0 1 0-5.112L5.67 7.33"],
     shape: ["M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"],
     lasso: ["M7 22a5 5 0 0 1-2-4", "M7 16.93c.96.43 1.96.74 2.99.91", "M3.34 14A6.8 6.8 0 0 1 2 10c0-4.42 4.48-8 10-8s10 3.58 10 8a7.19 7.19 0 0 1-.33 2", "M5 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4z", "M14.33 22h-.09a.35.35 0 0 1-.24-.32v-10a.34.34 0 0 1 .33-.34c.08 0 .15.03.21.08l7.34 6a.33.33 0 0 1-.21.59h-4.49l-2.57 3.85a.35.35 0 0 1-.28.14z"],

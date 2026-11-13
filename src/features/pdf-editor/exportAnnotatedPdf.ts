@@ -1,3 +1,6 @@
+import { readNoteImages, verifyImageAssets } from "./imageData";
+import { drawPageImages } from "./exportImages";
+import type { NoteImages } from "./types";
 import { checkPageBindings, resolveNotePages } from "./notePages";
 import { blankPageTemplateLines, TEMPLATE_LINE_COLOR, TEMPLATE_LINE_WIDTH } from "./blankPageTemplate";
 import { validatePdfPageSelection } from "./pdfPageSelection";
@@ -17,15 +20,19 @@ export async function exportAnnotatedPdf(
   textsByPage?: TextNotesByPage,
   pages?: NotePage[],
   selectedPageNumbers?: readonly number[],
+  images?: NoteImages,
 ): Promise<Uint8Array> {
   const { PDFDocument, LineCapStyle, LineJoinStyle, BlendMode, pushGraphicsState, popGraphicsState, setLineJoin, rgb, degrees } = await import("pdf-lib");
   const toColor = (color: string) => rgb(parseInt(color.slice(1, 3), 16) / 255,
     parseInt(color.slice(3, 5), 16) / 255, parseInt(color.slice(5, 7), 16) / 255);
+  const checkedImages = readNoteImages(images);
+  await verifyImageAssets(checkedImages);
+  const embedded = new Map<string, import("pdf-lib").PDFImage>();
   const checkedStrokes = readStrokes(strokesByPage);
   const checkedTexts = readTextNotes(textsByPage);
   const source = await PDFDocument.load(await file.arrayBuffer());
   if (source.getPageCount() !== displayedDocument.numPages) throw new Error("元PDFのページ数が一致しません。");
-  checkPageBindings(pages, [checkedStrokes, checkedTexts], displayedDocument.numPages);
+  checkPageBindings(pages, [checkedStrokes, checkedTexts, checkedImages?.byPage ?? {}], displayedDocument.numPages);
   const allPages = resolveNotePages(pages, displayedDocument.numPages);
   const layout = selectedPageNumbers === undefined ? allPages
     : validatePdfPageSelection(selectedPageNumbers, allPages.length).map((number) => allPages[number - 1]);
@@ -60,12 +67,13 @@ export async function exportAnnotatedPdf(
     }
     const strokes = checkedStrokes[entry.id] ?? [];
     const texts = checkedTexts[entry.id] ?? [];
-    if (strokes.length === 0 && texts.length === 0) continue;
+    if (strokes.length === 0 && texts.length === 0 && !checkedImages?.byPage[entry.id]?.length) continue;
 
     const viewport = entry.kind === "blank"
       ? { width: entry.width, height: entry.height, convertToPdfPoint: (x: number, y: number) => [x, entry.height - y] }
       : (await displayedDocument.getPage(entry.pageNumber)).getViewport({ scale: 1 });
     const outputPage = pdf.getPage(index);
+    await drawPageImages(pdf, outputPage, viewport, entry.id, checkedImages, embedded);
 
     function toPdfPoint(point: PenPoint) {
       // PDF.js の表示座標から元PDFの座標へ戻し、回転したページにも対応する。

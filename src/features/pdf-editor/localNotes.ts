@@ -1,4 +1,6 @@
 import { dirtyDriveBinding } from "./driveOutbox";
+import { pruneImages, readNoteImages } from "./imageData";
+import type { NoteImages } from "./types";
 import { readPageHeadings } from "./pageHeadings";
 import { readNotePages, checkPageBindings } from "./notePages";
 import { readRequest, withLocalTransaction } from "./localDatabase";
@@ -13,7 +15,7 @@ import { toLocalNoteSummary } from "./localNoteSummary";
 import { checkDriveFolderDeletion, enrollDriveNote, libraryScope, LIBRARY_STORES, recordDriveLibrary } from "./driveLibraryLocal";
 import type { LibraryEntity, LibraryEventRow } from "./driveLibraryData";
 
-type LocalNote = SavedNoteSummary & { strokesByPage: Record<number, PenStroke[]>; textsByPage?: TextNotesByPage; pages?: NotePage[]; headingsByPage?: HeadingsByPage; revision?: number };
+type LocalNote = SavedNoteSummary & { strokesByPage: Record<number, PenStroke[]>; textsByPage?: TextNotesByPage; pages?: NotePage[]; headingsByPage?: HeadingsByPage; images?: NoteImages; revision?: number };
 type LocalPdf = { id: string; blob: Blob };
 
 // 一覧と本文が食い違わないよう、必ず同じトランザクションで更新する。
@@ -91,9 +93,9 @@ async function captureBackup(items: NoteDragItem[], selection: boolean): Promise
       return { id: note.id, title: note.title, fileName: note.fileName,
         folderId: note.folderId && included.has(note.folderId) ? note.folderId : null,
         strokesByPage: note.strokesByPage, textsByPage: note.textsByPage ?? {}, ...(note.pages ? { pages: note.pages } : {}),
-        ...(Object.keys(note.headingsByPage ?? {}).length ? { headingsByPage: note.headingsByPage } : {}), pdf: pdf.blob };
+        ...(Object.keys(note.headingsByPage ?? {}).length ? { headingsByPage: note.headingsByPage } : {}), images: readNoteImages(note.images), pdf: pdf.blob };
     }));
-    return { schemaVersion: notes.some((note) => note.headingsByPage) ? 4 : notes.some((note) => note.pages) ? 3 : selection ? 2 : 1, kind: selection ? "selection" : item.kind,
+    return { schemaVersion: notes.some((note) => note.images) ? 5 : notes.some((note) => note.headingsByPage) ? 4 : notes.some((note) => note.pages) ? 3 : selection ? 2 : 1, kind: selection ? "selection" : item.kind,
       name: selection ? "Overlay-選択項目" : "title" in selected ? selected.title : selected.name, folders, notes };
   });
   return readNoteBackup(snapshot);
@@ -131,7 +133,7 @@ export async function restoreNoteBackup(input: NoteBackup, options: { skipDuplic
       await readRequest(transaction.objectStore("pdfs").add({ id: note.id, blob: note.pdf }));
       await writeLocalNote(transaction, { id: note.id, title: note.title, fileName: note.fileName,
         folderId: note.folderId === null ? null : folderIds.get(note.folderId)!, updatedAt, revision: 1,
-        strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, ...(note.headingsByPage ? { headingsByPage: note.headingsByPage } : {}), ...(note.pages ? { pages: note.pages } : {}) }, "add");
+        images: note.images, strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, ...(note.headingsByPage ? { headingsByPage: note.headingsByPage } : {}), ...(note.pages ? { pages: note.pages } : {}) }, "add");
       await enrollDriveNote(transaction, note.id);
     }
     return false;
@@ -229,13 +231,16 @@ export async function saveLocalNote(input: {
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
   headingsByPage?: HeadingsByPage;
+  images?: NoteImages;
 }): Promise<string> {
   // 入力を複製・検証してから保存し、保存中に編集されても内容が混ざらないようにする。
   const strokesByPage = readStrokes(input.strokesByPage);
   const textsByPage = input.textsByPage === undefined ? undefined : readTextNotes(input.textsByPage);
   const pages = readNotePages(input.pages);
   const headingsByPage = input.headingsByPage === undefined ? undefined : readPageHeadings(input.headingsByPage);
-  checkPageBindings(pages, [strokesByPage, textsByPage ?? {}, headingsByPage ?? {}]);
+  const checkedImages = readNoteImages(input.images);
+  const images = checkedImages && pruneImages(checkedImages);
+  checkPageBindings(pages, [strokesByPage, textsByPage ?? {}, headingsByPage ?? {}, images?.byPage ?? {}]);
   const id = input.noteId ?? crypto.randomUUID();
   return withLocalTransaction([...LIBRARY_STORES], "readwrite", async (transaction) => {
     const notes = transaction.objectStore("notes");
@@ -253,8 +258,8 @@ export async function saveLocalNote(input: {
       if (input.expectedRevision !== undefined && input.expectedRevision !== revision) {
         throw new Error("別のタブでこのノートが更新されています。上書きしていません。必要な内容をPDFへ書き出してからノートを開き直してください。");
       }
-      checkPageBindings("pages" in input ? pages : existing.pages, [strokesByPage, textsByPage ?? existing.textsByPage ?? {}, headingsByPage ?? readPageHeadings(existing.headingsByPage)]);
-      await writeLocalNote(transaction, { ...existing, strokesByPage, ...("pages" in input ? { pages } : {}),
+      checkPageBindings("pages" in input ? pages : existing.pages, [strokesByPage, textsByPage ?? existing.textsByPage ?? {}, headingsByPage ?? readPageHeadings(existing.headingsByPage), ("images" in input ? images : existing.images)?.byPage ?? {}]);
+      await writeLocalNote(transaction, { ...existing, ...("images" in input ? { images } : {}), strokesByPage, ...("pages" in input ? { pages } : {}),
         ...(textsByPage === undefined ? {} : { textsByPage }),
         ...(headingsByPage === undefined ? {} : { headingsByPage }), updatedAt, revision: revision + 1 });
     } else {
@@ -262,7 +267,7 @@ export async function saveLocalNote(input: {
       const title = (input.file.name.replace(/\.pdf$/i, "") || input.file.name).slice(0, 120);
       const folderId = input.initialFolderId ?? null;
       if (folderId !== null && !await readRequest(transaction.objectStore("folders").getKey(folderId))) throw new Error("追加先のフォルダが削除されています。保存先を確認してください。");
-      const note: LocalNote = { id, title, fileName: input.file.name, folderId, updatedAt, strokesByPage,
+      const note: LocalNote = { id, title, fileName: input.file.name, folderId, updatedAt, strokesByPage, ...(images ? { images } : {}),
         textsByPage: textsByPage ?? {}, ...(pages ? { pages } : {}), ...(headingsByPage ? { headingsByPage } : {}), revision: 1 };
       // 元PDFと線は別ストアだが、片方だけ保存されないよう同じトランザクションにする。
       await readRequest(pdfs.add({ id, blob: input.file.slice(0, input.file.size, "application/pdf") } satisfies LocalPdf));
@@ -286,8 +291,8 @@ export async function loadLocalNote(noteId: string, options: { sourceId?: string
     }
     const pages = readNotePages(note.pages);
     const headingsByPage = readPageHeadings(note.headingsByPage);
-    checkPageBindings(pages, [note.strokesByPage, note.textsByPage ?? {}, headingsByPage]);
-    return { ...(pages ? { pages } : {}), ...(Object.keys(headingsByPage).length ? { headingsByPage } : {}), id: note.id, file: new File([pdf.blob], note.fileName, { type: "application/pdf" }),
+    checkPageBindings(pages, [note.strokesByPage, note.textsByPage ?? {}, headingsByPage, readNoteImages(note.images)?.byPage ?? {}]);
+    return { ...(note.images ? { images: readNoteImages(note.images) } : {}), ...(pages ? { pages } : {}), ...(Object.keys(headingsByPage).length ? { headingsByPage } : {}), id: note.id, file: new File([pdf.blob], note.fileName, { type: "application/pdf" }),
       strokesByPage: readStrokes(note.strokesByPage), textsByPage: readTextNotes(note.textsByPage), revision: readRevision(note) };
   });
 }
