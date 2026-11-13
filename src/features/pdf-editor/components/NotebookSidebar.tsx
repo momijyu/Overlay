@@ -546,7 +546,7 @@ export function NotebookSidebar(props: SidebarProps) {
                   if (menuRef.current) menuRef.current.open = false;
                   endDrag();
                   props.onBackup?.(selected);
-                }}>{selectedFolder ? "フォルダのバックアップ" : "ノートのバックアップ"}</button></li>}
+                }}>{selectedFolder ? "フォルダの編集用バックアップ" : "編集用バックアップ"}</button></li>}
               {selectedNote && <li><button type="button" disabled={!canOrganize}
                 onClick={() => beginAction({ kind: "edit-note", note: selectedNote })}>名前・フォルダ</button></li>}
               {props.onSaveToDrive && selectedNote && <li><button type="button" disabled={unavailable}

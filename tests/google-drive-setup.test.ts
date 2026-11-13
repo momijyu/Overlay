@@ -302,7 +302,7 @@ test("以前のバックアップ復元を明示した時だけ復元画面を�
   const cleanup = await mount(); click("Googleで接続"); await settle();
   const restore = { onImportNote: () => {} };
   const tree = render(() => {}, { restore });
-  assert.match(tree.html, /Driveバックアップを復元/);
+  assert.match(tree.html, /Driveの手動バックアップを復元/);
   const child = tree.entries.find((entry) => entry.type === GoogleDriveBackupRestore)!;
   assert.equal(child.props.onImportNote, restore.onImportNote);
   assert.ok(!tree.entries.some((entry) => entry.type === GoogleDriveNotes));

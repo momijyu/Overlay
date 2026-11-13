@@ -218,11 +218,11 @@ test("複数チェックのDrive保存は子ノートを重複なく渡し、空
 test("バックアップ操作は選択した単体ノート・フォルダを渡し、未選択や処理中に出力しない", () => {
   const calls: unknown[] = [];
   const overrides = { onBackup: (item: unknown) => { calls.push(item); } };
-  clickText(render(overrides), "ノートのバックアップ");
+  clickText(render(overrides), "編集用バックアップ");
   const tree = find(render(overrides), (element) => element.type === NotebookTree)!;
   (tree.props.onSelect as (item: unknown) => void)({ kind: "folder", id: "subject" });
-  clickText(render(overrides), "フォルダのバックアップ");
-  const busy = find(render({ ...overrides, disabled: true }), (entry) => entry.type === "button" && entry.props.children === "フォルダのバックアップ")!;
+  clickText(render(overrides), "フォルダの編集用バックアップ");
+  const busy = find(render({ ...overrides, disabled: true }), (entry) => entry.type === "button" && entry.props.children === "フォルダの編集用バックアップ")!;
   assert.equal(busy.props.disabled, true);
   (busy.props.onClick as () => void)();
   const root = find(render(overrides), (entry) => entry.props["aria-label"] === "一番上")!;

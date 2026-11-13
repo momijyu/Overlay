@@ -54,7 +54,7 @@ test("Drive復元の確認は同一PDF・編集のスキップと異なる内容
 
 test("編集画面はサーバー描画でIndexedDBを開かず、定期的なPDF保管だけを案内する", () => {
   const html = renderToStaticMarkup(createElement(PdfWorkspace));
-  assert.match(html, /重要なノートは定期的に『PDFをダウンロード』して保管してください/);
+  assert.match(html, /重要なノートは定期的に『PDFを書き出す』で保管してください/);
   const notice = html.match(/<p[^>]*data-pdf-backup-notice[^>]*>[\s\S]*?<\/p>/)![0];
   assert.match(notice, /class="text-sm text-red-400"/);
   assert.match(notice, />※ 重要なノートは/);
@@ -72,7 +72,7 @@ test("初期画面のヘッダーは1つで、Overlayの左に一覧ボタンを
   assert.ok(header.indexOf('aria-label="ノート一覧を開く"') < header.indexOf(">Overlay<"));
   assert.match(header, /aria-expanded="false"/);
   assert.match(html, /id="pdf-upload"/);
-  assert.match(html, /PDFを追加/);
+  assert.match(html, /PDFを開く/);
   assert.equal((html.match(/重要なノートは定期的に/g) ?? []).length, 1);
 });
 

@@ -118,6 +118,7 @@ export function PdfWorkspace() {
   const [openTiming, setOpenTiming] = useState<SpeedSpan | null>(null);
   const [stickyFocus, setStickyFocus] = useState<(StickyFocusRequest & { pageId: number }) | null>(null);
   const stickyRequestRef = useRef(0);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
   const [pendingPageAction, setPendingPageAction] = useState<{
     kind: PageEditKind; pageId: number; pageNumber: number; documentVersion: number; version: number;
   } | null>(null);
@@ -611,7 +612,7 @@ export function PdfWorkspace() {
 
   const statusText = isBackupWorking ? "処理中…" : isExporting ? "出力中…" : saveError ? "保存失敗" : isSaving ? "保存中…" : "";
   const backupNotice = <p className="text-sm text-red-400" data-pdf-backup-notice>
-    ※ 重要なノートは定期的に『PDFをダウンロード』して保管してください。
+    ※ 重要なノートは定期的に『PDFを書き出す』で保管してください。
   </p>;
 
   return (
@@ -698,12 +699,13 @@ export function PdfWorkspace() {
         <section className="workspace-card card min-w-0 w-full border border-base-300 bg-base-100 shadow-sm">
           <div className="workspace-body card-body gap-5">
             <div hidden={!!document && !!file} data-pdf-upload>
-              <label className="label" htmlFor="pdf-upload">
-                PDFファイル
-              </label>
+              <button type="button" className="btn btn-primary min-h-11" disabled={isBusy}
+                onClick={() => { if (!isBusy) pdfInputRef.current?.click(); }}>PDFを開く</button>
               <input
+                ref={pdfInputRef}
                 id="pdf-upload"
-                className="file-input w-full max-w-md"
+                hidden
+                aria-label="開くPDFファイル"
                 type="file"
                 accept="application/pdf,.pdf"
                 disabled={isBusy}

@@ -50,7 +50,7 @@ function render(visible = true) {
 }
 const settle = () => new Promise(setImmediate);
 function flushEffects() { effects.splice(0).forEach((effect) => effect()); }
-async function mount() { render(); flushEffects(); await settle(); return () => cleanups.forEach((fn) => fn?.()); }
+async function mount() { render(); openSettings(); render(); flushEffects(); await settle(); return () => cleanups.forEach((fn) => fn?.()); }
 function change(type: string, value: string) {
   const input = render().entries.find((entry) => entry.type === "input" && entry.props.type === type)!;
   (input.props.onChange as (event: unknown) => void)({ target: { value } });
@@ -68,7 +68,8 @@ test("保存した上限・概算使用量を表示し、スライダーと数�
     assert.ok(render().entries.filter((entry) => entry.type === "input").every((entry) => Number(entry.props.value) === 300));
     assert.deepEqual(saved, []); await submit(); assert.deepEqual(saved, [300]);
     assert.match(render().html, /設定しました/); assert.match(render().html, /上限300MB/);
-    assert.match(render().html, /未送信・使用中のデータは上限を超えても保持/);
+    assert.match(render().html, /Driveデータの一時保存容量/);
+    assert.match(render().html, /未送信・使用中のデータと、ブラウザだけのノートは自動削除しません/);
   } finally { close(); }
 });
 
@@ -117,6 +118,25 @@ test("一覧を閉じると容量走査と通知監視を止め、再表示で�
 function openSettings() {
   (render().entries.find((entry) => entry.type === "details")!.props.onToggle as (event: unknown) => void)({ currentTarget: { open: true } });
 }
+
+test("容量設定を閉じている間は、一覧が表示中でもDB走査・定期更新を開始しない", async () => {
+  readSummary = async () => ({ limitMB: 250, bytes: 3_450_000 });
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    render(); flushEffects(); await settle();
+    mock.timers.tick(30_000); await settle();
+    assert.equal(reads, 0);
+    assert.equal(listeners.size, 0);
+    openSettings(); render(); flushEffects(); await settle();
+    assert.equal(reads, 1);
+    assert.equal(listeners.size, 1);
+    (render().entries.find((entry) => entry.type === "details")!.props.onToggle as (event: unknown) => void)({ currentTarget: { open: false } });
+    render(); flushEffects();
+    mock.timers.tick(30_000); await settle();
+    assert.equal(reads, 1);
+    assert.equal(listeners.size, 0);
+  } finally { cleanups.forEach((cleanup) => cleanup?.()); mock.timers.reset(); }
+});
 
 test("容量取得の失敗は再取得で回復し、古いエラーと取得中表示を残さない", async () => {
   readSummary = async () => { throw new Error("容量の読込失敗"); };

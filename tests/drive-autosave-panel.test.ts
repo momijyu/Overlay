@@ -77,7 +77,8 @@ test("送信判定を毎秒継続し、UIのDB確認は変更通知と5秒間隔
 test("接続設定と状態を同じ欄へまとめ、失敗表示を折りたたみの外に残す", () => {
   const account = { id: "account" }, root = { id: "root" };
   const cases = [
-    { connection: null, scope: null, expected: "未接続" },
+    { connection: null, scope: null, expected: "未接続・ブラウザに保存" },
+    { connection: null, scope: null, rows: [{ enabled: true }], expected: "再接続が必要です。" },
     { connection: null, scope: { accountId: "account", rootId: "root" }, expected: "再接続が必要です。" },
     { connection: { account, root: null }, scope: null, expected: "保存先を設定してください。" },
     { connection: { account, root }, scope: { accountId: "account", rootId: "root" }, expected: "接続中・自動保存" },
@@ -85,20 +86,15 @@ test("接続設定と状態を同じ欄へまとめ、失敗表示を折りた�
   ];
   for (const item of cases) {
     stateCursor = 0;
-    stateOverrides = new Map<number, unknown>([[1, item.connection], [2, true], [3, "通信失敗"], [6, item.scope]]);
+    stateOverrides = new Map<number, unknown>([[0, item.rows ?? []], [1, item.connection], [2, true], [3, "通信失敗"], [6, item.scope]]);
     const node = DriveAutosavePanel({ disabled: false, drawerOpen: true, children: React.createElement("button", null, "接続設定") });
     const section = entries(node).find((entry) => entry.type === "section")!;
     const all = entries(section);
     assert.ok(all.some((entry) => entry.type === "button" && entry.props.children === "接続設定"));
     assert.equal(all.find((entry) => "data-drive-connection-status" in entry.props)!.props.children, item.expected);
-    const details = all.find((entry) => entry.type === "details")!;
-    assert.equal(entries(details).find((entry) => entry.props.role === "alert"), undefined);
+    assert.equal(all.find((entry) => entry.type === "details"), undefined, "容量設定を保存の詳細に入れ子にしない");
     assert.ok(all.some((entry) => entry.props.role === "alert" && entry.props.children === "通信失敗"));
-    assert.equal(all.find((entry) => entry.type === DriveCacheSettings)!.props.visible, false);
-    (details.props.onToggle as (event: unknown) => void)({ currentTarget: { open: true } });
-    stateCursor = 0;
-    const expanded = DriveAutosavePanel({ disabled: false, drawerOpen: true });
-    assert.equal(entries(expanded).find((entry) => entry.type === DriveCacheSettings)!.props.visible, true);
+    assert.equal(all.find((entry) => entry.type === DriveCacheSettings)!.props.visible, true);
     stateCursor = 0;
     const closedDrawer = DriveAutosavePanel({ disabled: false, drawerOpen: false });
     assert.equal(entries(closedDrawer).find((entry) => entry.type === DriveCacheSettings)!.props.visible, false);

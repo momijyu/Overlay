@@ -19,7 +19,7 @@ export function DriveCacheSettings({ visible = true }: { visible?: boolean } = {
   useEffect(() => {
     // 一覧を閉じた編集画面では、非表示の容量表示のために全キャッシュを走査しない。
     // 自動保存・未送信の監視とキャッシュ整理は別のrunnerが継続する。
-    if (!visible) return;
+    if (!visible || !open) return;
     let active = true; let reading = false; let again = false;
     async function refresh() {
       if (!active) return;
@@ -53,11 +53,11 @@ export function DriveCacheSettings({ visible = true }: { visible?: boolean } = {
     finally { setBusy(false); }
   }
   return <details className="mt-3" onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary className="cursor-pointer py-2 text-sm">キャッシュ設定</summary>
+    <summary className="cursor-pointer py-2 text-sm">Driveデータの一時保存容量</summary>
     <form className="flex min-w-0 flex-col gap-3 pt-2" onSubmit={(event) => { event.preventDefault(); void apply(); }}>
       <label className="text-xs" htmlFor="drive-cache-limit">上限（MB）</label>
       <input type="range" className="range range-sm w-full" min={MIN_DRIVE_CACHE_MB} max={MAX_DRIVE_CACHE_MB} step="1"
-        aria-label="キャッシュ上限" value={valid ? value : limit} disabled={!ready || busy}
+        aria-label="Driveデータの一時保存容量の上限" value={valid ? value : limit} disabled={!ready || busy}
         onChange={(event) => { setDraft(event.target.value); setMessage(""); }} />
       <div className="flex min-w-0 items-center gap-2">
         <input id="drive-cache-limit" type="number" className="input input-sm min-w-0 w-28" min={MIN_DRIVE_CACHE_MB} max={MAX_DRIVE_CACHE_MB} step="1"
@@ -66,7 +66,7 @@ export function DriveCacheSettings({ visible = true }: { visible?: boolean } = {
         <button type="submit" className="btn btn-sm" disabled={!ready || busy || !valid || value === limit}>適用</button>
       </div>
       <p className="text-xs">{ready ? `使用量：約${(bytes / 1_000_000).toLocaleString("ja-JP", { maximumFractionDigits: 1 })}MB ／ 上限${limit}MB` : readError ? "容量を取得できませんでした。" : "容量を確認中…"}</p>
-      <p className="text-xs text-base-content/70">このブラウザに適用。未送信・使用中のデータは上限を超えても保持します。</p>
+      <p className="text-xs text-base-content/70">Driveから取得したデータの一時保存に適用します。未送信・使用中のデータと、ブラウザだけのノートは自動削除しません。</p>
       {message && <p role="status" className="text-xs">{message}</p>}
       {error && <p role="alert" className="text-xs text-error">{error}</p>}
       {readError && <div className="flex min-w-0 items-center gap-2">

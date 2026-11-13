@@ -4,8 +4,14 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 // dialogの呼び出しとイベント接続を検証する。実DOMのフォーカスやアニメーションは実機確認する。
-let effects: (() => void)[] = [];
+let effects: (() => void | (() => void))[] = [];
 let restoreOpen = false;
+let refCursor = 0, focused = 0;
+const inside = {};
+const backupMenu = { open: false, contains: (target: unknown) => target === inside,
+  querySelector: () => ({ focus() { focused++; } }) };
+const events = new EventTarget();
+Object.defineProperty(globalThis, "document", { configurable: true, value: events });
 const dialog = {
   open: false,
   showCount: 0,
@@ -18,13 +24,13 @@ const dialog = {
 mock.module("react", { exports: {
   ...React,
   useState: () => [restoreOpen, (value: boolean) => { restoreOpen = value; }],
-  useRef: () => ({ current: dialog }),
-  useEffect: (effect: () => void) => { effects.push(effect); },
+  useRef: () => ({ current: refCursor++ % 4 === 3 ? backupMenu : dialog }),
+  useEffect: (effect: () => void | (() => void)) => { effects.push(effect); },
 } });
 const { NotebookDrawer } = await import("@/features/pdf-editor/components/NotebookDrawer");
 const { GoogleDriveSetupDialog } = await import("@/features/pdf-editor/components/GoogleDriveSetup");
 
-beforeEach(() => { effects = []; restoreOpen = false; dialog.open = false; dialog.showCount = 0; dialog.closeCount = 0; dialog.pickerCount = 0; });
+beforeEach(() => { effects = []; refCursor = focused = 0; backupMenu.open = false; restoreOpen = false; dialog.open = false; dialog.showCount = 0; dialog.closeCount = 0; dialog.pickerCount = 0; });
 
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   return React.Children.toArray(node).flatMap((child) => React.isValidElement<Record<string, unknown>>(child)
@@ -35,7 +41,7 @@ function render(open = false, busy = false, pdfOpenDisabled = busy) {
   const calls = { close: 0, files: 0 };
   const node = NotebookDrawer({ open, busy, pdfOpenDisabled, onFileChange: () => { calls.files++; },
     onClose: () => { calls.close++; }, children: React.createElement("nav", null, "一覧") });
-  effects.splice(0).forEach((effect) => effect());
+  effects.splice(0).forEach((effect) => { effect()?.(); });
   return { calls, node, entries: elements(node) };
 }
 
@@ -71,9 +77,9 @@ test("PDF追加・ノート一覧・Drive設定・バックアップ読み込み
     storageControls: React.createElement("section", null, "Drive設定の目印"),
   });
   const html = renderToStaticMarkup(node);
-  assert.ok(html.indexOf("PDFを追加") < html.indexOf("ノート一覧の目印"));
+  assert.ok(html.indexOf("PDFを開く") < html.indexOf("ノート一覧の目印"));
   assert.ok(html.indexOf("ノート一覧の目印") < html.indexOf("Drive設定の目印"));
-  assert.ok(html.indexOf("Drive設定の目印") < html.indexOf("バックアップを読み込む"));
+  assert.ok(html.indexOf("Drive設定の目印") < html.indexOf("編集用バックアップを読み込む"));
 });
 
 test("長い一覧だけをスクロールし、閉じるボタンを固定領域へ残す。読み込み候補は本文内に展開する", () => {
@@ -101,10 +107,10 @@ test("閉じる、背景ボタンを閉じる処理へ接続する", () => {
   assert.equal(backdrop.props.tabIndex, -1);
 });
 
-test("メニュー内のPDFを追加ボタンで選択欄を呼び出し、処理中は開かない", () => {
+test("メニュー内のPDFを開くボタンで選択欄を呼び出し、処理中は開かない", () => {
   for (const disabled of [false, true]) {
     const { entries, calls } = render(true, false, disabled);
-    const button = entries.find((entry) => entry.type === "button" && entry.props.children === "PDFを追加")!;
+    const button = entries.find((entry) => entry.type === "button" && entry.props.children === "PDFを開く")!;
     const input = entries.find((entry) => entry.type === "input")!;
     assert.equal(button.props.disabled, disabled);
     assert.equal(input.props.disabled, disabled);
@@ -191,4 +197,40 @@ test("ノート読み込み中はスクロール領域の外にスピナーと�
   const scroll = all.find((entry) => "data-notebook-scroll" in entry.props)!;
   assert.equal(elements(scroll).includes(status), false);
   assert.equal(all.find((entry) => entry.props["aria-label"] === "ノート一覧を閉じる")!.props.disabled, false);
+});
+
+test("読み込みメニューは外側操作・Escapeで閉じ、Escapeでは一覧を閉じず入口へ戻す", () => {
+  let closed = 0, picked = 0;
+  const tree = NotebookDrawer({ open: true, busy: false, pdfOpenDisabled: false,
+    onFileChange() {}, onBackupFileChange() { picked++; }, onClose() { closed++; }, children: null });
+  const cleanups = effects.splice(0).map((effect) => effect());
+  try {
+    for (const type of ["pointerdown", "focusin"]) {
+      backupMenu.open = true;
+      const internal = new Event(type); Object.defineProperty(internal, "target", { value: inside });
+      events.dispatchEvent(internal); assert.equal(backupMenu.open, true);
+      events.dispatchEvent(new Event(type)); assert.equal(backupMenu.open, false);
+    }
+    backupMenu.open = true;
+    const menu = elements(tree).find((entry) => entry.type === "details")!;
+    let prevented = 0, stopped = 0;
+    (menu.props.onKeyDown as (event: unknown) => void)({ key: "Escape",
+      preventDefault() { prevented++; }, stopPropagation() { stopped++; } });
+    assert.equal(backupMenu.open, false); assert.equal(focused, 1);
+    assert.equal(prevented, 1); assert.equal(stopped, 1);
+    assert.equal(closed, 0); assert.equal(picked, 0);
+    cleanups.forEach((cleanup) => cleanup?.());
+    backupMenu.open = true;
+    events.dispatchEvent(new Event("pointerdown")); assert.equal(backupMenu.open, true);
+  } finally { cleanups.forEach((cleanup) => cleanup?.()); }
+});
+
+test("一覧を閉じた時と読み込み不可になった時は読み込みメニューも閉じる", () => {
+  for (const [open, pdfOpenDisabled] of [[false, false], [true, true]]) {
+    backupMenu.open = true;
+    NotebookDrawer({ open, pdfOpenDisabled, busy: false, onFileChange() {}, onClose() {}, children: null });
+    const cleanups = effects.splice(0).map((effect) => effect());
+    assert.equal(backupMenu.open, false);
+    cleanups.forEach((cleanup) => cleanup?.());
+  }
 });

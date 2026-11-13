@@ -36,7 +36,6 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange, chi
   const [treePending, setTreePending] = useState(false);
   const [conflict, setConflict] = useState<LibraryConflictItem | null>(null);
   const [entities, setEntities] = useState<LibraryEntity[]>([]);
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const runnerRef = useRef<ReturnType<typeof createBrowserDriveLibrary> | null>(null);
   useEffect(() => {
     let active = true;
@@ -135,19 +134,20 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange, chi
       </div>
       <p className="mt-2 text-xs text-base-content/70" data-drive-connection-status>
         {connected?.root ? matchingConnection ? "接続中・自動保存" : "接続先を確認してください。"
-          : connected ? "保存先を設定してください。" : scope ? "再接続が必要です。" : "未接続"}
+          : connected ? "保存先を設定してください。" : scope || rows.some((row) => row.enabled) ? "再接続が必要です。" : "未接続・ブラウザに保存"}
       </p>
-      <p className="mt-2 text-xs">{scope ? "全ノート・フォルダをDriveへ自動保存します。" : "Drive接続後、全ノート・フォルダを自動保存します。"}</p>
+      <p className="mt-2 text-xs">{!connected
+        ? scope || rows.some((row) => row.enabled)
+          ? "編集はこのブラウザに保存します。Driveへ送るには接続設定から再接続してください。"
+          : "接続すると全ノート・フォルダをDriveへ自動保存します。"
+        : matchingConnection ? "全ノート・フォルダをDriveへ自動保存します。"
+          : "接続設定で保存先を確認してください。"}</p>
       {connected?.root && <button type="button" className="btn btn-sm mt-2" disabled={disabled || busy || !supported || !matchingConnection}
         onClick={() => void retryLibrary()}>Drive一覧を更新・再試行</button>}
       {!supported && <p className="mt-2 text-xs">自動保存にはHTTPSまたはlocalhostの対応ブラウザが必要です。</p>}
       {status && <p role="status" className="mt-2 text-xs">{status}</p>}
       {(error || rows.some((row) => row.enabled && row.error)) && <p role="alert" className="mt-2 text-xs text-error">{rows.find((row) => row.enabled && row.error)?.error || error}</p>}
-      <details className="mt-3" onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
-        <summary className="cursor-pointer py-2 text-sm">保存の詳細</summary>
-        <p className="mt-2 text-xs text-base-content/70">端末ごとに別の保存先を作ります。未送信の間はこのブラウザに保管します。</p>
-        <DriveCacheSettings visible={drawerOpen && detailsOpen} />
-      </details>
+      <DriveCacheSettings visible={drawerOpen} />
     </section>
     {!drawerOpen && status && typeof document !== "undefined" && createPortal(
       <div className="pointer-events-none fixed bottom-3 right-3 z-30 max-w-[calc(100vw-1.5rem)] rounded-box border border-base-300 bg-base-100 px-3 py-2 text-xs shadow-sm" role="status">{status}</div>, document.body)}

@@ -504,7 +504,8 @@ test("DB版5→6は既存PDF・編集・付箋参照を保持し、既存ノー�
 
 test("未選択でも全ノートの自動保存を案内し、個別の有効化ボタンを表示しない", () => {
   const html = renderToStaticMarkup(createElement(DriveAutosavePanel, { disabled: false, drawerOpen: true }));
-  assert.match(html, /Drive接続後、全ノート・フォルダを自動保存します/);
+  assert.match(html, /未接続・ブラウザに保存/);
+  assert.match(html, /接続すると全ノート・フォルダをDriveへ自動保存します/);
   assert.ok(!html.includes("フォルダ構造をDriveと連携"));
   assert.ok(!html.includes("このノートで有効にする"));
   assert.ok(!html.includes("Driveに保存済み"));

@@ -14,7 +14,7 @@ export function NotebookRestoreDialog({ backup, skipDuplicates = false, busy, er
   return <dialog ref={dialogRef} className="modal" aria-labelledby="backup-restore-heading"
     onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
     <form className="modal-box flex max-h-[calc(100dvh-2rem)] max-w-md flex-col overflow-hidden rounded-box" onSubmit={(event) => { event.preventDefault(); if (!busy) onRestore(); }}>
-      <h2 id="backup-restore-heading" className="shrink-0 text-lg font-semibold">バックアップを復元</h2>
+      <h2 id="backup-restore-heading" className="shrink-0 text-lg font-semibold">編集用バックアップを復元</h2>
       <div data-notebook-restore-scroll className="min-h-0 overflow-y-auto overscroll-contain [overflow-wrap:anywhere]">
         <p className="mt-4 break-words">{backup.name}</p>
         <p className="mt-2 text-sm">ノート{backup.notes.length}件・フォルダ{backup.folders.length}件</p>

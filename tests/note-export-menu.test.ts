@@ -25,9 +25,9 @@ test("PDFと再編集用の違い・定期保管案内をPCとタッチの両方
   for (const iconOnly of [false, true]) {
     const html = renderToStaticMarkup(React.createElement(NoteExportMenu, { disabled: false, iconOnly, onDownload: () => {}, onSelectPages: () => {}, onBackup: () => {} }));
     assert.match(html, /aria-label="書き出しメニュー"/);
-    assert.match(html, /PDFをダウンロード/);
+    assert.match(html, /PDFを書き出す/);
     assert.match(html, /閲覧・共有用/);
-    assert.match(html, /ページを指定してPDF出力/);
+    assert.match(html, /ページを指定してPDFを書き出す/);
     assert.match(html, /編集用バックアップ/);
     assert.match(html, /再編集できる形式（.overlay）/);
     assert.match(html, /※ 重要なノートは定期的に/);

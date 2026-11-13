@@ -19,7 +19,7 @@ export function PdfPageExportDialog({ pageNumber, pageCount, disabled, error, on
   return <dialog ref={ref} className="modal" aria-labelledby="pdf-page-export-heading"
     onCancel={(event) => { event.preventDefault(); close(); }}>
     <div className="modal-box flex max-h-[calc(100dvh-2rem)] max-w-md flex-col overflow-hidden rounded-box">
-      <h3 id="pdf-page-export-heading" className="mb-4 shrink-0 text-lg font-semibold">ページを指定してPDF出力</h3>
+      <h3 id="pdf-page-export-heading" className="mb-4 shrink-0 text-lg font-semibold">ページを指定してPDFを書き出す</h3>
       <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => {
         event.preventDefault();
         if (disabled) return;
@@ -43,7 +43,7 @@ export function PdfPageExportDialog({ pageNumber, pageCount, disabled, error, on
         </div>
         <div className="modal-action mt-4 shrink-0 flex-wrap">
           <button type="button" className="btn min-h-11" disabled={disabled} onClick={close}>キャンセル</button>
-          <button type="submit" className="btn btn-primary min-h-11" disabled={disabled}>PDFをダウンロード</button>
+          <button type="submit" className="btn btn-primary min-h-11" disabled={disabled}>PDFを書き出す</button>
         </div>
       </form>
     </div>

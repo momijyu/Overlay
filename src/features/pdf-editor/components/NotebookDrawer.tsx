@@ -32,6 +32,24 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
     if (!open && dialog.open) dialog.close();
   }, [open]);
 
+  useEffect(() => {
+    const menu = backupMenuRef.current;
+    if (!open || pdfOpenDisabled) {
+      if (menu) menu.open = false;
+    }
+    if (!open) return;
+    function outside(event: Event) {
+      const current = backupMenuRef.current;
+      if (current?.open && !current.contains(event.target as Node)) current.open = false;
+    }
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("focusin", outside);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("focusin", outside);
+    };
+  }, [open, pdfOpenDisabled]);
+
   return (
     <>
       {/* 通常レイアウトの幅を使わず、PDFの上に重ねる。フォーカス制御はdialogへ任せる。 */}
@@ -47,9 +65,9 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-base-300 px-4 py-3">
             {/* モーダル内の選択欄を使い、編集中のPDFは選択に成功するまで維持する。 */}
             <button type="button" className="btn btn-sm" disabled={pdfOpenDisabled}
-              onClick={() => { if (!pdfOpenDisabled) fileInputRef.current?.click(); }}>PDFを追加</button>
+              onClick={() => { if (!pdfOpenDisabled) fileInputRef.current?.click(); }}>PDFを開く</button>
             <input ref={fileInputRef} type="file" accept="application/pdf,.pdf" hidden
-              aria-label="追加するPDFファイル" disabled={pdfOpenDisabled} onChange={onFileChange} />
+              aria-label="開くPDFファイル" disabled={pdfOpenDisabled} onChange={onFileChange} />
             <button type="button" className="btn btn-sm btn-square btn-ghost" aria-label="ノート一覧を閉じる"
               disabled={busy} onClick={onClose}>
               <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5" fill="none"
@@ -66,9 +84,14 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
           {children}
           {storageControls}
           {onBackupFileChange && <div className="mx-4 border-t border-base-300 py-3">
-            <details ref={backupMenuRef} className="w-full">
-              <summary className="btn btn-sm" aria-disabled={pdfOpenDisabled}
-                onClick={(event) => { if (pdfOpenDisabled) event.preventDefault(); }}>バックアップを読み込む</summary>
+            <details ref={backupMenuRef} className="w-full" onKeyDown={(event) => {
+              if (event.key !== "Escape" || !backupMenuRef.current?.open) return;
+              event.preventDefault(); event.stopPropagation();
+              backupMenuRef.current.open = false;
+              backupMenuRef.current.querySelector("summary")?.focus();
+            }}>
+              <summary className="btn btn-sm h-auto min-h-11 whitespace-normal text-left" aria-disabled={pdfOpenDisabled}
+                onClick={(event) => { if (pdfOpenDisabled) event.preventDefault(); }}>編集用バックアップを読み込む</summary>
               <ul className="menu mt-2 w-full rounded-box border border-base-300 bg-base-100 p-2">
                 <li><button type="button" disabled={pdfOpenDisabled} onClick={() => {
                   if (pdfOpenDisabled) return;
