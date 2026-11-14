@@ -179,3 +179,19 @@ test("回転・リサイズでは途中編集を中断し、残った指を全�
     assert.equal(f.cancelled(), cancelled);
   }
 });
+
+test("テープ上の一本指は切替・編集へ渡し、二本指ではテープ編集を中断して拡縮する", () => {
+  const tape = { closest: () => ({ getAttribute: () => "true" }) };
+  for (const hand of [false, true]) {
+    const f = fixture(hand);
+    assert.equal(f.emit("pointerdown", 1, 100, 100, "touch", tape).stopped, false);
+    assert.equal(f.cancelled(), 0);
+    assert.equal(f.emit("pointerdown", 2, 200, 100, "touch", tape).stopped, true);
+    assert.equal(f.cancelled(), 1);
+    f.emit("pointermove", 2, 300);
+    assert.equal(f.zoom(), 2);
+    f.emit("pointerup", 2); f.emit("pointerup", 1);
+    assert.equal(f.interaction.blocked, false);
+    f.cleanup();
+  }
+});

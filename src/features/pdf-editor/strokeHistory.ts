@@ -1,5 +1,6 @@
 import { pruneImages } from "./imageData";
-import type { NoteImages } from "./types";
+import { readMaskTapes } from "./maskTapes";
+import type { MaskTape, TapesByPage, NoteImages } from "./types";
 import { changePageHeading } from "./pageHeadings";
 import { deleteNotePage } from "./notePages";
 import type { HeadingsByPage, NotePage, PenStroke, TextNote, TextNotesByPage } from "./types";
@@ -7,6 +8,7 @@ import type { HeadingsByPage, NotePage, PenStroke, TextNote, TextNotesByPage } f
 type Strokes = Record<number, PenStroke[]>;
 type StrokeEdit = {
   before: Strokes; after: Strokes;
+  beforeTapes?: TapesByPage; afterTapes?: TapesByPage;
   beforeImages?: NoteImages; afterImages?: NoteImages;
   beforeTexts: TextNotesByPage; afterTexts: TextNotesByPage;
   beforeHeadings: HeadingsByPage; afterHeadings: HeadingsByPage;
@@ -16,6 +18,7 @@ type StrokeEdit = {
 };
 export type StrokeHistory = {
   strokesByPage: Strokes;
+  tapesByPage?: TapesByPage;
   images?: NoteImages;
   textsByPage: TextNotesByPage;
   headingsByPage: HeadingsByPage;
@@ -28,8 +31,8 @@ export type StrokeHistory = {
 
 export const STROKE_HISTORY_LIMIT = 100;
 
-export function createStrokeHistory(strokesByPage: Strokes, textsByPage: TextNotesByPage = {}, pages?: NotePage[], headingsByPage: HeadingsByPage = {}, images?: NoteImages): StrokeHistory {
-  return { strokesByPage, textsByPage, pages, headingsByPage, images, past: [], future: [], changedPage: null, version: 0 };
+export function createStrokeHistory(strokesByPage: Strokes, textsByPage: TextNotesByPage = {}, pages?: NotePage[], headingsByPage: HeadingsByPage = {}, images?: NoteImages, tapesByPage?: TapesByPage): StrokeHistory {
+  return { strokesByPage, textsByPage, pages, headingsByPage, images, ...(tapesByPage ? { tapesByPage } : {}), past: [], future: [], changedPage: null, version: 0 };
 }
 
 // 線の配列は描画・消去側も変更せず作り直すため、PDFや全座標を複製せず参照を保持できる。
@@ -59,7 +62,8 @@ export function recordAnnotationEdit(history: StrokeHistory, pageNumber: number,
 }
 
 function recordEdit(history: StrokeHistory, pageNumber: number, strokesByPage: Strokes, textsByPage: TextNotesByPage,
-  change?: { pageChange?: { before: NotePage[]; after: NotePage[]; previousId: number }; headingsByPage?: HeadingsByPage; images?: NoteImages }): StrokeHistory {
+  change?: { tapesByPage?: TapesByPage; pageChange?: { before: NotePage[]; after: NotePage[]; previousId: number }; headingsByPage?: HeadingsByPage; images?: NoteImages }): StrokeHistory {
+  const tapesByPage = change?.tapesByPage ?? history.tapesByPage;
   const pageChange = change?.pageChange;
   const images = change?.images ?? history.images;
   const headingsByPage = change?.headingsByPage ?? history.headingsByPage;
@@ -67,9 +71,9 @@ function recordEdit(history: StrokeHistory, pageNumber: number, strokesByPage: S
   const beforePages = pageChange?.before ?? history.pages;
   const beforePage = pageChange?.previousId ?? pageNumber;
   const edit = { before: history.strokesByPage, after: strokesByPage,
-    beforeImages: history.images, afterImages: images, beforeTexts: history.textsByPage, afterTexts: textsByPage, beforeHeadings: history.headingsByPage, afterHeadings: headingsByPage, pageNumber, beforePages, afterPages: pages, beforePage };
+    beforeTapes: history.tapesByPage, afterTapes: tapesByPage, beforeImages: history.images, afterImages: images, beforeTexts: history.textsByPage, afterTexts: textsByPage, beforeHeadings: history.headingsByPage, afterHeadings: headingsByPage, pageNumber, beforePages, afterPages: pages, beforePage };
   return {
-    strokesByPage, textsByPage, pages, headingsByPage, images,
+    strokesByPage, textsByPage, pages, headingsByPage, images, ...(tapesByPage ? { tapesByPage } : {}),
     past: [...history.past, edit].slice(-STROKE_HISTORY_LIMIT),
     future: [],
     changedPage: pageNumber,
@@ -81,7 +85,7 @@ export function undoStrokeEdit(history: StrokeHistory): StrokeHistory {
   const edit = history.past.at(-1);
   if (!edit) return history;
   return {
-    images: edit.beforeImages,
+    ...(edit.beforeTapes ? { tapesByPage: edit.beforeTapes } : {}), images: edit.beforeImages,
     strokesByPage: edit.before,
     textsByPage: edit.beforeTexts,
     headingsByPage: edit.beforeHeadings,
@@ -97,7 +101,7 @@ export function redoStrokeEdit(history: StrokeHistory): StrokeHistory {
   const edit = history.future.at(-1);
   if (!edit) return history;
   return {
-    images: edit.afterImages,
+    ...(edit.afterTapes ? { tapesByPage: edit.afterTapes } : {}), images: edit.afterImages,
     strokesByPage: edit.after,
     textsByPage: edit.afterTexts,
     headingsByPage: edit.afterHeadings,
@@ -119,13 +123,13 @@ export function recordHeadingEdit(history: StrokeHistory, pageId: number, value:
   return recordEdit(history, pageId, history.strokesByPage, history.textsByPage, { headingsByPage });
 }
 
-export type PageClearSelection = { strokes: boolean; sticky: boolean; text: boolean };
+export type PageClearSelection = { strokes: boolean; sticky: boolean; text: boolean; tapes?: boolean };
 
 export function pageAnnotationCounts(history: StrokeHistory, pageId: number) {
   const texts = history.textsByPage[pageId] ?? [];
   return { strokes: history.strokesByPage[pageId]?.length ?? 0,
     sticky: texts.filter((note) => note.kind === "sticky").length,
-    text: texts.filter((note) => note.kind === "text").length };
+    text: texts.filter((note) => note.kind === "text").length, ...(history.tapesByPage ? { tapes: history.tapesByPage[pageId]?.length ?? 0 } : {}) };
 }
 
 // 複数種類の削除も1操作として戻す。別ページ・旧見出し・元PDFは変更しない。
@@ -137,7 +141,7 @@ export function recordPageClear(history: StrokeHistory, pageId: number, selectio
   const texts = (counts.sticky > 0 && selection.sticky) || (counts.text > 0 && selection.text)
     ? { ...history.textsByPage, [pageId]: (history.textsByPage[pageId] ?? []).filter((note) => !selection[note.kind]) }
     : history.textsByPage;
-  return recordEdit(history, pageId, strokes, texts);
+  return recordEdit(history, pageId, strokes, texts, selection.tapes && counts.tapes ? { tapesByPage: { ...history.tapesByPage, [pageId]: [] } } : undefined);
 }
 
 export function recordPageDeletion(history: StrokeHistory, before: NotePage[], pageId: number): StrokeHistory {
@@ -148,10 +152,16 @@ export function recordPageDeletion(history: StrokeHistory, before: NotePage[], p
   const textsByPage = { ...history.textsByPage }; delete textsByPage[pageId];
   const headingsByPage = { ...history.headingsByPage }; delete headingsByPage[pageId];
   return recordEdit(history, destination, strokesByPage, textsByPage,
-    { pageChange: { before, after, previousId: pageId }, headingsByPage, ...(history.images ? { images: pruneImages({ assets: history.images.assets, byPage: Object.fromEntries(Object.entries(history.images.byPage).filter(([id]) => Number(id) !== pageId)) }) } : {}) });
+    { ...(history.tapesByPage ? { tapesByPage: Object.fromEntries(Object.entries(history.tapesByPage).filter(([id]) => Number(id) !== pageId)) } : {}), pageChange: { before, after, previousId: pageId }, headingsByPage, ...(history.images ? { images: pruneImages({ assets: history.images.assets, byPage: Object.fromEntries(Object.entries(history.images.byPage).filter(([id]) => Number(id) !== pageId)) }) } : {}) });
 }
 
 export function recordImageEdit(history: StrokeHistory, pageId: number, images: NoteImages): StrokeHistory {
   if (images === history.images) return history;
   return recordEdit(history, pageId, history.strokesByPage, history.textsByPage, { images: pruneImages(images) });
+}
+
+export function recordTapeEdit(history: StrokeHistory, pageId: number, tapes: MaskTape[]): StrokeHistory {
+  if (!Number.isSafeInteger(pageId) || pageId < 1 || history.tapesByPage?.[pageId] === tapes) return history;
+  const tapesByPage = readMaskTapes({ ...history.tapesByPage, [pageId]: tapes });
+  return recordEdit(history, pageId, history.strokesByPage, history.textsByPage, { tapesByPage });
 }

@@ -4,16 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import type { PageClearSelection } from "../strokeHistory";
 
 export type PageEditKind = "delete-page" | "clear-page";
-const labels = { strokes: "線（マーカー含む）", sticky: "付箋", text: "テキストボックス" };
+const labels = { strokes: "線（マーカー含む）", sticky: "付箋", text: "テキストボックス", tapes: "目隠しテープ" };
 
 export function PageEditDialog({ kind, pageNumber, counts, disabled, onClose, onConfirm }: {
-  kind: PageEditKind; pageNumber: number; counts: Record<keyof PageClearSelection, number>;
+  kind: PageEditKind; pageNumber: number; counts: { strokes: number; sticky: number; text: number; tapes?: number };
   disabled: boolean; onClose: () => void; onConfirm: (selection: PageClearSelection) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  const [selection, setSelection] = useState<PageClearSelection>({ strokes: true, sticky: true, text: true });
+  const [selection, setSelection] = useState<PageClearSelection>({ strokes: true, sticky: true, text: true, tapes: true });
   const selectedCount = (Object.keys(labels) as (keyof PageClearSelection)[])
-    .reduce((sum, kind) => sum + (selection[kind] ? counts[kind] : 0), 0);
+    .reduce((sum, kind) => sum + (selection[kind] ? (counts[kind] ?? 0) : 0), 0);
   const blocked = disabled || kind === "clear-page" && selectedCount === 0;
   useEffect(() => {
     const dialog = ref.current;
@@ -34,9 +34,9 @@ export function PageEditDialog({ kind, pageNumber, counts, disabled, onClose, on
           {kind === "clear-page" && <fieldset className="space-y-2" disabled={disabled}>
             <legend className="sr-only">削除する書き込み</legend>
             {(Object.keys(labels) as (keyof PageClearSelection)[]).map((kind) => <label key={kind} className="flex min-h-11 cursor-pointer items-center gap-3">
-              <input type="checkbox" className="checkbox checkbox-sm" checked={selection[kind] && counts[kind] > 0}
-                disabled={disabled || counts[kind] === 0} onChange={(event) => setSelection({ ...selection, [kind]: event.target.checked })} />
-              <span>{labels[kind]}：{counts[kind]}件</span>
+              <input type="checkbox" className="checkbox checkbox-sm" checked={selection[kind] && (counts[kind] ?? 0) > 0}
+                disabled={disabled || !counts[kind]} onChange={(event) => setSelection({ ...selection, [kind]: event.target.checked })} />
+              <span>{labels[kind]}：{counts[kind] ?? 0}件</span>
             </label>)}
           </fieldset>}
           {kind === "clear-page" && <p className="text-sm">選択した書き込み{selectedCount}件を削除します。元PDFの内容は消えません。</p>}

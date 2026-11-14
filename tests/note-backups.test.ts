@@ -316,3 +316,17 @@ test("巨大なファイルをarrayBufferより前に拒否し、出力名の危
   assert.equal(backupDownloadName("資料.overlay"), "資料.overlay");
   assert.equal(backupDownloadName(" "), "ノート.overlay");
 });
+
+test("目隠しテープは編集用バックアップ版6で往復し、復元・重複判定にも保持する", async () => {
+  const tapesByPage = { 1: [{ id: "mask", x: .2, y: .3, width: .4, height: .08 }] };
+  const original = fixture(); original.schemaVersion = 6; original.notes[0].tapesByPage = tapesByPage;
+  const parsed = await decodeNoteBackup(await encodeNoteBackup(original));
+  assert.deepEqual(parsed.notes[0].tapesByPage, tapesByPage);
+  await restoreNoteBackup(parsed);
+  const id = (await loadNoteLibrary()).notes[0].id;
+  assert.deepEqual((await loadLocalNote(id)).tapesByPage, tapesByPage);
+  assert.equal((await captureNoteBackup({ kind: "note", id })).schemaVersion, 6);
+  assert.equal((await restoreNoteBackup(parsed, { skipDuplicates: true })).notes, 0);
+  const changed = { ...parsed, notes: [{ ...parsed.notes[0], tapesByPage: { 1: [{ ...tapesByPage[1][0], x: .3 }] } }] };
+  assert.equal((await restoreNoteBackup(changed, { skipDuplicates: true })).notes, 1, "テープの位置が違う版を重複扱いしない");
+});

@@ -21,7 +21,7 @@ async function checkPdf(bytes: Uint8Array, note: BackupNote) {
     const { PDFDocument } = await import("pdf-lib");
     const pdf = await PDFDocument.load(bytes, { updateMetadata: false, throwOnInvalidObject: true });
     const pages = pdf.getPageCount();
-    checkPageBindings(note.pages, [note.strokesByPage, note.textsByPage, note.headingsByPage ?? {}, note.images?.byPage ?? {}], pages);
+    checkPageBindings(note.pages, [note.tapesByPage ?? {}, note.strokesByPage, note.textsByPage, note.headingsByPage ?? {}, note.images?.byPage ?? {}], pages);
   } catch {
     throw new Error(`「${note.title}」の元PDFまたは書き込みのページ数を確認できません。暗号化PDFには対応していません。`);
   }
@@ -36,7 +36,7 @@ export async function encodeNoteBackup(input: NoteBackup): Promise<Blob> {
     await checkPdf(bytes, note);
     entries[`pdfs/${index}.pdf`] = bytes;
     notes.push({ id: note.id, title: note.title, fileName: note.fileName, folderId: note.folderId,
-      strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, ...(note.pages ? { pages: note.pages } : {}), ...(note.headingsByPage ? { headingsByPage: note.headingsByPage } : {}), ...(note.images ? { images: await packImages(note.images, entries) } : {}), pdfChecksum: checksum(bytes) });
+      ...(note.tapesByPage ? { tapesByPage: note.tapesByPage } : {}), strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, ...(note.pages ? { pages: note.pages } : {}), ...(note.headingsByPage ? { headingsByPage: note.headingsByPage } : {}), ...(note.images ? { images: await packImages(note.images, entries) } : {}), pdfChecksum: checksum(bytes) });
     // 複数PDFの解析の間に、進捗表示の描画をブラウザへ返す。
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -78,7 +78,7 @@ export async function decodeNoteBackup(file: Blob): Promise<NoteBackup> {
     if (!manifest || !crc || checksum(manifest) !== strFromU8(crc)) throw new Error("バックアップが破損しています。");
     const data = JSON.parse(strFromU8(manifest));
     if (!data || data.app !== "Overlay") throw new Error("Overlayのバックアップではありません。");
-    if (data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3 && data.schemaVersion !== 4 && data.schemaVersion !== 5) throw new Error("このバックアップの形式バージョンには対応していません。");
+    if (data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3 && data.schemaVersion !== 4 && data.schemaVersion !== 5 && data.schemaVersion !== 6) throw new Error("このバックアップの形式バージョンには対応していません。");
     if (!Array.isArray(data.notes) || data.notes.length > BACKUP_LIMITS.notes
       || names.size < data.notes.length + 2) throw new Error("バックアップの元PDFが不足または重複しています。");
     const used = new Set<string>(["manifest.json", "manifest.crc"]);
@@ -88,7 +88,7 @@ export async function decodeNoteBackup(file: Blob): Promise<NoteBackup> {
       if (!note || typeof note !== "object" || !pdf || !("pdfChecksum" in note)
         || note.pdfChecksum !== checksum(pdf)) throw new Error("バックアップの元PDFが破損しています。");
       used.add(`pdfs/${index}.pdf`);
-      if ("images" in note && data.schemaVersion !== 5) throw new Error("画像の形式が不正です。");
+      if ("images" in note && data.schemaVersion < 5) throw new Error("画像の形式が不正です。");
       const images = await unpackImages("images" in note ? note.images : undefined, entries, used);
       notes.push({ ...note, ...(images ? { images } : {}), pdf: new Blob([new Uint8Array(pdf)], { type: "application/pdf" }) });
     }

@@ -13,7 +13,11 @@ export type PenStroke = {
 };
 
 export type PenTool = "pen" | "marker" | "eraser";
-export type EditorTool = PenTool | "text" | "sticky" | "hand" | "lasso" | "shape" | "fill" | "image";
+export type EditorTool = PenTool | "text" | "sticky" | "hand" | "lasso" | "shape" | "fill" | "image" | "tape";
+
+// 復習用の覆い。表示／非表示は画面内だけで管理し、PDFには出力しない。
+export type MaskTape = { id: string; x: number; y: number; width: number; height: number };
+export type TapesByPage = Record<number, MaskTape[]>;
 
 export type NoteImage = {
   id: string; assetId: string;
@@ -74,6 +78,7 @@ export type NoteLibrary = {
 };
 
 export type LoadedNote = {
+  tapesByPage?: TapesByPage;
   id: string;
   file: File;
   strokesByPage: Record<number, PenStroke[]>;

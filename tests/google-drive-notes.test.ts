@@ -736,3 +736,21 @@ test("保存先・所有者が不正なら端末PDFの照合にも進まない",
     assert.equal(reads, 0);
   }
 });
+
+test("テープのDrive自動保存・再取得・削除を版6で往復し、元PDFを再送しない", async () => {
+  const pdf = await PDFDocument.create(); pdf.addPage([600, 800]); pdf.addPage([600, 800]);
+  const data = new Blob([new Uint8Array(await pdf.save())], { type: "application/pdf" });
+  const tapesByPage = { 1: [{ id: "mask", x: .1, y: .2, width: .3, height: .06 }] };
+  const input: NoteBackup = { ...backup, schemaVersion: 6, notes: [{ ...backup.notes[0], pdf: data, tapesByPage }] };
+  const f = await verified(); const access = await f.client.autosaveAccess("account_A", root.id);
+  const ids = await reserveDriveIds(access);
+  const binding = { id: "local_A", key: "branch_A", deviceId: "device_A", accountId: "account_A", rootId: root.id,
+    enabled: true, generation: 1, uploadedGeneration: 0, dirtySince: 0, changedAt: 0, ids, pdfHash: await sha256(data) };
+  await sendDriveAutosave(access, binding, input);
+  assert.equal(JSON.parse(await f.files.get(ids.note)!.data!.text()).schemaVersion, 6);
+  assert.deepEqual((await f.client.loadNote("account_A", root.id, ids.note)).notes[0].tapesByPage, tapesByPage);
+  const changed = { ...input, notes: [{ ...input.notes[0], tapesByPage: { 1: [] } }] };
+  await sendDriveAutosave(access, { ...binding, generation: 2, uploadedGeneration: 1 }, changed);
+  assert.deepEqual((await f.client.loadNote("account_A", root.id, ids.note)).notes[0].tapesByPage, { 1: [] });
+  assert.equal(f.calls.filter((c) => (c.init.headers as Record<string, string>)["X-Upload-Content-Type"] === "application/pdf").length, 1);
+});

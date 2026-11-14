@@ -6,6 +6,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
 import type { NotePage, PenStroke, EditorTool, TextNote } from "../types";
+import { TapeLayer } from "./TapeLayer";
+import { EMPTY_TAPES } from "../maskTapes";
+import type { MaskTape } from "../types";
 import { ImageLayer } from "./ImageLayer";
 import type { NoteImages } from "../types";
 import { PenLayer } from "./PenLayer";
@@ -27,6 +30,8 @@ type PdfPageProps = {
   penColor: string;
   tool: EditorTool;
   shapeKind?: ShapeKind;
+  tapes?: MaskTape[];
+  onTapesChange?: (tapes: MaskTape[]) => void;
   images?: NoteImages;
   onImagesChange?: (images: NoteImages) => void;
   texts?: TextNote[];
@@ -54,7 +59,7 @@ export function PdfPage({
   penColor,
   tool,
   shapeKind = "rectangle",
-  images, onImagesChange,
+  tapes = EMPTY_TAPES, onTapesChange, images, onImagesChange,
   texts = [],
   stickyFocus,
   textControlsContainer = null,
@@ -327,6 +332,11 @@ export function PdfPage({
         {renderedPage && displayScale > 0 && !error && tool === "lasso" && onAnnotationsChange && <LassoLayer
           strokes={strokes} texts={texts} pageWidth={renderedPage.width} pageHeight={renderedPage.height} pageScale={displayScale}
           interaction={interaction} controlsContainer={textControlsContainer} controlsActive={controlsActive} stickyFocus={stickyFocus} disabled={disabled} onChange={onAnnotationsChange} />}
+        {renderedPage && displayScale > 0 && !error && onTapesChange && <TapeLayer
+          key={`tapes-${notePage?.id ?? pageNumber}`} scope={document} tapes={tapes}
+          width={renderedPage.width} height={renderedPage.height} scale={displayScale}
+          active={tool === "tape" && controlsActive} revealable={tool === "hand" && controlsActive}
+          disabled={disabled} interaction={interaction} controls={textControlsContainer} onChange={onTapesChange} />}
       </div>
     </div>
   );

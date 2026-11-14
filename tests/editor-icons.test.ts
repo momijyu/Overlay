@@ -5,10 +5,10 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { EditorIcon, type EditorIconName } from "@/features/pdf-editor/components/EditorIcon";
 
-test("道具・履歴・ページ・スマホ操作の16種類を同じ線幅のSVGで描き、絵文字や画像を使わない", () => {
-  const names: EditorIconName[] = ["pen", "marker", "eraser", "text", "sticky", "hand", "undo", "redo", "previous-page", "next-page", "settings", "more", "lasso", "shape", "image", "fill"];
+test("道具・履歴・ページ・スマホ操作の17種類を同じ線幅のSVGで描き、絵文字や画像を使わない", () => {
+  const names: EditorIconName[] = ["pen", "marker", "eraser", "text", "sticky", "hand", "undo", "redo", "previous-page", "next-page", "settings", "more", "lasso", "shape", "image", "tape", "fill"];
   const drawings = names.map((name) => renderToStaticMarkup(EditorIcon({ name })));
-  assert.equal(new Set(drawings).size, 16);
+  assert.equal(new Set(drawings).size, 17);
   for (const html of drawings) {
     assert.match(html, /viewBox="0 0 24 24"/);
     assert.match(html, /stroke="currentColor" stroke-width="1.75"/);
@@ -22,6 +22,7 @@ test("道具・履歴・ページ・スマホ操作の16種類を同じ線幅の
 test("既存Lucideアイコンと自作画像アイコンの図形を維持し、表示サイズと線幅は従来のままにする", () => {
   // 固定タグの公式SVGから取得したpath。取得元の対応はdocs/icon-sources.mdへ記録。
   const paths: Record<EditorIconName, string[]> = {
+    tape: ["m3 7 2-2 2 2 2-2 2 2 2-2 2 2 2-2 2 2 2-2v14l-2-2-2 2-2-2-2 2-2-2-2 2-2-2-2 2V7Z", "M7 12h10"],
     image: ["m21 15-5-5L5 21"],
     fill: ["M11 7 6 2", "M18.992 12H2.041", "M21.145 18.38A3.34 3.34 0 0 1 20 16.5a3.3 3.3 0 0 1-1.145 1.88c-.575.46-.855 1.02-.855 1.595A2 2 0 0 0 20 22a2 2 0 0 0 2-2.025c0-.58-.285-1.13-.855-1.595", "m8.5 4.5 2.148-2.148a1.205 1.205 0 0 1 1.704 0l7.296 7.296a1.205 1.205 0 0 1 0 1.704l-7.592 7.592a3.615 3.615 0 0 1-5.112 0l-3.888-3.888a3.615 3.615 0 0 1 0-5.112L5.67 7.33"],
     shape: ["M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"],

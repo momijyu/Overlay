@@ -3,13 +3,14 @@ import type { EditorTool } from "../types";
 
 export type EditorIconName = EditorTool | "undo" | "redo" | "previous-page" | "next-page" | "settings" | "more";
 
-// 画像アイコンは自作。その他はLucide 1.59.0の公式SVGをインライン化。図形は変更せず、表示サイズと線幅は従来どおり。
+// 画像・目隠しテープのアイコンは自作。その他はLucide 1.59.0の公式SVGをインライン化。図形は変更せず、表示サイズと線幅は従来どおり。
 // Source: https://github.com/lucide-icons/lucide/tree/1.59.0/icons
 // Copyright (c) 2026 Lucide Icons and Contributors — ISC License.
 // ライセンス全文: public/licenses/lucide-LICENSE.txt（公開サイトにも同梱する）。
 // アイコンの対応・取得元・変更点: docs/icon-sources.md
 export function EditorIcon({ name }: { name: EditorIconName }) {
   const drawing = {
+    tape: <><path d="m3 7 2-2 2 2 2-2 2 2 2-2 2 2 2-2 2 2 2-2v14l-2-2-2 2-2-2-2 2-2-2-2 2-2-2-2 2V7Z" /><path d="M7 12h10" /></>,
     image: <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-5-5L5 21" /></>,
     fill: <>
       <path d="M11 7 6 2" />

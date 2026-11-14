@@ -48,16 +48,19 @@ export function bindPageGestures(viewport: HTMLElement, options: {
     }
   }
   function down(event: PointerEvent) {
-    if (!options.isEnabled() || (event.target as Element | null)?.closest?.("textarea,input,button,select,[contenteditable],[data-text-editor]")) return;
+    const target = event.target as Element | null;
+    const tape = target?.closest?.("[data-mask-tape]")?.getAttribute?.("data-mask-tape") === "true";
+    if (!options.isEnabled() || !tape && target?.closest?.("textarea,input,button,select,[contenteditable],[data-text-editor]")) return;
     if (event.pointerType === "touch") {
       touches.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
       if (interrupted) { stop(event); return; }
-      if (touches.size >= 2 || options.isHand()) {
+      // テープ上の一本指は表示切替・位置調整へ渡し、二本目からはPDFのピンチへ切り替える。
+      if (touches.size >= 2 || options.isHand() && !tape) {
         const point = midpoint();
         if (point) begin(point);
         if (interaction.blocked) stop(event);
       } else if (interaction.blocked) stop(event);
-    } else if (options.isHand() && event.button === 0 && mouse === null) {
+    } else if (!tape && options.isHand() && event.button === 0 && mouse === null) {
       mouse = event.pointerId;
       begin(event);
       try { viewport.setPointerCapture(event.pointerId); } catch { /* 中断時は保存しない。 */ }

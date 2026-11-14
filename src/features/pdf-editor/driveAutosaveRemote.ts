@@ -37,7 +37,7 @@ export function driveManifestContent(manifest: DriveNoteManifest) {
   // 項目順も固定し、検証後に同じハッシュを再計算できるようにする。
   return { kind: "overlay-drive-note", noteKey: manifest.noteKey, title: manifest.title, fileName: manifest.fileName,
     pdfId: manifest.pdfId, pdfBytes: manifest.pdfBytes, strokesByPage: manifest.strokesByPage, textsByPage: manifest.textsByPage,
-    ...(manifest.images ? { images: manifest.images } : {}), ...(manifest.pages ? { pages: manifest.pages } : {}), ...(manifest.headingsByPage ? { headingsByPage: manifest.headingsByPage } : {}) };
+    ...(manifest.tapesByPage ? { tapesByPage: manifest.tapesByPage } : {}), ...(manifest.images ? { images: manifest.images } : {}), ...(manifest.pages ? { pages: manifest.pages } : {}), ...(manifest.headingsByPage ? { headingsByPage: manifest.headingsByPage } : {}) };
 }
 
 export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveBinding & { pdfHash: string }, backup: NoteBackup) {
@@ -45,7 +45,7 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
   const { container, pdf, note: noteId } = binding.ids;
   const source = singleDriveNote(backup);
   if (!((await source.pdf.slice(0, 1024).text()).includes("%PDF-"))) throw new Error("保存するPDFの形式が不正です。");
-  if (new Blob([JSON.stringify({ strokes: source.strokesByPage, texts: source.textsByPage, pages: source.pages, headings: source.headingsByPage })]).size > BACKUP_LIMITS.jsonBytes - 4096) {
+  if (new Blob([JSON.stringify({ tapes: source.tapesByPage, strokes: source.strokesByPage, texts: source.textsByPage, pages: source.pages, headings: source.headingsByPage })]).size > BACKUP_LIMITS.jsonBytes - 4096) {
     throw new Error("編集情報が16MiBを超えたため、Drive自動保存を停止しました。");
   }
   const properties = (role: string) => ({ overlayApp: "overlay", overlaySchema: "1", overlayRole: role,
@@ -73,7 +73,7 @@ export async function sendDriveAutosave(access: DriveNoteAccess, binding: DriveB
     throw new Error("Driveの元PDFが変更されています。自動保存を停止しました。端末の内容は残っています。");
   }
   const images = await saveDriveImages(access, binding.rootId, binding.key, container, source.images);
-  const draft: DriveNoteManifest = { schemaVersion: images ? 5 : 4, ...(images ? { images } : {}), kind: "overlay-drive-note", noteKey: binding.key,
+  const draft: DriveNoteManifest = { schemaVersion: source.tapesByPage ? 6 : images ? 5 : 4, ...(source.tapesByPage ? { tapesByPage: source.tapesByPage } : {}), ...(images ? { images } : {}), kind: "overlay-drive-note", noteKey: binding.key,
     title: source.title, fileName: source.fileName, pdfId: pdf, pdfBytes: source.pdf.size,
     strokesByPage: source.strokesByPage, textsByPage: source.textsByPage,
     ...(source.pages ? { pages: source.pages } : {}), ...(source.headingsByPage ? { headingsByPage: source.headingsByPage } : {}) };

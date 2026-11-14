@@ -9,6 +9,8 @@ let states: unknown[] = [], refs: { current: unknown }[] = [];
 let stateIndex = 0, refIndex = 0, effectIndex = 0;
 let effects: (() => void)[] = [];
 let slots: { deps?: unknown[]; cleanup?: () => void }[] = [];
+let memoIndex = 0;
+let memos: { deps: unknown[]; value: unknown }[] = [];
 function effect(callback: () => void | (() => void), deps?: unknown[]) {
   const index = effectIndex++, previous = slots[index];
   if (deps && previous?.deps && deps.length === previous.deps.length && deps.every((dep, i) => Object.is(dep, previous.deps![i]))) return;
@@ -22,6 +24,11 @@ mock.module("react", { exports: { ...React,
   },
   useRef(initial: unknown) { return refs[refIndex++] ??= { current: initial }; },
   useId: () => "image-test",
+  useMemo(callback: () => unknown, deps: unknown[]) {
+    const index = memoIndex++, previous = memos[index];
+    if (!previous || deps.some((dep, i) => !Object.is(dep, previous.deps[i]))) memos[index] = { deps, value: callback() };
+    return memos[index].value;
+  },
   useEffect: effect, useLayoutEffect: effect,
 } });
 mock.module("react-dom", { exports: { createPortal: (children: React.ReactNode) => children } });
@@ -31,7 +38,7 @@ const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 const originalBitmap = Object.getOwnPropertyDescriptor(globalThis, "createImageBitmap");
 beforeEach(() => {
-  states = []; refs = []; slots = []; effects = [];
+  states = []; refs = []; slots = []; effects = []; memos = [];
   Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() });
   Object.defineProperty(globalThis, "document", { configurable: true, value: { body: {} } });
   Object.defineProperty(globalThis, "createImageBitmap", { configurable: true, writable: true, value: () => {} });
@@ -55,7 +62,7 @@ function fixture(images: NoteImages) {
   const props: React.ComponentProps<typeof ImageLayer> = { scope: {}, images, pageId: 1, width: 200, height: 200, scale: 2,
     active: true, disabled: false, controls: {} as HTMLDivElement, interaction, onChange: (value) => changes.push(value) };
   function render() {
-    stateIndex = refIndex = effectIndex = 0; effects = [];
+    stateIndex = refIndex = effectIndex = memoIndex = 0; effects = [];
     const tree = ImageLayer(props);
     refs[0].current = { setPointerCapture() {} };
     for (const callback of effects) callback();
@@ -104,6 +111,23 @@ test("画像の縦横比を保つサイズ変更・重なり順・削除・無�
   assert.equal(f.changes.length, 3);
 });
 
+test("画像の移動中に道具・倍率・保存内容が変わった場合は、途中の移動を保存しない", async () => {
+  const images = await imageFixture();
+  const f = fixture(images);
+  for (const change of [
+    () => { f.props.active = false; },
+    () => { f.props.scale = 3; },
+    () => { f.props.disabled = true; },
+    () => { f.props.images = { ...images, byPage: { 1: [{ ...images.byPage[1][0], x: .5 }] } }; },
+  ]) {
+    f.props.active = true; f.props.disabled = false;
+    f.down(); f.surface().onPointerMove!(pointer(40, 80));
+    change(); f.render();
+    f.surface().onPointerUp!(pointer(40, 80));
+    assert.equal(f.changes.length, 0, "中断した操作で新しい状態を上書きしない");
+  }
+});
+
 test("画像の読み込み中にページを切り替えた場合は、別ページへ追加しない", async () => {
   let complete!: (value: ImageBitmap) => void;
   mock.method(globalThis, "createImageBitmap", () => new Promise<ImageBitmap>((resolve) => { complete = resolve; }));
@@ -115,6 +139,21 @@ test("画像の読み込み中にページを切り替えた場合は、別ペ�
   let closed = false; complete({ width: 2, height: 2, close() { closed = true; } } as ImageBitmap);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(closed, true); assert.equal(f.changes.length, 0);
+});
+
+test("切り抜きの草稿は保存内容の更新や道具の切り替え後に持ち越さない", async () => {
+  const images = await imageFixture(), f = fixture(images);
+  f.down(); f.surface().onPointerUp!(pointer(0, 0));
+  f.button("切り抜き").onClick!({} as React.MouseEvent<HTMLButtonElement>);
+  assert.ok(find(f.render(), (e) => e.type === ImageCropDialog));
+  f.props.images = { ...images };
+  assert.equal(find(f.render(), (e) => e.type === ImageCropDialog), undefined);
+  f.button("切り抜き").onClick!({} as React.MouseEvent<HTMLButtonElement>);
+  assert.ok(find(f.render(), (e) => e.type === ImageCropDialog));
+  f.props.active = false; f.render();
+  f.props.active = true;
+  assert.equal(find(f.render(), (e) => e.type === ImageCropDialog), undefined);
+  assert.equal(f.changes.length, 0);
 });
 
 test("切り抜きは適用まで配置を確定せず、Escape・キャンセルで終了できる", () => {

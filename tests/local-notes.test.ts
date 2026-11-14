@@ -681,3 +681,24 @@ test("更新番号のない既存ローカルノートを読み込み、更新�
   await saveLocalNote({ file, strokesByPage: {}, noteId: id, expectedRevision: old.revision });
   assert.equal((await loadLocalNote(id)).revision, 1);
 });
+
+test("テープだけの編集を保存し、初回追加をUndoした未定義も保存から消せる", async () => {
+  const tapesByPage = { 1: [{ id: "mask", x: .1, y: .2, width: .3, height: .05 }] };
+  const autosave = createLocalAutosave({ file, noteId: null, strokesByPage: {}, persist: saveLocalNote, onChange() {} });
+  autosave.update({}, {}, undefined, {}, undefined, tapesByPage);
+  assert.equal(await autosave.flush(), true);
+  const id = autosave.getState().noteId!;
+  assert.deepEqual((await loadLocalNote(id)).tapesByPage, tapesByPage);
+  const original = await loadLocalNote(id);
+  await saveLocalNote({ file, noteId: id, strokesByPage: {}, expectedRevision: original.revision });
+  assert.deepEqual((await loadLocalNote(id)).tapesByPage, tapesByPage, "古い呼び出しで省略した場合は保持");
+  // 同じ保存係の世代は上の直接保存で変わるため、開き直した状態で初回追加前へ戻す。
+  autosave.dispose();
+  const latest = await loadLocalNote(id);
+  const reopened = createLocalAutosave({ file, noteId: id, revision: latest.revision, strokesByPage: latest.strokesByPage,
+    tapesByPage, persist: saveLocalNote, onChange() {} });
+  reopened.update(latest.strokesByPage, {}, undefined, {}, undefined, undefined);
+  assert.equal(await reopened.flush(), true);
+  assert.equal((await loadLocalNote(id)).tapesByPage, undefined);
+  reopened.dispose();
+});

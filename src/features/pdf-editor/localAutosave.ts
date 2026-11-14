@@ -1,4 +1,4 @@
-import type { NoteImages } from "./types";
+import type { TapesByPage, NoteImages } from "./types";
 import type { HeadingsByPage, NotePage, PenStroke, TextNotesByPage } from "./types";
 import { measureSpeed } from "./speedMeasurements";
 
@@ -9,6 +9,7 @@ export type LocalSaveInput = {
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
   headingsByPage?: HeadingsByPage;
+  tapesByPage?: TapesByPage;
   images?: NoteImages;
   noteId: string | null;
   expectedRevision: number;
@@ -29,11 +30,14 @@ export function createLocalAutosave(options: {
   textsByPage?: TextNotesByPage;
   pages?: NotePage[];
   headingsByPage?: HeadingsByPage;
+  tapesByPage?: TapesByPage;
   images?: NoteImages;
   revision?: number;
   persist: (input: LocalSaveInput) => Promise<string>;
   onChange: (state: LocalSaveState) => void;
 }) {
+  let latestTapes = options.tapesByPage;
+  let savedTapes = latestTapes;
   let latestImages = options.images;
   let savedImages = latestImages;
   let latest = options.strokesByPage;
@@ -61,7 +65,7 @@ export function createLocalAutosave(options: {
   }
 
   function hasPendingChanges() {
-    return latest !== saved || latestTexts !== savedTexts || latestPages !== savedPages || latestHeadings !== savedHeadings || latestImages !== savedImages;
+    return latestTapes !== savedTapes || latest !== saved || latestTexts !== savedTexts || latestPages !== savedPages || latestHeadings !== savedHeadings || latestImages !== savedImages;
   }
 
   function flush(retry = false): Promise<boolean> {
@@ -76,6 +80,7 @@ export function createLocalAutosave(options: {
     running = Promise.resolve().then(async () => {
       try {
         while (hasPendingChanges()) {
+          const tapeSnapshot = latestTapes;
           const imageSnapshot = latestImages;
           const snapshot = latest;
           const textSnapshot = latestTexts;
@@ -83,9 +88,10 @@ export function createLocalAutosave(options: {
           const headingSnapshot = latestHeadings;
           noteId = await measureSpeed("local.save", () => options.persist({
             file: options.file, strokesByPage: snapshot, textsByPage: textSnapshot, noteId, expectedRevision: revision,
-            images: imageSnapshot, pages: pageSnapshot, headingsByPage: headingSnapshot,
+            tapesByPage: tapeSnapshot, images: imageSnapshot, pages: pageSnapshot, headingsByPage: headingSnapshot,
           }), { pdfBytes: options.file.size });
           revision += 1;
+          savedTapes = tapeSnapshot;
           savedImages = imageSnapshot;
           saved = snapshot;
           savedTexts = textSnapshot;
@@ -115,8 +121,9 @@ export function createLocalAutosave(options: {
     getState,
     hasPendingChanges,
     flush,
-    update(strokesByPage: Strokes, textsByPage = latestTexts, pages?: NotePage[], headingsByPage = latestHeadings, images?: NoteImages) {
+    update(strokesByPage: Strokes, textsByPage = latestTexts, pages?: NotePage[], headingsByPage = latestHeadings, images?: NoteImages, tapesByPage?: TapesByPage) {
       if (disposed) return;
+      if (arguments.length >= 6) latestTapes = tapesByPage;
       if (arguments.length >= 5) latestImages = images;
       latest = strokesByPage;
       latestTexts = textsByPage;

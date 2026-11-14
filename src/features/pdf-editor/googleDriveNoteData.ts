@@ -7,10 +7,11 @@ export const DRIVE_NOTE_FIELDS = "id,name,mimeType,ownedByMe,trashed,parents,app
 export type DriveOverwriteTarget = { note: DriveNoteSummary; version: string };
 export type DriveNoteSummary = { id: string; title: string; updatedAt: string; containerId: string; noteKey: string; deviceId?: string };
 export type DriveNoteManifest = {
-  schemaVersion: 1 | 2 | 3 | 4 | 5; kind: "overlay-drive-note"; noteKey: string; title: string; fileName: string;
+  schemaVersion: 1 | 2 | 3 | 4 | 5 | 6; kind: "overlay-drive-note"; noteKey: string; title: string; fileName: string;
   sync?: { deviceId: string; generation: number; hash: string };
   pdfId: string; pdfBytes: number; strokesByPage: NoteBackup["notes"][number]["strokesByPage"];
   textsByPage: NoteBackup["notes"][number]["textsByPage"];
+  tapesByPage?: import("./types").TapesByPage;
   images?: DriveImages;
   pages?: NoteBackup["notes"][number]["pages"];
   headingsByPage?: NoteBackup["notes"][number]["headingsByPage"];
@@ -62,11 +63,12 @@ export function singleDriveNote(input: unknown) {
 
 export function readDriveManifest(value: unknown, expectedKey: string): DriveNoteManifest {
   const data = driveObject(value);
-  if ((data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3 && data.schemaVersion !== 4 && data.schemaVersion !== 5) || data.kind !== "overlay-drive-note") throw new Error("このDriveノートの形式バージョンには対応していません。");
-  if (data.images !== undefined && data.schemaVersion !== 5) throw new Error("画像の保存形式が不正です。");
+  if ((data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3 && data.schemaVersion !== 4 && data.schemaVersion !== 5 && data.schemaVersion !== 6) || data.kind !== "overlay-drive-note") throw new Error("このDriveノートの形式バージョンには対応していません。");
+  if (data.images !== undefined && data.schemaVersion < 5) throw new Error("画像の保存形式が不正です。");
+  if (data.tapesByPage !== undefined && data.schemaVersion !== 6) throw new Error("目隠しテープの保存形式が不正です。");
   const images = readDriveImages(data.images);
   let sync: DriveNoteManifest["sync"];
-  if (data.schemaVersion === 4 || data.schemaVersion === 5 && data.sync !== undefined) {
+  if (data.schemaVersion === 4 || (data.schemaVersion === 5 || data.schemaVersion === 6) && data.sync !== undefined) {
     const value = driveObject(data.sync);
     if (!Number.isSafeInteger(value.generation) || (value.generation as number) < 1 || typeof value.hash !== "string" || !/^[a-f0-9]{64}$/.test(value.hash)) throw new Error("Driveノートの自動保存情報が不正です。");
     sync = { deviceId: driveId(value.deviceId), generation: value.generation as number, hash: value.hash };
@@ -78,11 +80,11 @@ export function readDriveManifest(value: unknown, expectedKey: string): DriveNot
     || (data.pdfBytes as number) <= 0 || (data.pdfBytes as number) > BACKUP_LIMITS.bytes) throw new Error("DriveノートのPDF情報が不正です。");
   // ダウンロード前に、共通検証で文章・線・件数・名前を確認する。PDFは後から実データで再検証する。
   if (data.schemaVersion === 1 && data.pages !== undefined) throw new Error("Driveノートのページ形式が不正です。");
-  const checked = singleDriveNote({ schemaVersion: data.headingsByPage !== undefined ? 4 : data.pages !== undefined ? 3 : 1, kind: "note", name: data.title, folders: [], notes: [{
+  const checked = singleDriveNote({ schemaVersion: data.tapesByPage !== undefined ? 6 : data.headingsByPage !== undefined ? 4 : data.pages !== undefined ? 3 : 1, kind: "note", name: data.title, folders: [], notes: [{
     id: data.noteKey, title: data.title, fileName: data.fileName, folderId: null,
-    headingsByPage: data.headingsByPage, pages: data.pages, strokesByPage: data.strokesByPage, textsByPage: data.textsByPage, pdf: new Blob(["%PDF-placeholder"]),
+    tapesByPage: data.tapesByPage, headingsByPage: data.headingsByPage, pages: data.pages, strokesByPage: data.strokesByPage, textsByPage: data.textsByPage, pdf: new Blob(["%PDF-placeholder"]),
   }] });
   checkPageBindings(checked.pages, [images?.byPage ?? {}]);
-  return { schemaVersion: data.schemaVersion, ...(images ? { images } : {}), ...(sync ? { sync } : {}), kind: "overlay-drive-note", noteKey: expectedKey, title: checked.title, fileName: checked.fileName,
+  return { ...(checked.tapesByPage ? { tapesByPage: checked.tapesByPage } : {}), schemaVersion: data.schemaVersion, ...(images ? { images } : {}), ...(sync ? { sync } : {}), kind: "overlay-drive-note", noteKey: expectedKey, title: checked.title, fileName: checked.fileName,
     ...(checked.pages ? { pages: checked.pages } : {}), ...(checked.headingsByPage ? { headingsByPage: checked.headingsByPage } : {}), pdfId: driveId(data.pdfId), pdfBytes: data.pdfBytes as number, strokesByPage: checked.strokesByPage, textsByPage: checked.textsByPage };
 }

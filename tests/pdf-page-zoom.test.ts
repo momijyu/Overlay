@@ -90,6 +90,7 @@ function fixture(notePage?: NotePage, openTiming?: SpeedSpan) {
     const element = PdfPage({ document, pageNumber: 1, notePage, openTiming, strokes: [], texts: [], editVersion: 0,
       penWidth: 2.5, penColor: "#000000", tool, shapeKind, eraserWidth: 16,
       zoom, disabled, textControlsContainer, onZoomChange: changeZoom, onStrokeComplete: () => {}, onStrokesChange: () => {}, onTextsChange: () => {},
+      onImagesChange: () => {}, onTapesChange: () => {},
     });
     refs[0].current = viewport;
     refs[1].current = canvas;
@@ -113,6 +114,19 @@ function fixture(notePage?: NotePage, openTiming?: SpeedSpan) {
   };
 }
 async function flush() { await Promise.resolve(); await Promise.resolve(); }
+
+test("画像と目隠しテープの同一ページでもレイヤーのキーを重複させない", async () => {
+  const f = fixture();
+  try {
+    f.render(); await flush(); f.tasks[0].resolve(); await flush();
+    const tree = f.render();
+    const surface = (tree.props as { children: React.ReactElement[] }).children[1];
+    const layers = (surface.props as { children: React.ReactNode[] }).children.filter(React.isValidElement);
+    const keys = layers.map((layer) => layer.key).filter((key) => key !== null);
+    assert.ok(keys.includes("tapes-1"));
+    assert.equal(new Set(keys).size, keys.length);
+  } finally { f.cleanup(); }
+});
 
 test("図形を入力用レイヤーへ接続し、種類を変えたら草稿を初期化する", async () => {
   const f = fixture();

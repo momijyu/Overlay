@@ -41,3 +41,23 @@ test("復元した複数ページの線をPDFに出力しても、保存した�
   assert.deepEqual(new Uint8Array(await loaded.file.arrayBuffer()), bytes);
   assert.deepEqual(new Uint8Array(await (await loadLocalNote(id)).file.arrayBuffer()), bytes);
 });
+
+test("目隠しテープを保存・再読込しても全体・指定ページPDFには描き込まない", async () => {
+  const original = await PDFDocument.create();
+  original.addPage([200, 300]).drawText("Answer: 42", { x: 20, y: 240, size: 12 });
+  original.addPage([200, 300]).drawText("Answer: 7", { x: 20, y: 240, size: 12 });
+  const file = new File([new Uint8Array(await original.save())], "answers.pdf", { type: "application/pdf" });
+  const tapesByPage = { 1: [{ id: "answer", x: .05, y: .05, width: .8, height: .3 }] };
+  const id = await saveLocalNote({ file, strokesByPage: {}, noteId: null, tapesByPage });
+  const loaded = await loadLocalNote(id);
+  assert.deepEqual(loaded.tapesByPage, tapesByPage);
+  const displayed = { numPages: 2 } as PDFDocumentProxy;
+  // テープを持つ復元済みノートも、通常の出力経路では線・文章・ページ・画像だけを渡す。
+  for (const selection of [undefined, [1]]) {
+    const withTape = await exportAnnotatedPdf(loaded.file, displayed, loaded.strokesByPage,
+      loaded.textsByPage, loaded.pages, selection, loaded.images);
+    const plain = await exportAnnotatedPdf(file, displayed, {}, undefined, loaded.pages, selection);
+    assert.deepEqual(withTape, plain);
+    assert.equal((await PDFDocument.load(withTape)).getPageCount(), selection?.length ?? 2);
+  }
+});

@@ -162,7 +162,7 @@ export async function hydrateDriveNote(id: string, sourceId?: string, preferCach
       || driveBodyBindingSignature(liveBinding) !== driveBodyBindingSignature(binding)) throw new Error("取得中にノートが変更されました。再度開いてください。");
     const previous = await readRequest<{ revision?: number } | undefined>(tx.objectStore("notes").get(id));
     const stored = { id, title: entity.entry.name, folderId: entity.entry.parentId, fileName: note.fileName, updatedAt: result.summary.updatedAt,
-      revision: (previous?.revision ?? 0) + 1, strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, pages: note.pages, headingsByPage: note.headingsByPage, images: note.images };
+      revision: (previous?.revision ?? 0) + 1, tapesByPage: note.tapesByPage, strokesByPage: note.strokesByPage, textsByPage: note.textsByPage, pages: note.pages, headingsByPage: note.headingsByPage, images: note.images };
     await readRequest(tx.objectStore("pdfs").put({ id, blob: note.pdf }));
     await readRequest(tx.objectStore("notes").put(stored));
     await readRequest(tx.objectStore("noteSummaries").put(toLocalNoteSummary(stored)));

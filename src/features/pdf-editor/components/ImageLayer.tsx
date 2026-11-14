@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useId, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type PointerEvent } from "react";
 import { ImageCropDialog } from "./ImageCropDialog";
 import { createPortal } from "react-dom";
 import { cropImage, resizeImage, imageMatrix, importImage, readNoteImages, rotateImage } from "../imageData";
@@ -23,15 +23,20 @@ type Props = { scope: object; images?: NoteImages; pageId: number; width: number
   interaction: PageInteraction; controls: HTMLDivElement | null; onChange(images: NoteImages): void };
 export function ImageLayer({ scope, images, pageId, width, height, scale, active, disabled, interaction, controls, onChange }: Props) {
   const svg = useRef<SVGSVGElement>(null), input = useRef<HTMLInputElement>(null);
+  // 操作を始めた表示・保存内容にだけ草稿を適用する。道具変更やUndo後に持ち越さない。
+  const context = useMemo(() => ({ scope, images, pageId, width, height, scale, active, disabled }),
+    [scope, images, pageId, width, height, scale, active, disabled]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [draft, setDraft] = useState<NoteImage | null>(null);
+  const [draft, setDraft] = useState<{ image: NoteImage; context: object } | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
-  const [crop, setCrop] = useState<NoteImage["crop"] | null>(null);
-  const pending = useRef<{ pointer: number; startX: number; startY: number; image: NoteImage; resize: boolean } | null>(null);
+  const [cropDraft, setCropDraft] = useState<{ value: NoteImage["crop"]; context: object } | null>(null);
+  const crop = cropDraft?.context === context ? cropDraft.value : null;
+  const setCrop = (value: NoteImage["crop"] | null) => setCropDraft(value && { value, context });
+  const pending = useRef<{ pointer: number; startX: number; startY: number; image: NoteImage; resize: boolean; context: object } | null>(null);
   const latest = useRef<NoteImage | null>(null);
   const generation = useRef({ ticket: 0 });
-  useLayoutEffect(() => { const current = generation.current; current.ticket++; return () => { current.ticket++; }; }, [scope, pageId, active, images]);
-  function preview(value: NoteImage | null) { latest.current = value; setDraft(value); }
+  useLayoutEffect(() => { const current = generation.current; current.ticket++; return () => { current.ticket++; }; }, [context]);
+  function preview(value: NoteImage | null) { latest.current = value; setDraft(value && { image: value, context }); }
   const source = images?.byPage[pageId] ?? [];
   const chosen = source.find((i) => i.id === selected);
   useEffect(() => {
@@ -62,12 +67,12 @@ export function ImageLayer({ scope, images, pageId, width, height, scale, active
   function down(e: PointerEvent<SVGElement>, image: NoteImage, resize = false) {
     if (disabled || !active || busy || interaction.blocked || e.button !== 0) return;
     e.preventDefault(); setCrop(null); setSelected(image.id); preview(image);
-    pending.current = { pointer: e.pointerId, startX: e.clientX, startY: e.clientY, image, resize };
+    pending.current = { pointer: e.pointerId, startX: e.clientX, startY: e.clientY, image, resize, context };
     svg.current?.setPointerCapture(e.pointerId);
   }
   function move(e: PointerEvent<SVGSVGElement>) {
     const p = pending.current;
-    if (!p || p.pointer !== e.pointerId || interaction.blocked) return;
+    if (!p || p.context !== context || p.pointer !== e.pointerId || interaction.blocked || !active || disabled) return;
     const dx = (e.clientX - p.startX) / (width * scale), dy = (e.clientY - p.startY) / (height * scale);
     if (p.resize) {
       preview(resizeImage(p.image, dx, dy));
@@ -77,9 +82,10 @@ export function ImageLayer({ scope, images, pageId, width, height, scale, active
     const p = pending.current; if (!p || p.pointer !== e.pointerId) return;
     pending.current = null;
     const next = latest.current; setDraft(null);
-    if (!cancel && !interaction.blocked && next && (next.x !== p.image.x || next.y !== p.image.y || next.width !== p.image.width || next.height !== p.image.height)) replace(next);
+    if (!cancel && p.context === context && active && !disabled && !interaction.blocked && next && (next.x !== p.image.x || next.y !== p.image.y || next.width !== p.image.width || next.height !== p.image.height)) replace(next);
   }
-  const displayed = draft ?? chosen;
+  const currentDraft = draft?.context === context ? draft.image : null;
+  const displayed = currentDraft ?? chosen;
   function reorder(direction: number) {
     if (!chosen) return;
     const index = source.indexOf(chosen), next = index + direction;
@@ -104,7 +110,7 @@ export function ImageLayer({ scope, images, pageId, width, height, scale, active
       onPointerDown={(e) => { if (e.target === e.currentTarget) setSelected(null); }}
       onPointerMove={move} onPointerUp={(e) => finish(e)} onPointerCancel={(e) => finish(e, true)} onLostPointerCapture={(e) => finish(e, true)}>
       {source.map((image) => {
-        const shown = draft?.id === image.id ? draft : image, asset = images?.assets[image.assetId];
+        const shown = currentDraft?.id === image.id ? currentDraft : image, asset = images?.assets[image.assetId];
         return asset && <g key={image.id} onPointerDown={(e) => down(e, image)} style={{ cursor: active ? "move" : undefined }}>
           <Raster asset={asset} image={shown} width={width} height={height} />
           <rect x={shown.x * width} y={shown.y * height} width={shown.width * width} height={shown.height * height} fill="transparent" />
