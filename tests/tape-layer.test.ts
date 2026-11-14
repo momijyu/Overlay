@@ -99,7 +99,7 @@ test("配置・移動・リサイズは指を離してから1回だけ確定し�
   assert.equal(f.changes.length, 0);
   f.surface().onPointerUp!(pointer(160, 120));
   assert.equal(f.changes.length, 1);
-  assert.deepEqual({ ...f.changes[0][0], id: "test" }, { id: "test", x: .1, y: .2, width: .30000000000000004, height: .09999999999999998 });
+  assert.deepEqual({ ...f.changes[0][0], id: "test" }, { id: "test", x: .1, y: .2, width: .30000000000000004, height: .09999999999999998, color: "#fb923c" });
   f.props.tapes = f.changes[0];
   f.button("答えを表示").onPointerDown!(pointer());
   f.surface().onPointerMove!(pointer(80, 120)); f.surface().onPointerUp!(pointer(80, 120));
@@ -138,4 +138,25 @@ test("ノート切り替え・再読み込みでは答えを隠し、保存失�
   f.props.onChange = () => { throw new Error("容量不足"); };
   f.button("テープを追加").onClick!({} as React.MouseEvent<HTMLButtonElement>);
   assert.ok(find(f.render(), (e) => (e.props as React.ComponentProps<"span">).role === "alert"));
+});
+
+test("新規色の選択だけでは保存せず、選択中の旧テープは色変更を確定できる", () => {
+  const f = fixture();
+  function picker() {
+    return find(f.render(), (e) => e.type === "input" && (e.props as React.ComponentProps<"input">).type === "color")!.props as React.ComponentProps<"input">;
+  }
+  function change(value: string) { picker().onChange!({ target: { value } } as React.ChangeEvent<HTMLInputElement>); }
+  assert.equal(picker().value, "#fb923c");
+  change("#008800");
+  assert.equal(f.changes.length, 0);
+  f.button("テープを追加").onClick!({} as React.MouseEvent<HTMLButtonElement>);
+  assert.equal(f.changes[0][1].color, "#008800");
+  f.props.tapes = [tape];
+  f.button("答えを表示").onPointerDown!(pointer()); f.surface().onPointerUp!(pointer());
+  assert.equal(picker().value, "#fcd34d");
+  change("#123456");
+  assert.deepEqual(f.changes[1], [{ ...tape, color: "#123456" }]);
+  f.props.disabled = true;
+  change("#abcdef");
+  assert.equal(f.changes.length, 2);
 });

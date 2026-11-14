@@ -683,7 +683,7 @@ test("更新番号のない既存ローカルノートを読み込み、更新�
 });
 
 test("テープだけの編集を保存し、初回追加をUndoした未定義も保存から消せる", async () => {
-  const tapesByPage = { 1: [{ id: "mask", x: .1, y: .2, width: .3, height: .05 }] };
+  const tapesByPage = { 1: [{ id: "mask", x: .1, y: .2, width: .3, height: .05, color: "#fb923c" }] };
   const autosave = createLocalAutosave({ file, noteId: null, strokesByPage: {}, persist: saveLocalNote, onChange() {} });
   autosave.update({}, {}, undefined, {}, undefined, tapesByPage);
   assert.equal(await autosave.flush(), true);

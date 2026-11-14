@@ -77,8 +77,10 @@ test("二本指の距離は斜め方向も使い、倍率の上下限と重な�
   f.emit("pointerdown", 1, 100, 100); f.emit("pointerdown", 2, 200, 200);
   f.emit("pointermove", 2, 150, 150);
   assert.equal(f.zoom(), 0.5);
+  f.emit("pointermove", 2, 101, 101);
+  assert.equal(f.zoom(), 0.1);
   f.emit("pointermove", 2, 1000, 1000);
-  assert.equal(f.zoom(), 2);
+  assert.equal(f.zoom(), 3);
   f.cleanup();
   const same = fixture();
   same.emit("pointerdown"); same.emit("pointerdown", 2);

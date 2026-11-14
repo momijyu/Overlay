@@ -2,6 +2,8 @@
 
 import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type PointerEvent } from "react";
 import { ImageCropDialog } from "./ImageCropDialog";
+import { PdfImageDialog } from "./PdfImageDialog";
+import type { ImportedPdfImage } from "../pdfImageImport";
 import { createPortal } from "react-dom";
 import { cropImage, resizeImage, imageMatrix, importImage, readNoteImages, rotateImage } from "../imageData";
 import type { PageInteraction } from "../pageGestures";
@@ -29,6 +31,8 @@ export function ImageLayer({ scope, images, pageId, width, height, scale, active
   const [selected, setSelected] = useState<string | null>(null);
   const [draft, setDraft] = useState<{ image: NoteImage; context: object } | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
+  const [pdfDraft, setPdfDraft] = useState<{ file: File; context: object; id: string } | null>(null);
+  const pdfFile = pdfDraft?.context === context ? pdfDraft.file : null;
   const [cropDraft, setCropDraft] = useState<{ value: NoteImage["crop"]; context: object } | null>(null);
   const crop = cropDraft?.context === context ? cropDraft.value : null;
   const setCrop = (value: NoteImage["crop"] | null) => setCropDraft(value && { value, context });
@@ -50,17 +54,27 @@ export function ImageLayer({ scope, images, pageId, width, height, scale, active
     if (checked) onChange(checked);
   }
   function replace(image: NoteImage) { commit(source.map((i) => i.id === image.id ? image : i)); }
+  function insert({ id, asset }: ImportedPdfImage) {
+    if (!active || disabled || interaction.blocked) return;
+    const factor = Math.min(width * .6 / asset.width, height * .6 / asset.height);
+    const image: NoteImage = { id: crypto.randomUUID(), assetId: id, x: .1, y: .1,
+      width: asset.width * factor / width, height: asset.height * factor / height, rotation: 0, crop: { x: 0, y: 0, width: 1, height: 1 } };
+    commit([...source, image], { ...images?.assets, [id]: asset });
+    setSelected(image.id);
+  }
   async function add(file?: File) {
     if (!file || busy || disabled) return;
     const ticket = generation.current.ticket;
+    if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+      setError(null); setPdfDraft({ file, context, id: crypto.randomUUID() });
+      if (input.current) input.current.value = "";
+      return;
+    }
     setBusy(true); setError(null);
     try {
-      const { id, asset } = await importImage(file);
+      const imported = await importImage(file);
       if (ticket !== generation.current.ticket) return;
-      const factor = Math.min(width * .6 / asset.width, height * .6 / asset.height);
-      const image: NoteImage = { id: crypto.randomUUID(), assetId: id, x: .1, y: .1,
-        width: asset.width * factor / width, height: asset.height * factor / height, rotation: 0, crop: { x: 0, y: 0, width: 1, height: 1 } };
-      commit([...source, image], { ...images?.assets, [id]: asset }); setSelected(image.id);
+      insert(imported);
     } catch (e) { setError(e instanceof Error ? e.message : "画像を追加できませんでした。"); }
     finally { setBusy(false); if (input.current) input.current.value = ""; }
   }
@@ -93,8 +107,8 @@ export function ImageLayer({ scope, images, pageId, width, height, scale, active
     const list = [...source]; [list[index], list[next]] = [list[next], list[index]]; commit(list);
   }
   const toolbar = <div className="flex items-center gap-2" aria-label="画像の操作">
-    <input ref={input} type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" aria-label="挿入する画像" onChange={(e) => void add(e.target.files?.[0])} disabled={disabled || busy} />
-    <button className="btn btn-sm" type="button" disabled={disabled || busy} onClick={() => input.current?.click()}>{busy ? "読み込み中…" : "画像を追加"}</button>
+    <input ref={input} type="file" accept="image/png,image/jpeg,application/pdf,.png,.jpg,.jpeg,.pdf" className="hidden" aria-label="挿入する画像・PDF" onChange={(e) => void add(e.target.files?.[0])} disabled={disabled || busy} />
+    <button className="btn btn-sm" type="button" disabled={disabled || busy} onClick={() => input.current?.click()}>{busy ? "読み込み中…" : "画像・PDFを追加"}</button>
     {chosen && <>
       <button className="btn btn-sm" type="button" disabled={disabled || busy} onClick={() => replace(rotateImage(chosen, width, height))}>90°回転</button>
       <button className="btn btn-sm" type="button" onClick={() => setCrop(chosen.crop)} disabled={disabled || busy}>切り抜き</button>
@@ -123,6 +137,8 @@ export function ImageLayer({ scope, images, pageId, width, height, scale, active
       </g>}
     </svg>
     {active && controls && createPortal(toolbar, controls)}
+    {active && pdfFile && createPortal(<PdfImageDialog key={pdfDraft!.id} file={pdfFile} onClose={() => setPdfDraft(null)}
+      onInsert={(image) => { insert(image); setPdfDraft(null); }} />, document.body)}
     {active && chosen && crop && createPortal(<ImageCropDialog crop={crop} onCrop={setCrop} onClose={() => setCrop(null)}
       preview={<svg className="w-full h-40 my-3 bg-base-200" viewBox={`0 0 ${width} ${height}`} aria-label="切り抜きのプレビュー">
         <Raster asset={images!.assets[chosen.assetId]} image={cropImage(chosen, crop, images!.assets[chosen.assetId], width, height)} width={width} height={height} />

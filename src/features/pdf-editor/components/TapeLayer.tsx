@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { moveTape, tapeRectangle } from "../maskTapes";
+import { DEFAULT_TAPE_COLOR, LEGACY_TAPE_COLOR, moveTape, tapeRectangle } from "../maskTapes";
+import { isPenColor } from "../penStyle";
 import type { PageInteraction } from "../pageGestures";
 import type { MaskTape, PenPoint } from "../types";
 
@@ -33,6 +34,7 @@ export function TapeLayer({ scope, tapes, width, height, scale, active, revealab
   const rootRef = useRef<HTMLDivElement>(null);
   const context = useMemo(() => ({ scope, tapes, width, height, scale, active, revealable, disabled }), [scope, tapes, width, height, scale, active, revealable, disabled]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [color, setColor] = useState(DEFAULT_TAPE_COLOR);
   const [visibility, setVisibility] = useState<{
     scope: object;
     tapes: MaskTape[];
@@ -98,7 +100,7 @@ export function TapeLayer({ scope, tapes, width, height, scale, active, revealab
     event.stopPropagation();
     const start = point(event);
     const original = tape ?? { id: crypto.randomUUID(), x: start.x, y: start.y,
-      width: Math.min(.22, 1 - start.x), height: Math.min(.05, 1 - start.y) };
+      width: Math.min(.22, 1 - start.x), height: Math.min(.05, 1 - start.y), color };
     setSelected(original.id);
     preview(original);
     let mode: Gesture["mode"] = "create";
@@ -153,10 +155,22 @@ export function TapeLayer({ scope, tapes, width, height, scale, active, revealab
   const toolbar = (
     <div className="flex flex-wrap items-center gap-2" aria-label="目隠しテープの操作">
       <button type="button" className="btn btn-sm min-h-11" disabled={disabled} onClick={() => {
-        const tape = { id: crypto.randomUUID(), x: .35, y: .4, width: .3, height: .06 };
+        const tape = { id: crypto.randomUUID(), x: .35, y: .4, width: .3, height: .06, color };
         commit([...tapes, tape]);
         setSelected(tape.id);
       }}>テープを追加</button>
+      <label className="flex min-h-11 items-center gap-2 text-sm">テープの色
+        <input type="color" className="input input-sm h-11 w-12 p-1" aria-label="テープの色" disabled={disabled}
+          value={selectedTape ? selectedTape.color ?? LEGACY_TAPE_COLOR : color}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (disabled || interaction.blocked || !isPenColor(next)) return;
+            setColor(next);
+            if (selectedTape && next !== (selectedTape.color ?? LEGACY_TAPE_COLOR)) {
+              commit(tapes.map((tape) => tape.id === selectedTape.id ? { ...tape, color: next } : tape));
+            }
+          }} />
+      </label>
       <button type="button" className="btn btn-sm min-h-11" disabled={disabled || !revealed.length}
         onClick={() => setVisibility(null)}>すべて隠す</button>
       {selectedTape && <button type="button" className="btn btn-sm min-h-11 text-error" disabled={disabled}
@@ -184,9 +198,9 @@ export function TapeLayer({ scope, tapes, width, height, scale, active, revealab
           left: `${value.x * 100}%`, top: `${value.y * 100}%`,
           width: `${value.width * 100}%`, height: `${value.height * 100}%`,
         }}>
-          <button type="button" data-mask-tape="true" className="absolute inset-0 h-full w-full border border-amber-700"
+          <button type="button" data-mask-tape="true" className="absolute inset-0 h-full w-full border border-black/40"
             style={{
-              background: open ? "transparent" : "#fcd34d",
+              background: open ? "transparent" : value.color ?? LEGACY_TAPE_COLOR,
               pointerEvents: interactive ? "auto" : "none",
               outline: active && selected === tape.id ? "2px solid #2563eb" : undefined,
               cursor: active ? "move" : "pointer",

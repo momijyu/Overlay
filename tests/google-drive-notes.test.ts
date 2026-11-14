@@ -740,7 +740,7 @@ test("保存先・所有者が不正なら端末PDFの照合にも進まない",
 test("テープのDrive自動保存・再取得・削除を版6で往復し、元PDFを再送しない", async () => {
   const pdf = await PDFDocument.create(); pdf.addPage([600, 800]); pdf.addPage([600, 800]);
   const data = new Blob([new Uint8Array(await pdf.save())], { type: "application/pdf" });
-  const tapesByPage = { 1: [{ id: "mask", x: .1, y: .2, width: .3, height: .06 }] };
+  const tapesByPage = { 1: [{ id: "mask", x: .1, y: .2, width: .3, height: .06, color: "#fb923c" }] };
   const input: NoteBackup = { ...backup, schemaVersion: 6, notes: [{ ...backup.notes[0], pdf: data, tapesByPage }] };
   const f = await verified(); const access = await f.client.autosaveAccess("account_A", root.id);
   const ids = await reserveDriveIds(access);

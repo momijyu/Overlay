@@ -4,15 +4,17 @@ import {
   bindPageZoomWheel, capturePageZoomAnchor, capturePageResizeAnchor, clampPageZoom, restorePageZoomAnchor, wheelPageZoom,
 } from "@/features/pdf-editor/pageZoom";
 
-test("倍率を50〜200%に制限し、小さいピンチ入力も反映する", () => {
-  assert.equal(clampPageZoom(0.1), 0.5);
-  assert.equal(clampPageZoom(3), 2);
+test("倍率を10〜300%に制限し、小さいピンチ入力も反映する", () => {
+  assert.equal(clampPageZoom(0.01), 0.1);
+  assert.equal(clampPageZoom(2.5), 2.5);
+  assert.equal(clampPageZoom(4), 3);
   assert.equal(clampPageZoom(NaN), 1);
   assert.ok(wheelPageZoom(1, -0.1, 0, 400) > 1);
   assert.ok(wheelPageZoom(1, 0.1, 0, 400) < 1);
   assert.equal(wheelPageZoom(1, NaN, 0, 400), 1);
-  assert.equal(wheelPageZoom(2, -1000, 0, 400), 2);
-  assert.equal(wheelPageZoom(0.5, 1000, 0, 400), 0.5);
+  assert.ok(wheelPageZoom(2, -50, 0, 400) > 2);
+  assert.equal(wheelPageZoom(3, -1000, 0, 400), 3);
+  assert.equal(wheelPageZoom(0.1, 1000, 0, 400), 0.1);
 });
 
 test("ホイールのピクセル・行・ページ単位をそろえ、連続入力を積み重ねる", () => {
@@ -99,9 +101,9 @@ test("PDF領域のCtrl・Command・ピンチだけを処理し、通常スクロ
   const first = zoom;
   assert.equal(wheel({ metaKey: true }).defaultPrevented, true);
   assert.ok(zoom > first);
-  zoom = 2;
+  zoom = 3;
   assert.equal(wheel({ ctrlKey: true }).defaultPrevented, true);
-  assert.equal(zoom, 2);
+  assert.equal(zoom, 3);
   enabled = false;
   assert.equal(wheel({ ctrlKey: true }).defaultPrevented, false);
   enabled = true;

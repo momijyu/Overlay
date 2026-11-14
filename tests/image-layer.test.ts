@@ -34,6 +34,7 @@ mock.module("react", { exports: { ...React,
 mock.module("react-dom", { exports: { createPortal: (children: React.ReactNode) => children } });
 const { ImageLayer } = await import("@/features/pdf-editor/components/ImageLayer");
 const { ImageCropDialog } = await import("@/features/pdf-editor/components/ImageCropDialog");
+const { PdfImageDialog } = await import("@/features/pdf-editor/components/PdfImageDialog");
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 const originalBitmap = Object.getOwnPropertyDescriptor(globalThis, "createImageBitmap");
@@ -83,6 +84,27 @@ function pointer(x: number, y: number) {
   return { pointerId: 1, clientX: x, clientY: y, button: 0, preventDefault() {} } as React.PointerEvent<SVGSVGElement>;
 }
 
+test("PDFはページ選択後だけ画像として追加し、道具・ページ切替では草稿を復活させない", async () => {
+  const images = await imageFixture(), f = fixture(images);
+  const file = new File(["%PDF"], "資料.pdf", { type: "application/pdf" });
+  const input = find(f.render(), (e) => e.type === "input" && (e.props as React.ComponentProps<"input">).type === "file")!.props as React.ComponentProps<"input">;
+  assert.ok(input.accept?.includes("application/pdf"));
+  input.onChange!({ target: { files: [file] } } as unknown as React.ChangeEvent<HTMLInputElement>);
+  assert.equal(f.changes.length, 0);
+  const dialog = find(f.render(), (e) => e.type === PdfImageDialog)!.props as React.ComponentProps<typeof PdfImageDialog>;
+  assert.equal(dialog.file, file);
+  const assetId = Object.keys(images.assets)[0];
+  dialog.onInsert({ id: assetId, asset: images.assets[assetId] });
+  assert.equal(f.changes.length, 1);
+  assert.equal(f.changes[0].byPage[1].length, images.byPage[1].length + 1);
+  assert.equal(f.changes[0].byPage[1].at(-1)!.assetId, assetId);
+  assert.equal(find(f.render(), (e) => e.type === PdfImageDialog), undefined);
+  input.onChange!({ target: { files: [file] } } as unknown as React.ChangeEvent<HTMLInputElement>);
+  f.props.pageId = 2; f.render(); f.props.pageId = 1;
+  assert.equal(find(f.render(), (e) => e.type === PdfImageDialog), undefined);
+  assert.equal(f.changes.length, 1);
+});
+
 test("画像の移動は倍率を補正し、ポインターを離すまで保存せず、中断・二本指操作は破棄する", async () => {
   const f = fixture(await imageFixture()); f.down();
   f.surface().onPointerMove!(pointer(40, 80)); assert.equal(f.changes.length, 0);
@@ -106,7 +128,7 @@ test("画像の縦横比を保つサイズ変更・重なり順・削除・無�
   assert.equal(f.changes.at(-1)!.byPage[1][1].id, images.byPage[1][0].id);
   f.button("画像削除").onClick!({} as React.MouseEvent<HTMLButtonElement>);
   assert.equal(f.changes.at(-1)!.byPage[1].length, 1);
-  f.props.disabled = true; assert.equal(f.button("画像を追加").disabled, true);
+  f.props.disabled = true; assert.equal(f.button("画像・PDFを追加").disabled, true);
   f.down(); f.surface().onPointerMove!(pointer(80, 80)); f.surface().onPointerUp!(pointer(80, 80));
   assert.equal(f.changes.length, 3);
 });

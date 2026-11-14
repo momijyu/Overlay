@@ -1,4 +1,7 @@
 import type { MaskTape, PenPoint, TapesByPage } from "./types";
+import { isPenColor } from "./penStyle";
+export const DEFAULT_TAPE_COLOR = "#fb923c";
+export const LEGACY_TAPE_COLOR = "#fcd34d";
 export const MAX_MASK_TAPES = 1000;
 export const EMPTY_TAPES: MaskTape[] = [];
 export function readMaskTapes(value: unknown): TapesByPage | undefined {
@@ -19,13 +22,14 @@ export function readMaskTapes(value: unknown): TapesByPage | undefined {
     result[Number(page)] = items.map((item: MaskTape): MaskTape => {
       if (!item || typeof item !== "object")
         invalid();
-      const { id, x, y, width, height } = item;
+      const { id, x, y, width, height, color } = item;
       if (typeof id !== "string" || !id.trim() || id.length > 100 || ids.has(id)
         || ![x, y, width, height].every((n) => typeof n === "number" && Number.isFinite(n))
-        || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1.000001 || y + height > 1.000001)
+        || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1.000001 || y + height > 1.000001
+        || color !== undefined && !isPenColor(color))
         invalid();
       ids.add(id);
-      return { id, x, y, width, height };
+      return { id, x, y, width, height, ...(color !== undefined ? { color } : {}) };
     });
   }
   return result;

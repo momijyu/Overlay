@@ -4,6 +4,7 @@ import { readMaskTapes, MAX_MASK_TAPES, tapeRectangle, moveTape } from "@/featur
 import { createStrokeHistory, recordTapeEdit, recordStrokeEdit, recordPageDeletion, recordPageClear, undoStrokeEdit, redoStrokeEdit } from "@/features/pdf-editor/strokeHistory";
 import { readDriveManifest } from "@/features/pdf-editor/googleDriveNoteData";
 import { driveManifestContent } from "@/features/pdf-editor/driveAutosaveRemote";
+import { DEFAULT_TAPE_COLOR, LEGACY_TAPE_COLOR } from "@/features/pdf-editor/maskTapes";
 const tape = { id: "answer", x: .1, y: .2, width: .3, height: .04 };
 
 test("旧ノートはテープなしで開き、不正な矩形・重複ID・件数超過は拒否する", () => {
@@ -14,6 +15,21 @@ test("旧ノートはテープなしで開き、不正な矩形・重複ID・件
     { 1: Array.from({ length: MAX_MASK_TAPES + 1 }, (_, i) => ({ ...tape, id: String(i) })) }]) {
     assert.throws(() => readMaskTapes(input), /目隠しテープ/);
   }
+});
+
+test("新規はオレンジ、色を省略した旧テープは黄色を維持し、不正な色を拒否する", () => {
+  assert.equal(DEFAULT_TAPE_COLOR, "#fb923c");
+  assert.equal(LEGACY_TAPE_COLOR, "#fcd34d");
+  assert.deepEqual(readMaskTapes({ 1: [tape] }), { 1: [tape] });
+  const colored = { ...tape, color: "#123ABC" };
+  assert.deepEqual(readMaskTapes({ 1: [colored] }), { 1: [colored] });
+  for (const color of [null, 10, "red", "#123", "transparent", "url(test)"]) {
+    assert.throws(() => readMaskTapes({ 1: [{ ...tape, color }] }), /目隠しテープ/);
+  }
+  const added = recordTapeEdit(createStrokeHistory({}), 1, [tape]);
+  const changed = recordTapeEdit(added, 1, [colored]);
+  assert.deepEqual(undoStrokeEdit(changed).tapesByPage, { 1: [tape] });
+  assert.deepEqual(redoStrokeEdit(undoStrokeEdit(changed)).tapesByPage, { 1: [colored] });
 });
 
 test("逆向きのドラッグとページ外への移動をページ内に収める", () => {
@@ -40,7 +56,7 @@ test("線とテープの混在履歴・テープ削除・ページ削除を元�
 
 test("Drive版6はテープを検証し内容ハッシュの対象に含め、旧版へ紛れたテープは拒否する", () => {
   const data = { schemaVersion: 6, kind: "overlay-drive-note", noteKey: "note_A", title: "復習", fileName: "lecture.pdf", pdfId: "pdf_A", pdfBytes: 100,
-    strokesByPage: {}, textsByPage: {}, tapesByPage: { 1: [tape] } };
+    strokesByPage: {}, textsByPage: {}, tapesByPage: { 1: [{ ...tape, color: "#fb923c" }] } };
   const manifest = readDriveManifest(data, "note_A");
   assert.deepEqual(manifest.tapesByPage, data.tapesByPage);
   assert.deepEqual(driveManifestContent(manifest).tapesByPage, data.tapesByPage);

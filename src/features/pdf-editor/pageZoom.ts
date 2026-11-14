@@ -1,5 +1,5 @@
-export const MIN_PAGE_ZOOM = 0.5;
-export const MAX_PAGE_ZOOM = 2;
+export const MIN_PAGE_ZOOM = 0.1;
+export const MAX_PAGE_ZOOM = 3;
 
 export function clampPageZoom(value: number): number {
   if (!Number.isFinite(value)) return 1;
