@@ -23,6 +23,7 @@ import type { NoteDragItem } from "../noteDrag";
 import { attachLocalAutosaveLifecycle, createLocalAutosave, type LocalAutosave } from "../localAutosave";
 import type { BlankPageTemplate, HeadingsByPage, NotePage, PenStroke, EditorTool, TextNote, TextNotesByPage, SavedNoteSummary } from "../types";
 import { PdfPage } from "./PdfPage";
+import { PageThumbnails } from "./PageThumbnails";
 import { NotebookSidebar } from "./NotebookSidebar";
 import { NotebookDrawer } from "./NotebookDrawer";
 import { subscribeLibraryChanged } from "../driveLibraryEvents";
@@ -695,6 +696,10 @@ export function PdfWorkspace() {
             onClose={() => { if (!operationRef.current) { setPendingBackup(null); setBackupError(null); } }} />}
       </NotebookDrawer>
       <main className="editor-main mx-auto w-full max-w-6xl p-4 sm:p-6">
+        {document && file && <PageThumbnails key={documentVersion} document={document} pages={pages} currentPage={pageNumber}
+          disabled={isBusy} strokesByPage={strokesByPage} textsByPage={history.textsByPage}
+          tapesByPage={history.tapesByPage} images={history.images}
+          onNavigate={(number) => { if (!operationRef.current) { setStickyFocus(null); setPageNumber(number); } }} />}
         <section className="workspace-card card min-w-0 w-full border border-base-300 bg-base-100 shadow-sm">
           <div className="workspace-body card-body gap-5">
             <div hidden={!!document && !!file} data-pdf-upload>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { StickyPageLink } from "../types";
+import { EditorIcon } from "./EditorIcon";
 
 export const STICKY_GUTTER_QUERY = "(min-width: 92rem) and (hover: hover) and (pointer: fine)";
 export const STICKY_HOVER_QUERY = "(hover: hover) and (pointer: fine)";
@@ -27,6 +28,11 @@ export function CurrentStickyNotes({ entries, currentPageId, disabled, onNavigat
     setOpen(false);
     if (restoreFocus) trigger.current?.focus({ preventScroll: true });
   }
+  function openOnHover(event: React.PointerEvent<HTMLElement>) {
+    if (event.pointerType !== "mouse" || !window.matchMedia(STICKY_HOVER_QUERY).matches) return;
+    cancelClose();
+    if (!open) { hoverOpened.current = true; setOpen(true); }
+  }
   return <aside className="current-sticky-nav" data-open={open} aria-label="この資料の付箋"
     onPointerEnter={(event) => {
       if (event.pointerType === "mouse" && open) cancelClose();
@@ -43,14 +49,19 @@ export function CurrentStickyNotes({ entries, currentPageId, disabled, onNavigat
     onKeyDown={(event) => {
       if (open && event.key === "Escape") { event.stopPropagation(); close(); }
     }}>
-    <div className="current-sticky-edge" aria-hidden="true" onPointerEnter={(event) => {
-      if (event.pointerType !== "mouse" || !window.matchMedia(STICKY_HOVER_QUERY).matches) return;
-      cancelClose();
-      if (!open) { hoverOpened.current = true; setOpen(true); }
-    }} />
+    <div className="current-sticky-edge" aria-hidden="true" onPointerEnter={openOnHover} />
     <button ref={trigger} type="button" className="current-sticky-trigger btn btn-sm min-h-11 min-w-11 shadow-sm"
       aria-label="この資料の付箋" aria-expanded={open} aria-controls="current-sticky-list"
-      onClick={() => { cancelClose(); hoverOpened.current = false; setOpen((value) => !value); }}>付箋</button>
+      onPointerEnter={openOnHover}
+      onClick={() => {
+        cancelClose();
+        // ホバー直後のクリックでは閉じず、マウスが離れても表示を保つ。
+        if (!hoverOpened.current) setOpen((value) => !value);
+        hoverOpened.current = false;
+      }}>
+      <span className="current-sticky-arrow"><EditorIcon name={open ? "next-page" : "previous-page"} /></span>
+      <span className="current-sticky-label">付箋</span>
+    </button>
     {open && <button type="button" className="current-sticky-backdrop" tabIndex={-1}
       aria-label="付箋一覧の外側を押して閉じる" onClick={() => close(false)} />}
     <section id="current-sticky-list" aria-hidden={!open} inert={!open}

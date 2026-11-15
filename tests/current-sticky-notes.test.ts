@@ -92,6 +92,21 @@ test("クリックで開いた一覧はマウスが離れても開いたまま�
   mock.timers.tick(300); assert.equal(open, true);
 });
 
+test("矢印付きタブに触れて開いた直後のクリックは表示を維持し、もう一度押すと閉じる", () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  withPointerDevice(true, () => {
+    const f = fixture();
+    const tab = f.buttons()[0];
+    assert.equal(tab.props["aria-controls"], "current-sticky-list");
+    assert.ok(all(tab).some(child => child.props.className === "current-sticky-arrow"));
+    (tab.props.onPointerEnter as (event: React.PointerEvent<HTMLElement>) => void)(pointer());
+    assert.equal(open, true);
+    f.toggle(); f.render().props.onPointerLeave(pointer());
+    mock.timers.tick(300); assert.equal(open, true);
+    f.toggle(); assert.equal(open, false);
+  });
+});
+
 test("キーボードで一覧へ入ると自動閉じを取り消す", () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   withPointerDevice(true, () => {

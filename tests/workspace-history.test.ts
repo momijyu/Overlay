@@ -9,6 +9,7 @@ import type { NoteBackup } from "@/features/pdf-editor/noteBackupData";
 import { DriveVersionRequired } from "@/features/pdf-editor/driveLibraryCache";
 import { speedMeasurements } from "@/features/pdf-editor/speedMeasurements";
 import { CurrentStickyNotes } from "@/features/pdf-editor/components/CurrentStickyNotes";
+import { PageThumbnails } from "@/features/pdf-editor/components/PageThumbnails";
 import { createShapeStroke } from "@/features/pdf-editor/shapeStrokes";
 import { editorToolGroups } from "@/features/pdf-editor/editorTools";
 import { EditorHelpDialog } from "@/features/pdf-editor/components/EditorHelpDialog";
@@ -1534,6 +1535,20 @@ function enableSpread() {
   states.at(-1)!.value = true; // matchMediaによる広い画面の判定だけを代用。
   (button("見開き表示")!.props as { onClick: () => void }).onClick();
 }
+test("サムネイルで保存やUndoを増やさず移動し、ページ削除・復元後も現在の並びに追従する", async () => {
+  const { autosave, calls } = setup();
+  props(PageThumbnails).onNavigate(3);
+  assert.equal(props(PdfPage).pageNumber, 3);
+  assert.equal(calls.length, 0); assert.equal(props(HistoryControls).canUndo, false);
+  props(PageActionsMenu).onDelete(); props(PageEditDialog).onConfirm({ strokes: true, sticky: true, text: true });
+  await autosave.flush();
+  assert.deepEqual(props(PageThumbnails).pages.map(page => page.id), [1, 2]);
+  assert.equal(props(PageThumbnails).currentPage, 2);
+  props(HistoryControls).onUndo(); await autosave.flush();
+  assert.deepEqual(props(PageThumbnails).pages.map(page => page.id), [1, 2, 3]);
+  assert.equal(props(PageThumbnails).currentPage, 3);
+  autosave.dispose();
+});
 test("見開きの左右で線・文章・投げ縄の更新先を分離し、選んだ側だけへ設定を表示する", async () => {
   const { autosave, calls } = setup(); enableSpread();
   let pair = spreadPages();
