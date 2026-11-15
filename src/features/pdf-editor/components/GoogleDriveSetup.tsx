@@ -126,6 +126,8 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequ
       <h2 id="google-drive-setup-title" className="shrink-0 border-b border-base-300 px-5 py-4 text-lg font-bold">{restore ? "Driveの手動バックアップを復元" : saveRequest ? "Driveにバックアップ" : "Google Drive"}</h2>
       <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
         {!restore && !saveRequest && <p className="text-sm">{state.root ? "全ノート・フォルダを自動保存します。" : "接続後、全ノート・フォルダをDriveへ自動保存します。"}</p>}
+        <p className="text-sm"><a href="/privacy" target="_blank" rel="noopener noreferrer" className="link link-hover"
+          aria-label="プライバシーポリシー（別タブで開く）">プライバシーポリシー</a></p>
         {state.account && <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm break-words">
           <dt className="text-base-content/70">アカウント</dt>
           <dd className="min-w-0">{state.account.emailAddress}</dd>

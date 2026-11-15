@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode, type ChangeEventHandler } from "react";
 import { GoogleDriveSetupDialog } from "./GoogleDriveSetup";
+import { SiteInfoLinks } from "@/components/layout/SiteInfoLinks";
 import type { NoteBackup } from "../noteBackupData";
 
 type NotebookDrawerProps = {
@@ -108,6 +109,9 @@ export function NotebookDrawer({ open, busy, onFileChange, onBackupFileChange, p
             <input ref={backupInputRef} type="file" accept=".overlay,.zip" hidden
               aria-label="読み込むOverlayバックアップ" disabled={pdfOpenDisabled} onChange={onBackupFileChange} />
           </div>}
+          <div className="mx-4 border-t border-base-300 py-3 text-sm">
+            <SiteInfoLinks newTab />
+          </div>
           </div>
         </div>
         <div className="modal-backdrop">

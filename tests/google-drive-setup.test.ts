@@ -107,6 +107,10 @@ test("開いた時だけ準備し、接続後の全件自動保存を案内し�
   const { html } = render();
   assert.match(html, /接続後、全ノート・フォルダをDriveへ自動保存/);
   assert.match(html, /Googleで接続/);
+  const policy = render().entries.find((entry) => entry.type === "a" && entry.props.href === "/privacy");
+  assert.ok(policy); // 認可する前に取り扱いを確認でき、編集中の画面を残す。
+  assert.equal(policy.props.target, "_blank");
+  assert.equal(policy.props.rel, "noopener noreferrer");
   assert.ok(!html.includes("専用フォルダを作成</button>"));
   cleanup();
   assert.equal(disconnected, 1); assert.equal(disposed, 0); assert.equal(cancelled, 1); assert.equal(dialog.open, false);

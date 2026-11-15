@@ -80,6 +80,10 @@ test("PDF追加・ノート一覧・Drive設定・バックアップ読み込み
   assert.ok(html.indexOf("PDFを開く") < html.indexOf("ノート一覧の目印"));
   assert.ok(html.indexOf("ノート一覧の目印") < html.indexOf("Drive設定の目印"));
   assert.ok(html.indexOf("Drive設定の目印") < html.indexOf("編集用バックアップを読み込む"));
+  // 接続状態にかかわらず公開ページへ進め、編集中の画面を同じタブで置き換えない。
+  for (const href of ["/about", "/terms", "/privacy"]) {
+    assert.match(html, new RegExp(`href="${href}"[^>]*target="_blank"[^>]*rel="noopener noreferrer"`));
+  }
 });
 
 test("長い一覧だけをスクロールし、閉じるボタンを固定領域へ残す。読み込み候補は本文内に展開する", () => {
