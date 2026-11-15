@@ -40,6 +40,8 @@ import { PenWidthControl } from "./PenWidthControl";
 import { HistoryControls } from "./HistoryControls";
 import { ZoomControl } from "./ZoomControl";
 import { EditorIcon } from "./EditorIcon";
+import { EditorHelpDialog } from "./EditorHelpDialog";
+import { editorToolGroups } from "../editorTools";
 import { createStrokeHistory, recordTapeEdit, recordImageEdit, recordStrokeEdit, recordTextEdit, recordAnnotationEdit, recordPageInsertion, recordPageDeletion, recordPageClear, pageAnnotationCounts, undoStrokeEdit, redoStrokeEdit, type StrokeHistory, type PageClearSelection } from "../strokeHistory";
 import { speedMeasurements, type SpeedSpan } from "../speedMeasurements";
 import { SHAPE_OPTIONS, type ShapeKind } from "../shapeStrokes";
@@ -62,20 +64,6 @@ type PdfInput = {
 const EMPTY_STROKES: PenStroke[] = [];
 const EMPTY_TEXTS: TextNote[] = [];
 
-const editorTools: { tool: EditorTool; label: string }[] = [
-  { tool: "pen", label: "ペン" },
-  { tool: "marker", label: "マーカー" },
-  { tool: "eraser", label: "消しゴム" },
-  { tool: "text", label: "テキストボックス" },
-  { tool: "sticky", label: "付箋" },
-  { tool: "hand", label: "ページを動かす" },
-  { tool: "lasso", label: "投げ縄で選択" },
-  { tool: "shape", label: "図形" },
-  { tool: "image", label: "画像" },
-  { tool: "tape", label: "目隠しテープ" },
-  { tool: "fill", label: "塗りつぶし" },
-];
-
 export function PdfWorkspace() {
   const [file, setFile] = useState<File | null>(null);
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
@@ -93,6 +81,7 @@ export function PdfWorkspace() {
   const [noteId, setNoteId] = useState<string | null>(null);
   const [noteName, setNoteName] = useState("");
   const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [isOrganizing, setIsOrganizing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -622,7 +611,10 @@ export function PdfWorkspace() {
 
   return (
     <div className="overlay-app min-h-screen bg-base-200" data-pdf-open={!!document && !!file}>
-      <AppHeader compact={!!document && !!file}>
+      <AppHeader compact={!!document && !!file} actions={
+        <button type="button" className={`editor-help-trigger btn btn-sm ml-auto ${document && file ? "desktop-only" : ""}`}
+          aria-haspopup="dialog" aria-controls="editor-help" onClick={() => setHelpOpen(true)}>使い方</button>
+      }>
         <button type="button" className="notebook-toggle btn btn-sm btn-square" aria-label="ノート一覧を開く"
           title="ノート一覧" aria-haspopup="dialog" aria-controls="notebook-sidebar"
           aria-expanded={sidebarVisible} onClick={() => setSidebarVisible(true)}>
@@ -643,9 +635,11 @@ export function PdfWorkspace() {
             title="道具の設定" aria-expanded={mobileSettingsOpen} aria-controls="editor-settings"
             onClick={() => setMobileSettingsOpen((open) => !open)}><EditorIcon name="settings" /></button>
           <NoteExportMenu className="editor-export mobile-only" iconOnly disabled={isBusy}
+            onHelp={() => setHelpOpen(true)}
             onDownload={() => void handleDownload()} onSelectPages={openPageExport} onBackup={() => void handleBackup()} />
         </>}
       </AppHeader>
+      {helpOpen && <EditorHelpDialog onClose={() => setHelpOpen(false)} />}
       {versionChoice && <DriveVersionDialog choice={versionChoice.error} onClose={() => setVersionChoice(null)}
         onChoose={(sourceId) => {
           const selected = versionChoice; setVersionChoice(null);
@@ -754,13 +748,15 @@ export function PdfWorkspace() {
                   {/* 道具の列は設定やノート名と分け、切り替えても折り返さない。 */}
                   <div data-editor-row="tools" role="group" aria-label="編集操作"
                     className="editor-tools flex h-11 min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
-                    <div className="editor-tool-buttons join" role="group" aria-label="編集ツール">
-                      {editorTools.map(({ tool, label }) => <button key={tool} type="button"
-                        className={`btn btn-square btn-ghost join-item ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
+                    <div className="editor-tool-buttons" role="group" aria-label="編集ツール">
+                      {editorToolGroups.map((group) => <div key={group.label} className="editor-tool-group" role="group" aria-label={group.label}>
+                      {group.tools.map(({ tool, label }) => <button key={tool} type="button"
+                        className={`btn btn-square btn-ghost ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
                         aria-label={label} title={label} aria-pressed={penTool === tool} disabled={isBusy}
                         onClick={() => { if (!isBusy) { setPenTool(tool); if (tool === "text" || tool === "sticky" || tool === "hand" || tool === "lasso" || tool === "shape" || tool === "fill" || tool === "image" || tool === "tape") setMobileSettingsOpen(true); } }}>
                         <EditorIcon name={tool} />
                       </button>)}
+                      </div>)}
                     </div>
                     <div className="editor-history flex">
                       <HistoryControls canUndo={history.past.length > 0} canRedo={history.future.length > 0}

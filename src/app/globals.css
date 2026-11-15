@@ -113,6 +113,14 @@ body {
 .editor-toolbar [data-editor-row="title"] { grid-column: 1 / -1; grid-row: 1; }
 .editor-tools { grid-column: 1 / -1; grid-row: 2; }
 .editor-tools .btn { width: 2.75rem; height: 2.75rem; min-height: 2.75rem; }
+.editor-tool-buttons { display: flex; align-items: center; gap: 0.5rem; }
+.editor-tool-group { display: flex; flex-shrink: 0; align-items: center; }
+.editor-tool-group + .editor-tool-group {
+  border-inline-start: 1px solid var(--color-base-300); padding-inline-start: 0.5rem;
+}
+.editor-history, .editor-tools > .zoom-control {
+  border-inline-start: 1px solid var(--color-base-300); padding-inline-start: 0.75rem;
+}
 .editor-settings { grid-column: 1; grid-row: 3; }
 .text-layer-active [data-note-id]:hover .text-note-outline { stroke: #666; }
 .pdf-viewport.cursor-grab[data-panning="true"] { cursor: grabbing; }
@@ -152,6 +160,7 @@ body {
   }
   .app-header > div { gap: 0.25rem; }
   .app-header .btn { width: 2.75rem; height: 2.75rem; min-height: 2.75rem; }
+  .app-header .editor-help-trigger { width: auto; }
   .app-header .dropdown-content { max-height: calc(100dvh - 4rem); overflow: auto; overscroll-behavior: contain; }
   .app-header .dropdown-content .btn { width: 100%; }
   .overlay-app[data-pdf-open="true"] .editor-main { flex: 1; min-height: 0; padding: 0; display: flex; }
@@ -202,9 +211,9 @@ body {
     .editor-tools { display: contents; }
     .editor-tool-buttons { grid-column: 1 / -1; grid-row: 1; display: flex; justify-content: space-between;
       min-width: 0; overflow-x: auto; touch-action: pan-x; }
-    .editor-tool-buttons > .btn { flex-shrink: 0; }
+    .editor-tool-buttons .btn { flex-shrink: 0; }
     .editor-tools .btn { width: 2.75rem; height: 2.75rem; min-height: 2.75rem; }
-    .editor-history { grid-column: 1; grid-row: 2; }
+    .editor-history { grid-column: 1; grid-row: 2; border: 0; padding: 0; }
     .editor-toolbar [data-editor-row="actions"] { grid-column: 2; grid-row: 2; }
     .editor-toolbar [data-editor-row="actions"] .btn { min-height: 2.75rem; height: 2.75rem; }
     .editor-toolbar [data-editor-row="actions"] > .page-actions-trigger { width: 4rem; padding-inline: 0; }
@@ -277,7 +286,7 @@ body {
       .current-sticky-nav { grid-column: 5; grid-row: 1; align-self: center; }
       .current-sticky-panel { top: 3.25rem; max-height: calc(100dvh - 3.75rem - env(safe-area-inset-bottom)); }
       .editor-export { grid-column: 6; grid-row: 1; align-self: center; z-index: 30; }
-      .editor-history { grid-column: 2; grid-row: 1; align-self: center; }
+      .editor-history { grid-column: 2; grid-row: 1; align-self: center; border: 0; padding: 0; }
       .editor-history .btn { width: 2.75rem; height: 2.75rem; min-height: 2.75rem; }
       .editor-tool-buttons {
         grid-column: 1; grid-row: 2; min-height: 0; min-width: 0;
@@ -288,6 +297,11 @@ body {
       .editor-tool-buttons .btn {
         flex-shrink: 0; width: 2.75rem; height: 2.75rem; min-height: 2.75rem;
         margin: 0; border-radius: var(--radius-field);
+      }
+      .editor-tool-group { flex-direction: column; }
+      .editor-tool-group + .editor-tool-group {
+        border-inline-start: 0; padding-inline-start: 0;
+        border-block-start: 1px solid var(--color-base-300); padding-block-start: 0.25rem;
       }
       .editor-settings, .editor-settings[data-mobile-open="true"] {
         grid-column: 3; grid-row: 1; position: static; inset: auto;

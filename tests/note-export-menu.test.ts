@@ -54,6 +54,19 @@ test("メニューを閉じて選んだ出力だけを呼び出し、処理中�
   }
 });
 
+test("スマホの使い方は保存処理中でも開け、メニューを閉じて入口へフォーカスを戻す", () => {
+  let helpCalls = 0, exportCalls = 0;
+  const tree = NoteExportMenu({ disabled: true, iconOnly: true,
+    onDownload() { exportCalls++; }, onSelectPages() { exportCalls++; }, onBackup() { exportCalls++; },
+    onHelp() { assert.equal(details.open, false); helpCalls++; } });
+  const actions = buttons(tree);
+  const help = actions.find((entry) => entry.props.children === "使い方")!;
+  assert.ok(!help.props.disabled);
+  help.props.onClick!({} as React.MouseEvent<HTMLButtonElement>);
+  assert.equal(helpCalls, 1); assert.equal(focusCount, 1); assert.equal(exportCalls, 0);
+  assert.match(renderToStaticMarkup(tree), /aria-label="その他の操作"/);
+});
+
 
 test("外側のクリック・フォーカス移動とEscapeで閉じ、内部操作や出力を勝手に実行しない", () => {
   let calls = 0;

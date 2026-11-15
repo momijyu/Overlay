@@ -10,6 +10,8 @@ import { DriveVersionRequired } from "@/features/pdf-editor/driveLibraryCache";
 import { speedMeasurements } from "@/features/pdf-editor/speedMeasurements";
 import { CurrentStickyNotes } from "@/features/pdf-editor/components/CurrentStickyNotes";
 import { createShapeStroke } from "@/features/pdf-editor/shapeStrokes";
+import { editorToolGroups } from "@/features/pdf-editor/editorTools";
+import { EditorHelpDialog } from "@/features/pdf-editor/components/EditorHelpDialog";
 import { fillEnclosedRegion } from "@/features/pdf-editor/fillRegion";
 
 // Hooksの保持だけを代用し、Workspace内のイベント・状態・保存の接続を検証する。
@@ -568,9 +570,12 @@ test("横向き用の配置先を持ち、道具・履歴・ページ・設定�
   const { calls } = setup();
   const tools = find(render(), (element) => (element.props as { "aria-label"?: string })["aria-label"] === "編集ツール")!;
   assert.match((tools.props as React.ComponentProps<"div">).className!, /editor-tool-buttons/);
-  const buttons = React.Children.toArray((tools.props as React.ComponentProps<"div">).children) as React.ReactElement<React.ComponentProps<"button">>[];
-  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), ["ペン", "マーカー", "消しゴム", "テキストボックス", "付箋", "ページを動かす", "投げ縄で選択", "図形", "画像", "目隠しテープ", "塗りつぶし"]);
+  const groups = React.Children.toArray((tools.props as React.ComponentProps<"div">).children) as React.ReactElement<React.ComponentProps<"div">>[];
+  assert.deepEqual(groups.map((entry) => entry.props["aria-label"]), ["移動・選択", "描く・消す", "配置する"]);
+  const buttons = groups.flatMap((group) => React.Children.toArray(group.props.children)) as React.ReactElement<React.ComponentProps<"button">>[];
+  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), ["ページを動かす", "投げ縄で選択", "ペン", "マーカー", "消しゴム", "図形", "塗りつぶし", "テキストボックス", "付箋", "画像", "目隠しテープ"]);
   assert.equal(buttons.length, 11);
+  assert.deepEqual(buttons.map((entry) => entry.props["aria-label"]), editorToolGroups.flatMap((group) => group.tools.map((tool) => tool.label)));
   const header = find(render(), (element) => element.type === AppHeader)!;
   const heading = find(header, (element) => String((element.props as { className?: string }).className).includes("editor-mobile-heading"))!;
   assert.ok(find(heading, (element) => (element.props as { "data-editor-mobile-status"?: boolean })["data-editor-mobile-status"] !== undefined));
@@ -578,6 +583,28 @@ test("横向き用の配置先を持ち、道具・履歴・ページ・設定�
   assert.equal(find(editorRow("settings"), (element) => element.type === PenWidthControl)?.type, PenWidthControl);
   assert.equal(calls.length, 0);
   assert.equal(props(HistoryControls).canUndo, false);
+});
+
+test("PCとスマホの使い方をノートを閉じずに開き、閉じても編集と履歴を維持する", async () => {
+  const { calls, autosave } = setup();
+  await openOther();
+  props(PdfPage).onStrokeComplete(red);
+  await autosave.flush();
+  const saveCount = calls.length;
+  const initialPage = props(PdfPage);
+  const initialHistory = props(HistoryControls);
+  const header = props(AppHeader);
+  const trigger = header.actions as React.ReactElement<React.ComponentProps<"button">>;
+  trigger.props.onClick!({} as React.MouseEvent<HTMLButtonElement>);
+  assert.ok(find(render(), (entry) => entry.type === EditorHelpDialog));
+  props(EditorHelpDialog).onClose();
+  assert.equal(find(render(), (entry) => entry.type === EditorHelpDialog), undefined);
+  assert.equal(props(PdfPage).strokes, initialPage.strokes);
+  assert.equal(props(HistoryControls).canUndo, initialHistory.canUndo);
+  const mobile = find(render(), (entry) => entry.type === NoteExportMenu && !!(entry.props as React.ComponentProps<typeof NoteExportMenu>).iconOnly)!;
+  (mobile.props as React.ComponentProps<typeof NoteExportMenu>).onHelp!();
+  assert.ok(find(render(), (entry) => entry.type === EditorHelpDialog));
+  assert.equal(calls.length, saveCount);
 });
 
 test("PCとスマホの書き出しを同じメニューへ接続し、ページ操作と分ける", () => {
