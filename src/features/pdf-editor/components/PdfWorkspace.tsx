@@ -758,7 +758,12 @@ export function PdfWorkspace() {
                       {group.tools.map(({ tool, label }) => <button key={tool} type="button"
                         className={`btn btn-square btn-ghost ${penTool === tool ? "bg-base-300 ring-1 ring-inset ring-base-content/30" : ""}`}
                         aria-label={label} title={label} aria-pressed={penTool === tool} disabled={isBusy}
-                        onClick={() => { if (!isBusy) { setPenTool(tool); if (tool === "text" || tool === "sticky" || tool === "hand" || tool === "lasso" || tool === "shape" || tool === "fill" || tool === "image" || tool === "tape") setMobileSettingsOpen(true); } }}>
+                        onClick={() => {
+                          if (isBusy) return;
+                          setMobileSettingsOpen((open) => penTool === tool ? !open
+                            : tool !== "pen" && tool !== "marker" && tool !== "eraser");
+                          setPenTool(tool);
+                        }}>
                         <EditorIcon name={tool} />
                       </button>)}
                       </div>)}

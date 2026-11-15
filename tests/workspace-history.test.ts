@@ -567,6 +567,42 @@ test("スマホ設定は初期状態で閉じ、必要時に開ける。ペー�
   assert.equal(props(AppHeader).compact, true);
 });
 
+test("選択中の各道具を押すたびにスマホ設定を開閉し、道具・保存・履歴を変更しない", () => {
+  const { calls, autosave } = setup();
+  const isOpen = () => editorRow("settings").props["data-mobile-open" as keyof React.ComponentProps<"div">];
+  const tap = (label: string) => (button(label)!.props as { onClick: () => void }).onClick();
+  for (const group of editorToolGroups) for (const { tool, label } of group.tools) {
+    if (props(PdfPage).tool !== tool) tap(label);
+    const wasOpen = isOpen();
+    tap(label);
+    assert.equal(isOpen(), !wasOpen, label);
+    assert.equal(props(PdfPage).tool, tool);
+    assert.equal((button("道具の設定")!.props as React.ComponentProps<"button">)["aria-expanded"], !wasOpen);
+    tap(label);
+    assert.equal(isOpen(), wasOpen, label);
+    assert.equal(props(PdfPage).tool, tool);
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(props(HistoryControls).canUndo, false);
+  props(NotebookSidebar).onMutationChange(true);
+  const wasOpen = isOpen();
+  tap("ペン");
+  assert.equal(isOpen(), wasOpen);
+  autosave.dispose();
+});
+
+test("ペン類へ切り替えると設定を閉じ、再度押して設定を開ける", () => {
+  setup();
+  for (const label of ["ペン", "マーカー", "消しゴム"]) {
+    (button("付箋")!.props as { onClick: () => void }).onClick();
+    assert.equal(editorRow("settings").props["data-mobile-open" as keyof React.ComponentProps<"div">], true);
+    (button(label)!.props as { onClick: () => void }).onClick();
+    assert.equal(editorRow("settings").props["data-mobile-open" as keyof React.ComponentProps<"div">], false);
+    (button(label)!.props as { onClick: () => void }).onClick();
+    assert.equal(editorRow("settings").props["data-mobile-open" as keyof React.ComponentProps<"div">], true);
+  }
+});
+
 test("横向き用の配置先を持ち、道具・履歴・ページ・設定を二重に作らない", () => {
   const { calls } = setup();
   const tools = find(render(), (element) => (element.props as { "aria-label"?: string })["aria-label"] === "編集ツール")!;

@@ -61,6 +61,7 @@ export function EditorHelpDialog({ onClose }: { onClose: () => void }) {
               </div>)}</dl>
             </section>)}
             <p>曲がった左右の矢印は「元に戻す」「やり直す」です。倍率は10〜300%で変更できます。</p>
+            {touch && <p>選択中の道具をもう一度押すと、設定を開閉できます。横向きでは設定を上部に表示します。</p>}
           </div>}
           {topic === "text" && <ol className="list-decimal space-y-3 pl-5">
             <li>テキストボックスか付箋を選び、追加ボタンまたはページ上の空白を押します。{touch && "設定が閉じているときは、上部の設定アイコンから開けます。"}</li>
