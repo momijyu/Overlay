@@ -282,7 +282,7 @@ export function PdfPage({
   return (
     <div
       ref={containerRef}
-      className={`pdf-viewport max-h-[75dvh] min-w-0 w-full overflow-auto bg-base-200 p-2 sm:p-4 touch-none ${tool === "hand" ? "cursor-grab" : ""}`}
+      className={`pdf-viewport min-w-0 w-full overflow-auto bg-base-200 p-2 sm:p-4 touch-none ${tool === "hand" ? "cursor-grab" : ""}`}
       style={{ scrollbarGutter: "stable", overflowAnchor: "none" }}
       tabIndex={0}
       aria-label={`PDF表示領域（${pageNumber}ページ）`}

@@ -1,6 +1,6 @@
 # Overlayのコードが動く場所
 
-2026年11月8日時点。現在の処理の役割をまとめる。利用者向け操作は[README](../README.md)、正式仕様は[PROJECT.md](../PROJECT.md)。
+2026年11月15日時点。現在の処理の役割をまとめる。利用者向け操作は[README](../README.md)、正式仕様は[PROJECT.md](../PROJECT.md)。
 
 ## 全体像
 
@@ -18,6 +18,9 @@ Google未連携時は端末内だけにノートを保存する。連携後は�
 | components/NoteExportMenu.tsx | PC・タッチ共通のPDF／編集用バックアップの選択。出力処理はWorkspaceへ渡す |
 | components/PdfPage.tsx / PenLayer.tsx | PDF.jsでページ描画、透明SVG上のペン／消しゴム操作 |
 | components/TextLayer.tsx / TextBoxEditor.tsx | テキスト・付箋の直接入力、色・サイズ・移動・確定 |
+| components/ImageLayer.tsx / imageData.ts | 画像の配置・回転・切り抜き・重なり順、元画像Blobと参照の検証 |
+| components/PdfImageDialog.tsx / pdfImageImport.ts | 挿入元PDFのページ選択・プレビュー・上限付きPNG変換と中断処理 |
+| components/TapeLayer.tsx / maskTapes.ts | 復習用テープの位置・寸法・色と一時的な表示切替 |
 | strokeData.ts / textData.ts / textLayout.ts / notePages.ts | 保存データ検証、文字配置、固定IDと白紙の構成 |
 | strokeHistory.ts / eraseStrokes.ts | メモリ内のUndo / Redo、部分消去 |
 | localAutosave.ts / localNotes.ts / localDatabase.ts | 端末保存の順序・更新番号・失敗・IndexedDBトランザクション |
@@ -25,7 +28,7 @@ Google未連携時は端末内だけにノートを保存する。連携後は�
 | components/NotebookDrawer.tsx / NotebookSidebar.tsx / NotebookTree.tsx | 一覧の開閉・階層表示・整理・選択・ドラッグ |
 | noteTree.ts / noteDrag.ts / noteSelection.ts / notebookTouchDrag.ts | 階層・一括操作の検証と長押し操作 |
 | noteBackupData.ts / noteBackupFile.ts | 編集用ZIPの検証・梱包・解析 |
-| exportAnnotatedPdf.ts / noteFont.ts | 同梱フォントの遅延取得、日本語・線・白紙を反映したPDF出力 |
+| exportAnnotatedPdf.ts / exportImages.ts / noteFont.ts | 同梱フォントの遅延取得、日本語・線・画像・白紙を反映した全体／指定ページPDF出力。目隠しテープは含めない |
 | googleIdentity.ts / googleDriveAuth.ts / googleDriveSession.ts | SDK準備・認可・接続先をメモリで保持 |
 | components/GoogleDriveSetup.tsx / GoogleDriveNotes.tsx / GoogleDriveBackupRestore.tsx | 接続設定・手動保存・以前のバックアップ復元を別の入口で表示 |
 | googleDriveClient.ts / googleDriveNotes.ts / googleDriveBatch.ts | 制限付きDrive HTTP・取得・手動保存と一括進行 |
@@ -36,7 +39,7 @@ Google未連携時は端末内だけにノートを保存する。連携後は�
 
 PDFを開き、最初の確定編集でlocalAutosaveへ通知し、localNotesがPDF・編集情報・一覧を同じトランザクションで保存する。Drive連携中は送信待ちも記録し、画面が動いている間に別のrunnerが送信する。DBトランザクション内でGoogle通信を待たない。
 
-IndexedDBはブラウザ提供のAPIで、保存領域は端末・ブラウザ・originごとに分かれる。現在のDB版は7。DBを消して移行する必要はない。Driveの形式・保護条件は[保存設計](drive-storage.md)、バックアップは[ファイル仕様](note-backups.md)を参照する。
+IndexedDBはブラウザ提供のAPIで、保存領域は端末・ブラウザ・originごとに分かれる。現在のDB版は8。DBを消して移行する必要はない。Driveの形式・保護条件は[保存設計](drive-storage.md)、バックアップは[ファイル仕様](note-backups.md)を参照する。
 
 ## Next.js・開発時の処理
 

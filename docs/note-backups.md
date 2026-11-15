@@ -22,9 +22,13 @@
 
 復元中の失敗は全件取り消し、確認画面とエラーを残す。現在の編集画面・履歴は切り替えず、成功後は一覧だけを更新する。元のノート・OS上の元ファイルは変更しない。
 
+上記はファイルからの通常復元。別の入口「Driveの手動バックアップから復元」では、同じ元PDFと編集内容が保存済みの場合は追加しない。画像配置と目隠しテープも比較する。通常のDrive一覧から開く操作とも区別する。
+
 ## 共通データとファイル形式
 
-目隠しテープを含む出力は`schemaVersion:6`を使用し、各ノートの`tapesByPage`へ固定ページID・矩形ID・割合座標・寸法を保存する。画像も同じ版6に含められる。旧版1〜5も読み込むが、対応前のアプリは版6を拒否する。表示切替の状態は保存せず、復元後は隠した状態になる。閲覧用PDFにはテープを含めない。
+目隠しテープを含む出力は`schemaVersion:6`を使用し、各ノートの`tapesByPage`へ固定ページID・矩形ID・割合座標・寸法・色を保存する。色のない旧テープは黄色として扱う。画像も同じ版6に含められる。旧版1〜5も読み込むが、対応前のアプリは版6を拒否する。表示切替の状態は保存せず、復元後は隠した状態になる。閲覧用PDFにはテープを含めない。
+
+画像は`schemaVersion:5`で導入した。配置と元画像の参照をmanifestへ、元画像Blobを`images/<SHA-256>.png`または`.jpg`へ分け、同じ画像は共用する。元画像のサイズ・参照・ハッシュ・ヘッダーを検証する。[画像の仕様と上限](images.md)を参照する。
 
 見出しを含むノートがあれば`schemaVersion:4`を使い、各ノートの`headingsByPage`へページIDと文字列を保持する。種類は`note|folder|selection`。見出しのない出力は従来形式を維持し、旧版1〜3も読み込む。重複判定は見出しも比較する。ページ見出しUIは廃止済みだが、保存済みの見出しは互換データとして保持する。
 
@@ -37,6 +41,7 @@ manifest.json       app:Overlay、schemaVersion、階層・名前・編集情報
 manifest.crc        manifest.jsonのCRC32（8桁の16進文字列）
 pdfs/0.pdf          ノート配列の0番目の元PDF
 pdfs/1.pdf          次の元PDF（フォルダバックアップの場合）
+images/<hash>.png   画像のある場合の元画像（JPEGは.jpg）
 ```
 
 元のノート名・フォルダ名をZIPのパスに使わない。CRC32は偶発的な破損の検出であり、暗号化・電子署名・改ざん防止ではない。ファイルには元PDFとメモが含まれるため、他人へ渡す場合は内容を確認する。
@@ -47,7 +52,7 @@ Drive保存も共通データと検証を利用するが、Drive上はPDF＋編�
 
 - `noteBackupData.ts`：共通型、形式バージョン、名前・ID・階層・循環・同名衝突・線・文章の検証、安全上限、出力名。
 - `noteBackupFile.ts`：ZIP梱包／解析、CRC32、実PDFの解析と編集ページの検証。保存先には依存しない。
-- `localNotes.ts`：単体・フォルダと、`captureSelectedNoteBackup`による選択項目のスナップショットを同一readonlyトランザクションで取得。復元はIDを全て振り直し、`folders`・`pdfs`・`notes`を1つのreadwriteトランザクションで追加する。書き込み失敗時は全件ロールバックする。
+- `localNotes.ts`：単体・フォルダと、`captureSelectedNoteBackup`による選択項目のスナップショットを同一readonlyトランザクションで取得。復元はIDを全て振り直し、`folders`・`pdfs`・`notes`・一覧情報・Drive送信待ち情報を1つのreadwriteトランザクションで追加する。画像Blobと配置はnotesのimagesへ含める。書き込み失敗時は全件ロールバックする。
 - `PdfWorkspace.tsx`：処理中の編集ロック、ファイル出力、読み込み確認、復元後の一覧更新、エラー表示。開いているノートは画面で確定済みの最新スナップショットを渡し、通常保存の容量不足時にも持ち出せる。
 - `NotebookSidebar.tsx`・`NotebookDrawer.tsx`：対象ノート／フォルダの書き出し、読み込み選択欄。`NotebookRestoreDialog.tsx`：件数確認・キャンセル・失敗表示。
 
@@ -71,6 +76,6 @@ Drive保存も共通データと検証を利用するが、Drive上はPDF＋編�
 - 同じファイルを再度読み込んでも上書きしないこと、PC・スマホのファイル選択・ダウンロードと縦横のメニューを確認する。
 - 破損ファイルを選んだ時に一覧・編集中の内容が維持されることを確認する。利用者の実データを削除する試験はしない。
 
-自動テストは`tests/note-backups.test.ts`、`tests/workspace-history.test.ts`、`tests/notebook-drawer.test.ts`、`tests/notebook-ui.test.ts`。fake-indexeddbと代用Hooksによる検証と、実機の保存ダイアログ・操作感は区別する。
+自動テストは`tests/note-backups.test.ts`、`tests/workspace-history.test.ts`、`tests/notebook-drawer.test.ts`、`tests/notebook-ui.test.ts`。`tests/edited-note-roundtrip.test.ts`では画像・色付きテープ・日本語・白紙の保存から別DBへの復元、全体／指定ページPDFの文字・画素まで通して検証する。fake-indexeddbと代用Hooksによる検証と、実機の保存ダイアログ・操作感は区別する。
 
 空白ページのあるバックアップも元PDFのバイト列を維持し、復元後に再編集できる。実PDFの元ページ数と構成・書き込みIDを照合する。対応前のアプリは版3を拒否するため、更新版で読み込む。[仕様と確認手順](./blank-pages.md)。
