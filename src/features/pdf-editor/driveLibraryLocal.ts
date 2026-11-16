@@ -12,6 +12,18 @@ export async function libraryScope(tx: IDBTransaction): Promise<LibraryScope | n
 export async function getLibraryScope() {
   return withLocalTransaction(["driveSettings"], "readonly", libraryScope);
 }
+export async function getStoredDriveIdentity() {
+  return withLocalTransaction(["driveSettings", "driveBindings"], "readonly", async (tx) => {
+    const [scope, bindings] = await Promise.all([
+      libraryScope(tx), readRequest<DriveBinding[]>(tx.objectStore("driveBindings").getAll()),
+    ]);
+    const identity = scope ?? bindings[0] ?? null;
+    if (identity && bindings.some((row) => row.accountId !== identity.accountId || row.rootId !== identity.rootId)) {
+      throw new Error("保存先のアカウント情報が一致しません。切り替えを中止しました。");
+    }
+    return identity && { accountId: identity.accountId, rootId: identity.rootId };
+  });
+}
 export async function libraryDevice(tx: IDBTransaction) {
   const store = tx.objectStore("driveSettings");
   const device = await readRequest<{ value: string } | undefined>(store.get("device"));

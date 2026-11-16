@@ -8,15 +8,17 @@ import type { DriveSaveSource } from "../googleDriveBatch";
 import { GoogleDriveNotes } from "./GoogleDriveNotes";
 import { GoogleDriveBackupRestore } from "./GoogleDriveBackupRestore";
 import { SpeedMeasurementPanel } from "./SpeedMeasurementPanel";
+import { driveAccountLibraries } from "../driveAccountLibraries";
+import { reloadForAccountSwitch } from "../localLibrary";
 
-type Stage = "preparing" | "ready" | "checking" | "creating" | "checked" | "error";
+type Stage = "preparing" | "ready" | "checking" | "creating" | "checked" | "error" | "switch-pending" | "switching";
 type SetupState = { stage: Stage; account: GoogleDriveAccount | null; root: GoogleDriveRoot | null; error: string | null };
 type Runtime = ReturnType<typeof getGoogleDriveSession> & { busy: boolean };
 export type DriveSaveRequest = { id: string; backup: NoteBackup } | { id: string; sources: DriveSaveSource[] };
 type NoteActions = { captureNote?: () => NoteBackup;
-  saveRequest?: DriveSaveRequest | null; onSaveRequestClose?: () => void };
+  saveRequest?: DriveSaveRequest | null; onSaveRequestClose?: () => void; beforeAccountSwitch?: () => Promise<void> };
 
-export function GoogleDriveSetup({ disabled = false, captureNote, saveRequest, onSaveRequestClose,
+export function GoogleDriveSetup({ disabled = false, captureNote, saveRequest, onSaveRequestClose, beforeAccountSwitch,
   label = "Google Drive", className = "border-t border-base-300 p-4" }: {
   disabled?: boolean; label?: string; className?: string;
 } & NoteActions) {
@@ -26,16 +28,17 @@ export function GoogleDriveSetup({ disabled = false, captureNote, saveRequest, o
   return <div className={className}>
     <button type="button" className="btn btn-sm" disabled={disabled} onClick={() => setOpen(true)}>{label}</button>
     {(open || activeRequest) && <GoogleDriveSetupDialog captureNote={activeRequest && "backup" in activeRequest ? () => activeRequest.backup : captureNote}
-      saveRequest={activeRequest} onClose={() => {
+      saveRequest={activeRequest} beforeAccountSwitch={beforeAccountSwitch} onClose={() => {
         setClosedRequest(saveRequest?.id ?? null); setOpen(false); onSaveRequestClose?.();
       }} />}
   </div>;
 }
 
 type RestoreAction = { onImportNote: (backup: NoteBackup) => void };
-export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequest }: { onClose: () => void; restore?: RestoreAction } & NoteActions) {
+export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequest, beforeAccountSwitch }: { onClose: () => void; restore?: RestoreAction } & NoteActions) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const runtimeRef = useRef<Runtime | null>(null);
+  const switchingRef = useRef(false);
   const [state, setState] = useState<SetupState>({ stage: "preparing", account: null, root: null, error: null });
   const [transferBusy, setTransferBusy] = useState(false);
   const [drive, setDrive] = useState<Runtime["drive"] | null>(null);
@@ -93,12 +96,39 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequ
       const account = await runtime.drive.getAccount();
       if (runtimeRef.current !== runtime) return;
       const root = await runtime.drive.findRoot(account.id);
+      if (runtimeRef.current !== runtime) return;
+      const action = await driveAccountLibraries.check(account.id, root?.id ?? null);
+      if (runtimeRef.current !== runtime) return;
+      if (action === "switch") {
+        setDrive(null);
+        setState({ stage: "switch-pending", account, root, error: null });
+        return;
+      }
       if (runtimeRef.current === runtime) { runtime.remember(account, root); setDrive(runtime.drive); setState({ stage: "checked", account, root, error: null }); }
     } catch (error) {
       if (runtimeRef.current === runtime) setState({ stage: "error", account: null, root: null,
         error: error instanceof Error ? error.message : "接続確認に失敗しました。" });
     } finally { runtime.busy = false; }
   }
+
+  async function switchAccount() {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.busy || !state.account || state.stage !== "switch-pending" || !beforeAccountSwitch) return;
+    runtime.busy = true;
+    switchingRef.current = true;
+    setState({ ...state, stage: "switching", error: null });
+    try {
+      await beforeAccountSwitch();
+      if (runtimeRef.current !== runtime) return;
+      driveAccountLibraries.select(state.account.id);
+      reloadForAccountSwitch();
+    } catch (error) {
+      if (runtimeRef.current === runtime) setState({ ...state, stage: "switch-pending",
+        error: error instanceof Error ? error.message : "保存先を切り替えられませんでした。" });
+    } finally { runtime.busy = false; switchingRef.current = false; }
+  }
+
+  function close() { if (!switchingRef.current) onClose(); }
 
   async function createFolder() {
     const runtime = runtimeRef.current;
@@ -115,17 +145,18 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequ
     } finally { runtime.busy = false; }
   }
 
-  const busy = transferBusy || state.stage === "preparing" || state.stage === "checking" || state.stage === "creating";
+  const pendingSwitch = state.stage === "switch-pending" || state.stage === "switching";
+  const busy = transferBusy || state.stage === "preparing" || state.stage === "checking" || state.stage === "creating" || state.stage === "switching";
   return <dialog ref={dialogRef} className="modal" aria-labelledby="google-drive-setup-title"
-    onCancel={(event) => { event.preventDefault(); event.stopPropagation(); onClose(); }}
+    onCancel={(event) => { event.preventDefault(); event.stopPropagation(); close(); }}
     onClose={(event) => {
       // Strict Modeのeffect再実行で、一度閉じた後に再表示したdialogを古いcloseイベントで閉じない。
-      if (event.target === event.currentTarget && !event.currentTarget.open) onClose();
+      if (event.target === event.currentTarget && !event.currentTarget.open) close();
     }}>
     <div className="modal-box flex max-h-[calc(100dvh-2rem)] max-w-md flex-col overflow-hidden rounded-box p-0">
       <h2 id="google-drive-setup-title" className="shrink-0 border-b border-base-300 px-5 py-4 text-lg font-bold">{restore ? "Driveの手動バックアップを復元" : saveRequest ? "Driveにバックアップ" : "Google Drive"}</h2>
       <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
-        {!restore && !saveRequest && <p className="text-sm">{state.root ? "全ノート・フォルダを自動保存します。" : "接続後、全ノート・フォルダをDriveへ自動保存します。"}</p>}
+        {!restore && !saveRequest && !pendingSwitch && <p className="text-sm">{state.root ? "全ノート・フォルダを自動保存します。" : "接続後、全ノート・フォルダをDriveへ自動保存します。"}</p>}
         <p className="text-sm"><a href="/privacy" target="_blank" rel="noopener noreferrer" className="link link-hover"
           aria-label="プライバシーポリシー（別タブで開く）">プライバシーポリシー</a></p>
         {state.account && <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm break-words">
@@ -135,9 +166,14 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequ
           <dd className="min-w-0">{state.root?.name ?? "未作成"}</dd>
         </dl>}
         {busy && state.stage !== "checked" && <p role="status" className="text-sm">{state.stage === "preparing" ? "接続準備中…"
-          : state.stage === "checking" ? "接続確認中…" : "専用フォルダを作成中…"}</p>}
+          : state.stage === "checking" ? "接続確認中…" : state.stage === "switching" ? "ノートを保存して切り替え中…" : "専用フォルダを作成中…"}</p>}
+        {pendingSwitch && <section className="space-y-3 text-sm" aria-label="アカウントの切り替え確認">
+          <h3 className="font-bold">このアカウントへ切り替えますか？</h3>
+          <p>元のアカウントのノートと未送信データは、このブラウザに残します。新しいアカウントへはコピーしません。元のアカウントに戻すと再び開けます。</p>
+          <p>{beforeAccountSwitch ? "切り替え後に画面を再読み込みします。もう一度Googleで接続してください。" : "ノート一覧の「接続設定」から切り替えてください。"}</p>
+        </section>}
         {state.error && <p role="alert" className="text-sm text-error">{state.error}</p>}
-        {!saveRequest && !restore && <SpeedMeasurementPanel />}
+        {!saveRequest && !restore && !pendingSwitch && <SpeedMeasurementPanel />}
         {state.stage === "checked" && state.account && state.root && drive && saveRequest && <GoogleDriveNotes
           key={`${state.account.id}:${state.root.id}`} drive={drive} accountId={state.account.id} rootId={state.root.id}
           captureNote={captureNote} initialBackup={saveRequest && "backup" in saveRequest ? saveRequest.backup : undefined}
@@ -148,7 +184,9 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequ
           onImportNote={restore.onImportNote} onClose={onClose} onBusyChange={setTransferBusy} />}
       </div>
       <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-base-300 px-5 py-4 [&_button]:min-h-11">
-        <button type="button" className="btn btn-sm" onClick={onClose}>閉じる</button>
+        <button type="button" className="btn btn-sm" disabled={state.stage === "switching" || undefined} onClick={close}>閉じる</button>
+        {pendingSwitch && beforeAccountSwitch && <button type="button" className="btn btn-sm btn-primary" disabled={busy}
+          onClick={() => { void switchAccount(); }}>アカウントを切り替える</button>}
         {state.stage === "error" && <button type="button" className="btn btn-sm" onClick={() => {
           const runtime = runtimeRef.current;
           if (!runtime || runtime.busy) return;
@@ -161,6 +199,6 @@ export function GoogleDriveSetupDialog({ onClose, captureNote, restore, saveRequ
           onClick={() => { void createFolder(); }}>専用フォルダを作成</button>}
       </div>
     </div>
-    <div className="modal-backdrop"><button type="button" tabIndex={-1} aria-label="Google Driveを閉じる" onClick={onClose} /></div>
+    <div className="modal-backdrop"><button type="button" tabIndex={-1} aria-label="Google Driveを閉じる" onClick={close} /></div>
   </dialog>;
 }

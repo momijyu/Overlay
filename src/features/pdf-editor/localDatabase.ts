@@ -1,13 +1,13 @@
 import { toLocalNoteSummary } from "./localNoteSummary";
 import { recordDriveLibrary, LIBRARY_STORES } from "./driveLibraryLocal";
 import { notifyDriveQueue } from "./driveQueueEvents";
+import { getLocalDatabaseName } from "./localLibrary";
 
-const DATABASE_NAME = "overlay-local-notes";
 // 旧タブが送信待ち情報を更新せず本文だけ保存することを防ぐ。
 const DATABASE_VERSION = 8;
 const STORES = ["notes", "pdfs", "folders", "noteSummaries", "driveBindings", "driveSettings", "driveEntities", "driveTreeEvents"] as const;
 type StoreName = typeof STORES[number];
-type Connection = { factory: IDBFactory; database: IDBDatabase | null; opening: Promise<IDBDatabase> };
+type Connection = { factory: IDBFactory; name: string; database: IDBDatabase | null; opening: Promise<IDBDatabase> };
 let connection: Connection | null = null;
 
 function releaseConnection(database: IDBDatabase) {
@@ -30,13 +30,15 @@ function storageError(error: unknown): Error {
 
 function openDatabase(): Promise<IDBDatabase> {
   if (typeof indexedDB === "undefined") return Promise.reject(new Error("この環境ではブラウザ内保存を使用できません。"));
-  if (connection?.factory === indexedDB) return connection.opening;
+  let name: string;
+  try { name = getLocalDatabaseName(); } catch (error) { return Promise.reject(storageError(error)); }
+  if (connection?.factory === indexedDB && connection.name === name) return connection.opening;
   // 接続中のPromiseも共有し、同時の一覧取得・保存でもopenを重複させない。
   connection?.database?.close();
-  const current: Connection = { factory: indexedDB, database: null, opening: null! };
+  const current: Connection = { factory: indexedDB, name, database: null, opening: null! };
   connection = current;
   current.opening = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    const request = indexedDB.open(name, DATABASE_VERSION);
     let blocked = false;
     let upgradeFailure: unknown;
     request.onupgradeneeded = (event) => {

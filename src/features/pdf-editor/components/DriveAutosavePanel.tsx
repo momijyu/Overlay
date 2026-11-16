@@ -11,6 +11,7 @@ import { DrivePlacementDialog } from "./DrivePlacementDialog";
 import { getGoogleDriveSession } from "../googleDriveSession";
 import { DriveCacheSettings } from "./DriveCacheSettings";
 import { DriveStickyIndexError } from "../driveStickyIndexData";
+import { isAccountSwitchReload } from "../localLibrary";
 
 export function driveAutosaveStatus(rows: DriveBinding[], connection: { account: { id: string }; root: { id: string } | null } | null) {
   const pending = rows.filter((row) => row.enabled && row.generation > row.uploadedGeneration);
@@ -98,7 +99,10 @@ export function DriveAutosavePanel({ disabled, drawerOpen, onMutationChange, chi
   const needsUnloadWarning = !!pendingStatus || !!error && !indexOnlyError;
   useEffect(() => {
     if (!needsUnloadWarning) return;
-    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const warn = (event: BeforeUnloadEvent) => {
+      if (isAccountSwitchReload()) return;
+      event.preventDefault(); event.returnValue = "";
+    };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [needsUnloadWarning]);

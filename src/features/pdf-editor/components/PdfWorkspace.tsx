@@ -297,6 +297,20 @@ export function PdfWorkspace() {
     await autosaveRef.current.flush(true);
   }
 
+  async function handleBeforeAccountSwitch() {
+    if (operationRef.current || pendingBackup) throw new Error("処理が完了してから切り替えてください。");
+    operationRef.current = true;
+    setIsOrganizing(true);
+    try {
+      if (autosaveRef.current && !await autosaveRef.current.flush(true)) {
+        throw new Error("ノートを保存できませんでした。切り替え前に保存を再試行してください。");
+      }
+    } finally {
+      operationRef.current = false;
+      if (mountedRef.current) setIsOrganizing(false);
+    }
+  }
+
   function updatePageStrokes(strokes: PenStroke[], targetPageId = pageId) {
     if (operationRef.current) return;
     applyHistory(recordStrokeEdit(historyRef.current, targetPageId, strokes));
@@ -653,6 +667,7 @@ export function PdfWorkspace() {
         storageControls={<DriveAutosavePanel disabled={isBusy} drawerOpen={sidebarVisible}
           onMutationChange={(busy) => { operationRef.current = busy; setIsOrganizing(busy); }}>
           {sidebarVisible && <GoogleDriveSetup disabled={isBusy || !!pendingBackup} label="接続設定" className=""
+            beforeAccountSwitch={handleBeforeAccountSwitch}
             captureNote={file && document && !isBusy ? () => captureCurrentNote() : undefined}
             saveRequest={driveSaveRequest} onSaveRequestClose={() => setDriveSaveRequest(null)} />}
         </DriveAutosavePanel>}

@@ -13,6 +13,8 @@ let rootReply: { id: string; name: string } | null = null;
 let createFailure = false;
 let authorized = false, cancelled = 0;
 let token = "test-token";
+let accountDecision: () => Promise<"connect" | "switch"> = async () => "connect";
+let selectedAccounts: string[] = [], reloads = 0;
 const authListeners = new Set<() => void>();
 const dialog = { open: false, showModal() { this.open = true; }, close() { this.open = false; } };
 const account = { id: "account_A", displayName: "Test User", emailAddress: "test@example.com" };
@@ -38,6 +40,10 @@ mock.module("@/features/pdf-editor/googleDriveClient", { exports: { createGoogle
 const { createGoogleDriveSession } = await import("@/features/pdf-editor/googleDriveSession");
 let session: ReturnType<typeof createGoogleDriveSession>;
 mock.module("@/features/pdf-editor/googleDriveSession", { exports: { getGoogleDriveSession: () => session } });
+mock.module("@/features/pdf-editor/driveAccountLibraries", { exports: { driveAccountLibraries: {
+  check: () => accountDecision(), select: (id: string) => { selectedAccounts.push(id); },
+} } });
+mock.module("@/features/pdf-editor/localLibrary", { exports: { reloadForAccountSwitch: () => { reloads++; } } });
 const { GoogleDriveSetup, GoogleDriveSetupDialog } = await import("@/features/pdf-editor/components/GoogleDriveSetup");
 const { GoogleDriveNotes } = await import("@/features/pdf-editor/components/GoogleDriveNotes");
 const { GoogleDriveBackupRestore } = await import("@/features/pdf-editor/components/GoogleDriveBackupRestore");
@@ -49,6 +55,7 @@ beforeEach(() => {
   authReply = preparationReply = async () => {}; rootReply = null; createFailure = false; dialog.open = false;
   authListeners.clear();
   authorized = false; cancelled = 0; token = "test-token"; session = createGoogleDriveSession();
+  accountDecision = async () => "connect"; selectedAccounts = []; reloads = 0;
 });
 
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
@@ -72,15 +79,84 @@ function render(onClose = () => {}, extra: Partial<React.ComponentProps<typeof G
   initialRender = false;
   return { node, html: renderToStaticMarkup(shallow(node)), entries: elements(node) };
 }
-function click(label: string) {
-  const button = render().entries.find((entry) => entry.type === "button" && entry.props.children === label);
+function click(label: string, extra: Partial<React.ComponentProps<typeof GoogleDriveSetupDialog>> = {}) {
+  const button = render(() => {}, extra).entries.find((entry) => entry.type === "button" && entry.props.children === label);
   assert.ok(button, `ボタンを表示: ${label}`);
   (button.props.onClick as () => void)();
 }
-async function mount() {
-  render(); const cleanup = effects.splice(0).map((effect) => effect()); await settle();
+async function mount(extra: Partial<React.ComponentProps<typeof GoogleDriveSetupDialog>> = {}) {
+  render(() => {}, extra); const cleanup = effects.splice(0).map((effect) => effect()); await settle();
   return () => { cleanup.forEach((action) => action?.()); };
 }
+
+test("別アカウントは確認前に接続を公開せず、保存と復元を開始しない", async () => {
+  accountDecision = async () => "switch";
+  rootReply = { id: "folder_B", name: "Overlay" };
+  const cleanup = await mount();
+  try {
+    click("Googleで接続"); await settle();
+    const result = render();
+    assert.match(result.html, /アカウントの切り替え確認/);
+    assert.match(result.html, /新しいアカウントへはコピーしません/);
+    assert.equal(session.getConnection(), null);
+    assert.equal(creates, 0); assert.deepEqual(selectedAccounts, []); assert.equal(reloads, 0);
+    assert.ok(!result.entries.some((entry) => entry.type === GoogleDriveNotes || entry.type === GoogleDriveBackupRestore));
+  } finally { cleanup(); }
+});
+
+test("切り替えは編集中ノートの保存完了を待ち、その間は閉じずに一度だけ再読み込みする", async () => {
+  accountDecision = async () => "switch";
+  let finish!: () => void, saves = 0, closed = 0;
+  const extra = { beforeAccountSwitch: () => { saves++; return new Promise<void>((resolve) => { finish = resolve; }); } };
+  const cleanup = await mount(extra);
+  try {
+    click("Googleで接続", extra); await settle();
+    click("アカウントを切り替える", extra);
+    assert.equal(saves, 1); assert.deepEqual(selectedAccounts, []); assert.equal(reloads, 0);
+    const result = render(() => { closed++; }, extra);
+    const close = result.entries.find((entry) => entry.type === "button" && entry.props.children === "閉じる")!;
+    assert.equal(close.props.disabled, true);
+    (close.props.onClick as () => void)(); assert.equal(closed, 0);
+    finish(); await settle();
+    assert.deepEqual(selectedAccounts, [account.id]); assert.equal(reloads, 1);
+    assert.equal(session.getConnection(), null);
+  } finally { cleanup(); }
+});
+
+test("切り替え確認を閉じても保存先も元のデータも変更しない", async () => {
+  accountDecision = async () => "switch";
+  const cleanup = await mount();
+  try {
+    click("Googleで接続"); await settle();
+    let closed = 0;
+    const close = render(() => { closed++; }).entries.find((entry) => entry.type === "button" && entry.props.children === "閉じる")!;
+    (close.props.onClick as () => void)();
+    assert.equal(closed, 1); assert.deepEqual(selectedAccounts, []); assert.equal(reloads, 0);
+    assert.equal(session.getConnection(), null);
+  } finally { cleanup(); }
+});
+
+test("切り替え前のローカル保存失敗は内容を残して切り替えを止め、再試行できる", async () => {
+  accountDecision = async () => "switch";
+  const extra = { beforeAccountSwitch: async () => { throw new Error("ノートを保存できませんでした。"); } };
+  const cleanup = await mount(extra);
+  try {
+    click("Googleで接続", extra); await settle(); click("アカウントを切り替える", extra); await settle();
+    assert.match(render(() => {}, extra).html, /ノートを保存できませんでした/);
+    assert.deepEqual(selectedAccounts, []); assert.equal(reloads, 0);
+    assert.ok(render(() => {}, extra).html.includes("アカウントを切り替える</button>"));
+  } finally { cleanup(); }
+});
+
+test("元の保存先が確認できない場合は認可済みでも接続を確定しない", async () => {
+  accountDecision = async () => { throw new Error("連携済みのOverlayフォルダが見つかりません。"); };
+  const cleanup = await mount();
+  try {
+    click("Googleで接続"); await settle();
+    assert.match(render().html, /連携済みのOverlayフォルダが見つかりません/);
+    assert.equal(session.getConnection(), null); assert.equal(creates, 0);
+  } finally { cleanup(); }
+});
 
 test("入口を表示するだけではSDK準備も認証もAPI通信も開始しない", () => {
   const node = GoogleDriveSetup({ disabled: false });
