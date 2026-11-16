@@ -4,11 +4,9 @@ PDFにペン・テキスト・付箋を重ねて、あとから編集を再開�
 
 [公開サイト](https://overlay-virid.vercel.app/) · [ソースコード](https://github.com/momijyu/Overlay)
 
-公開準備中のページ実装：[紹介・使い方](src/app/about/page.tsx) · [利用規約](src/app/terms/page.tsx) · [プライバシーポリシー](src/app/privacy/page.tsx)
+関連ページ：[紹介・使い方](https://overlay-virid.vercel.app/about) · [利用規約](https://overlay-virid.vercel.app/terms) · [プライバシーポリシー](https://overlay-virid.vercel.app/privacy)
 
-![OverlayでPDFに付箋を重ねた編集画面](docs/images/overlay-desktop.png)
-
-画面内のPDFは、表示例として作成したサンプル資料です。
+発表用の概要と実演例は[発表用メモ](docs/presentation-overview.md)にまとめています。
 
 ## 使用方法
 
@@ -19,7 +17,7 @@ PDFにペン・テキスト・付箋を重ねて、あとから編集を再開�
 
 ローカル利用にログインやGoogleの設定は不要です。Google Driveを使う場合は、ノート一覧の下にある「Google Drive」欄の「接続設定」から接続します。接続先の確認後、このブラウザの全ノート・フォルダが自分のDriveへの自動保存対象になります。
 
-Google連携の一般利用者向け公開設定は確認中です。紹介・操作ガイドの入口を`/about`、利用規約を`/terms`、プライバシーポリシーを`/privacy`に用意しました。ノート一覧の下部から別タブで開けます。問い合わせ先は専用Gmailを掲載しています。ページ文案の確認、配備と[Google側の公開設定](docs/google-drive-setup.md#6-google連携を一般利用者へ公開する手順未完了)は未実施です。通常のDrive同期・保存・書き出しとスマホ・iPadの使用感は利用者から確認報告を受けています。通信断・認証期限切れ・競合時の実機確認は別途残しています。
+紹介・操作ガイド、利用規約、プライバシーポリシーはノート一覧の下部から開けます。問い合わせ先には専用Gmailを掲載しています。Google連携は本番環境への切り替えを行いましたが、Googleの確認状況や、テストユーザー以外のアカウントでの利用は別途確認が必要です。通常のDrive同期・保存・書き出しとスマホ・iPadの使用感は利用者から確認報告を受けています。通信断・認証期限切れ・競合時の実機確認は別途残しています。
 
 ## 主な操作
 
